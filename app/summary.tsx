@@ -32,7 +32,7 @@ export default function SummaryScreen() {
   const { startSession } = useApp();
 
   return (
-    <Screen scroll={false}>
+    <Screen scroll={false} safeBottom>
       <Kicker style={{ color: colors.neutral600 }}>Saved · Sep 12, 8:14 AM</Kicker>
       <Text style={styles.title}>{'2 ideas, 2 tasks,\n1 needs review.'}</Text>
 

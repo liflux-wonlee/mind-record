@@ -15,7 +15,7 @@ export default function DrivingScreen() {
   const { recording, saveOnly, toggleSaveOnly, toggleRecording, stopRecording } = useApp();
 
   return (
-    <Screen scroll={false} dark contentStyle={{ paddingBottom: 28 }}>
+    <Screen scroll={false} dark safeBottom bottomPadding={28}>
       <View style={styles.head}>
         <Kicker style={{ color: colors.neutral400 }}>Driving mode</Kicker>
         <Button

@@ -20,7 +20,7 @@ export default function LoginScreen() {
   const signIn = () => router.replace('/');
 
   return (
-    <Screen scroll={false} contentStyle={{ paddingBottom: 24 }}>
+    <Screen scroll={false} safeBottom bottomPadding={24}>
       <View style={styles.blocks}>
         {BLOCKS.map((block) => (
           <View

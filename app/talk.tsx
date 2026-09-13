@@ -60,7 +60,7 @@ export default function TalkScreen() {
   const showRelated = mode === 'conv' && lines >= 1 && related !== 'dismissed';
 
   return (
-    <Screen scroll={false}>
+    <Screen scroll={false} safeBottom>
       <View style={styles.head}>
         <View style={styles.seg}>
           <SegOption

@@ -14,6 +14,17 @@ export function Screen({
   dark = false,
   /** Set false when the screen manages its own horizontal padding. */
   padded = true,
+  /**
+   * Add the device's bottom safe-area inset on top of `bottomPadding` —
+   * Android's gesture bar / 3-button nav, iOS's home indicator. Screens that
+   * sit under the bottom tab bar leave this false: BottomNav already reserves
+   * that space itself. Full-screen routes with their own bottom-row buttons
+   * (Talk, Summary, Driving, Login) need it or those buttons render partly
+   * behind the system nav bar.
+   */
+  safeBottom = false,
+  /** Base bottom padding before any safe-area inset from `safeBottom` is added. */
+  bottomPadding = 20,
   style,
   contentStyle,
 }: {
@@ -21,6 +32,8 @@ export function Screen({
   scroll?: boolean;
   dark?: boolean;
   padded?: boolean;
+  safeBottom?: boolean;
+  bottomPadding?: number;
   style?: StyleProp<ViewStyle>;
   contentStyle?: StyleProp<ViewStyle>;
 }) {
@@ -30,6 +43,7 @@ export function Screen({
   const box: StyleProp<ViewStyle> = [
     padded && { paddingHorizontal: GUTTER },
     styles.box,
+    { paddingBottom: bottomPadding + (safeBottom ? insets.bottom : 0) },
     contentStyle,
   ];
 
@@ -59,7 +73,7 @@ const styles = StyleSheet.create({
   },
   box: {
     paddingTop: 8,
-    paddingBottom: 20,
+    // paddingBottom is set explicitly below (bottomPadding + safe-area inset).
     flexGrow: 1,
   },
 });
