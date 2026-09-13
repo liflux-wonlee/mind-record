@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "Mind Record",
+    "slug": "mind-record",
+    "version": "1.0.0",
+    "scheme": "mindrecord",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "backgroundColor": "#f7f4f2",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.liflux.mindrecord"
+    },
+    "android": {
+      "package": "com.liflux.mindrecord",
+      "adaptiveIcon": {
+        "backgroundColor": "#f7f4f2",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "backgroundColor": "#f7f4f2",
+          "imageWidth": 180
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
