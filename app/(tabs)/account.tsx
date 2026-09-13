@@ -1,23 +1,75 @@
-import { useRouter } from 'expo-router';
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
 import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { prefGroups } from '@/data';
+import { useAuth } from '@/providers/AuthProvider';
+import { signOut } from '@/services/auth';
+import { getProfile, type Profile } from '@/services/profiles';
+import { getAccountStats, type AccountStats } from '@/services/stats';
 import { useApp } from '@/store';
 import { colors, font, radius } from '@/theme';
 
-const USAGE = [
-  { value: '312', label: 'Entries', background: colors.pastelYellow },
-  { value: '48', label: 'Days', background: colors.pastelGreen },
-  { value: '9', label: 'Topics', background: colors.pastelLavender },
-];
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase();
+}
 
 export default function AccountScreen() {
-  const router = useRouter();
+  const { user } = useAuth();
   const { prefs, togglePref } = useApp();
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [stats, setStats] = useState<AccountStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      let cancelled = false;
+      setLoading(true);
+      Promise.all([getProfile(user.id), getAccountStats(user.id)])
+        .then(([p, s]) => {
+          if (cancelled) return;
+          setProfile(p);
+          setStats(s);
+        })
+        .catch(() => {
+          // Leave stats/profile at their previous values; the screen still
+          // renders (with the account's email as a fallback name) rather
+          // than going blank.
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [user])
+  );
+
+  const displayName = profile?.display_name || user?.email || 'Account';
+  const usage = [
+    { value: stats ? String(stats.entries) : '—', label: 'Entries', background: colors.pastelYellow },
+    { value: stats ? String(stats.days) : '—', label: 'Days', background: colors.pastelGreen },
+    { value: stats ? String(stats.topics) : '—', label: 'Topics', background: colors.pastelLavender },
+  ];
+
+  const handleSignOut = async () => {
+    if (signingOut) return;
+    setSigningOut(true);
+    try {
+      await signOut();
+      // app/_layout.tsx's auth guard redirects to /login once the session clears.
+    } catch (e) {
+      Alert.alert('Sign out failed', e instanceof Error ? e.message : 'Please try again.');
+      setSigningOut(false);
+    }
+  };
 
   return (
     <Screen>
@@ -25,18 +77,24 @@ export default function AccountScreen() {
 
       <View style={styles.profile}>
         <View style={styles.avatar}>
-          <Text style={styles.avatarText}>WL</Text>
+          <Text style={styles.avatarText}>{initials(displayName)}</Text>
         </View>
-        <View>
-          <Text style={styles.name}>Won Lee</Text>
-          <Text style={styles.email}>won@liflux.com · Pro plan</Text>
+        <View style={styles.flexShrink}>
+          <Text style={styles.name}>{displayName}</Text>
+          <Text style={styles.email} numberOfLines={1}>
+            {user?.email ?? ''}
+          </Text>
         </View>
       </View>
 
       <View style={styles.usage}>
-        {USAGE.map((stat) => (
+        {usage.map((stat) => (
           <View key={stat.label} style={[styles.usageCard, { backgroundColor: stat.background }]}>
-            <Text style={styles.usageValue}>{stat.value}</Text>
+            {loading ? (
+              <ActivityIndicator size="small" color={colors.text} />
+            ) : (
+              <Text style={styles.usageValue}>{stat.value}</Text>
+            )}
             <Kicker style={{ color: colors.neutral700, marginTop: 6 }}>{stat.label}</Kicker>
           </View>
         ))}
@@ -83,9 +141,10 @@ export default function AccountScreen() {
 
       <Button
         variant="secondary"
-        label="Sign out"
+        label={signingOut ? 'Signing out…' : 'Sign out'}
         align="flex-start"
-        onPress={() => router.replace('/login')}
+        disabled={signingOut}
+        onPress={handleSignOut}
         style={styles.signOut}
       />
       <Button
@@ -106,6 +165,9 @@ const styles = StyleSheet.create({
     gap: 14,
     marginTop: 8,
     marginBottom: 16,
+  },
+  flexShrink: {
+    flexShrink: 1,
   },
   avatar: {
     width: 56,
@@ -141,6 +203,8 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: radius.pastel,
     padding: 12,
+    minHeight: 66,
+    justifyContent: 'center',
   },
   usageValue: {
     fontFamily: font.extrabold,

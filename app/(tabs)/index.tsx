@@ -1,22 +1,20 @@
 import { useRouter } from 'expo-router';
 import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
+import { useRecentSessions } from '@/hooks/useRecentSessions';
+import { useTasks } from '@/hooks/useTasks';
 import { useApp } from '@/store';
 import { colors, font, h2 } from '@/theme';
-
-const CONTINUE = [
-  { title: 'JoaSuite', meta: 'Sep 8 · onboarding' },
-  { title: 'Liflux', meta: 'Sep 11 · 월 구독 모델' },
-  { title: 'Faith · Bible Study', meta: 'Sep 11 · 로마서 8장' },
-];
 
 export default function HomeScreen() {
   const router = useRouter();
   const { inboxCount, startSession } = useApp();
+  const tasksState = useTasks();
+  const recentSessions = useRecentSessions(3);
 
   const startTalk = () => {
     startSession();
@@ -56,8 +54,8 @@ export default function HomeScreen() {
       <View style={styles.grid}>
         <Stat
           label="Tasks"
-          value="4"
-          sub="1 due tomorrow"
+          value={String(tasksState.openCount)}
+          sub="open"
           side="left"
           bottomRule
           onPress={() => router.push('/tasks')}
@@ -107,12 +105,29 @@ export default function HomeScreen() {
       <View style={{ marginTop: 14 }}>
         <Kicker style={{ color: colors.neutral600, marginBottom: 6 }}>Continue conversation</Kicker>
         <RuleThick />
-        {CONTINUE.map((c) => (
-          <Row key={c.title} onPress={() => router.push('/topic')} style={styles.continueRow}>
-            <Text style={styles.continueTitle}>{c.title}</Text>
-            <Text style={styles.continueMeta}>{c.meta}</Text>
-          </Row>
-        ))}
+        {recentSessions.status === 'loading' ? (
+          <View style={styles.sessionsCenter}>
+            <ActivityIndicator color={colors.accent} />
+          </View>
+        ) : recentSessions.status === 'error' ? (
+          <Text style={styles.sessionsEmpty}>Couldn&apos;t load recent sessions.</Text>
+        ) : recentSessions.sessions.length === 0 ? (
+          <Text style={styles.sessionsEmpty}>
+            Nothing yet — tap the mic above to start your first session.
+          </Text>
+        ) : (
+          recentSessions.sessions.map((session) => (
+            <Row key={session.id} onPress={() => router.push('/topic')} style={styles.continueRow}>
+              <Text style={styles.continueTitle}>{session.title ?? session.mode}</Text>
+              <Text style={styles.continueMeta}>
+                {new Date(session.started_at).toLocaleDateString(undefined, {
+                  month: 'short',
+                  day: 'numeric',
+                })}
+              </Text>
+            </Row>
+          ))
+        )}
       </View>
     </Screen>
   );
@@ -263,5 +278,16 @@ const styles = StyleSheet.create({
     fontFamily: font.regular,
     fontSize: 11,
     color: colors.neutral600,
+  },
+  sessionsCenter: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  sessionsEmpty: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.neutral600,
+    paddingVertical: 12,
   },
 });
