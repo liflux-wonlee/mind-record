@@ -2,46 +2,10 @@
  * Prototype content — lifted verbatim from the design's `renderVals()` so the
  * screens read exactly as they do in the handoff. UI chrome is English,
  * captured content is Korean, per the brief.
+ *
+ * Tasks used to be mocked here too; they now come from Supabase — see
+ * `src/services/tasks.ts` and `src/hooks/useTasks.ts`.
  */
-
-export type Task = {
-  title: string;
-  due: string;
-  topic: string;
-  quote: string;
-  src: string;
-};
-
-export const tasks: Task[] = [
-  {
-    title: 'David에게 전화 — service contract',
-    due: 'Due tomorrow',
-    topic: 'Business · Liflux',
-    quote: 'David한테 내일까지 전화해서 service contract 물어봐야겠다.',
-    src: 'Sep 12',
-  },
-  {
-    title: '로마서 8장 다시 공부',
-    due: 'This week',
-    topic: 'Faith · Bible Study',
-    quote: '아침에 읽은 로마서 8장 내용도 다시 한번 공부해봐야 될 것 같아.',
-    src: 'Sep 12',
-  },
-  {
-    title: '가격 재검토',
-    due: 'This week',
-    topic: 'Business · JoaSuite',
-    quote: '이번 주 안에 가격 한번 다시 검토하자.',
-    src: 'Sep 8',
-  },
-  {
-    title: 'Alarm license 조사',
-    due: 'No date',
-    topic: 'Business · Liflux',
-    quote: 'alarm license 알아봐야 하는데.',
-    src: 'Sep 3',
-  },
-];
 
 export type InboxItem = {
   type: string;

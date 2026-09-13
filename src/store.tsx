@@ -2,8 +2,11 @@
  * App state — the prototype's `this.state`, lifted into a context so the same
  * session survives navigation between routes.
  *
- * Everything here is local and in-memory: the handoff is screens + navigation
- * only, so there is no persistence or backend behind it yet.
+ * Everything left here is still local/in-memory UI state on purpose: capture
+ * session mechanics (timer, mode, save-only), Inbox review choices, and the
+ * Calendar's selected day are all prototype-only interaction state, not data
+ * that belongs in the database. What *was* here and has since moved to
+ * Supabase (see src/services/, src/hooks/): tasks — now `src/hooks/useTasks.ts`.
  */
 import React, {
   createContext,
@@ -15,7 +18,7 @@ import React, {
   useState,
 } from 'react';
 
-import { inboxItems, tasks } from '@/data';
+import { inboxItems } from '@/data';
 
 type CaptureMode = 'capture' | 'conv';
 type RelatedState = null | 'linked' | 'dismissed';
@@ -42,11 +45,6 @@ type AppState = {
   lines: number;
   timer: string;
 
-  /* tasks */
-  tasksDone: boolean[];
-  toggleTask: (i: number) => void;
-  openTaskCount: number;
-
   /* inbox */
   inboxResolved: Record<number, string>;
   resolveInbox: (i: number, choice: string) => void;
@@ -70,7 +68,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [everRecorded, setEverRecorded] = useState(false);
   const [saveOnly, setSaveOnly] = useState(false);
   const [related, setRelated] = useState<RelatedState>(null);
-  const [tasksDone, setTasksDone] = useState<boolean[]>(() => tasks.map(() => false));
   const [inboxResolved, setInboxResolved] = useState<Record<number, string>>({});
   const [selectedDay, setSelectedDay] = useState(11);
   const [prefs, setPrefs] = useState<Record<string, boolean>>({});
@@ -111,10 +108,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setRecording(false);
   }, []);
 
-  const toggleTask = useCallback((i: number) => {
-    setTasksDone((prev) => prev.map((d, j) => (j === i ? !d : d)));
-  }, []);
-
   const resolveInbox = useCallback((i: number, choice: string) => {
     setInboxResolved((prev) => ({ ...prev, [i]: choice }));
   }, []);
@@ -140,9 +133,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       stopRecording,
       lines,
       timer: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
-      tasksDone,
-      toggleTask,
-      openTaskCount: tasksDone.filter((d) => !d).length,
       inboxResolved,
       resolveInbox,
       inboxCount: inboxItems.filter((it, i) => it.review && !inboxResolved[i]).length,
@@ -161,8 +151,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     startSession,
     toggleRecording,
     stopRecording,
-    tasksDone,
-    toggleTask,
     inboxResolved,
     resolveInbox,
     selectedDay,
