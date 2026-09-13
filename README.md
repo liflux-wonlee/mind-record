@@ -1,9 +1,12 @@
-# Mindecho
+# Mind Record
 
 Voice memory & action assistant — *Don't organize your life. Just talk. AI organizes it for you.*
 
-An Expo (React Native + TypeScript) app for iOS and Android, built from the Claude Design
-handoff in [`design/`](design/).
+An Expo (React Native + TypeScript) app for iOS and Android, built from the product plan in
+[`design/product-plan.md`](design/product-plan.md) via the Claude Design handoff in [`design/`](design/).
+
+> Formerly *Mindecho* — renamed because a **Mind Echo** already exists on the app stores. The
+> design files under `design/` keep the original name; the shipping app is **Mind Record**.
 
 ## Status
 

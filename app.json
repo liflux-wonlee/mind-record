@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Mindecho",
-    "slug": "mindecho",
+    "name": "Mind Record",
+    "slug": "mind-record",
     "version": "1.0.0",
-    "scheme": "mindecho",
+    "scheme": "mindrecord",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -11,10 +11,10 @@
     "backgroundColor": "#f7f4f2",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.liflux.mindecho"
+      "bundleIdentifier": "com.liflux.mindrecord"
     },
     "android": {
-      "package": "com.liflux.mindecho",
+      "package": "com.liflux.mindrecord",
       "adaptiveIcon": {
         "backgroundColor": "#f7f4f2",
         "foregroundImage": "./assets/android-icon-foreground.png",
