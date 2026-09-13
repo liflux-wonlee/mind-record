@@ -1,0 +1,267 @@
+import { useRouter } from 'expo-router';
+import React from 'react';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
+
+import { MicIcon } from '@/components/Icon';
+import { Screen } from '@/components/Screen';
+import { Button, Kicker, Row, RuleThick } from '@/components/ui';
+import { useApp } from '@/store';
+import { colors, font, h2 } from '@/theme';
+
+const CONTINUE = [
+  { title: 'JoaSuite', meta: 'Sep 8 · onboarding' },
+  { title: 'Liflux', meta: 'Sep 11 · 월 구독 모델' },
+  { title: 'Faith · Bible Study', meta: 'Sep 11 · 로마서 8장' },
+];
+
+export default function HomeScreen() {
+  const router = useRouter();
+  const { inboxCount, startSession } = useApp();
+
+  const startTalk = () => {
+    startSession();
+    router.push('/talk');
+  };
+
+  return (
+    <Screen>
+      <View style={styles.topRow}>
+        <Kicker style={{ color: colors.neutral600 }}>Sat, Sep 12</Kicker>
+        <Button
+          variant="ghost"
+          label="Driving mode"
+          onPress={() => router.push('/driving')}
+          style={styles.ghostSmall}
+          textStyle={styles.uppercaseSmall}
+        />
+      </View>
+
+      <View style={styles.micBlock}>
+        <Text style={styles.title}>What&apos;s on your mind?</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Tap to talk"
+          onPress={startTalk}
+          style={({ pressed }) => [
+            styles.mic,
+            { backgroundColor: pressed ? colors.accent700 : colors.accent },
+          ]}
+        >
+          <MicIcon size={56} color={colors.bg} />
+        </Pressable>
+        <Text style={styles.micLabel}>Tap to talk</Text>
+      </View>
+
+      <RuleThick style={{ marginTop: 20 }} />
+      <View style={styles.grid}>
+        <Stat
+          label="Tasks"
+          value="4"
+          sub="1 due tomorrow"
+          side="left"
+          bottomRule
+          onPress={() => router.push('/tasks')}
+        />
+        <Stat
+          label="Inbox"
+          value={String(inboxCount)}
+          sub="needs review"
+          side="right"
+          bottomRule
+          accent
+          onPress={() => router.push('/inbox')}
+        />
+        <Stat
+          label="Open loops"
+          value="3"
+          sub="pricing 결정 외 2"
+          side="left"
+          onPress={() => router.push('/memory')}
+        />
+        <Stat
+          label="Today"
+          value="7"
+          sub="thoughts · 3 ideas"
+          side="right"
+          onPress={() => router.push('/journal')}
+        />
+      </View>
+
+      <View style={{ marginTop: 18 }}>
+        <View style={styles.sectionHead}>
+          <Kicker style={{ color: colors.neutral600 }}>Upcoming</Kicker>
+          <Button
+            variant="ghost"
+            label="Calendar →"
+            onPress={() => router.push('/calendar')}
+            style={styles.ghostSmall}
+            textStyle={{ fontSize: 11, color: colors.accent700 }}
+          />
+        </View>
+        <View style={styles.upcoming}>
+          <Text style={styles.upcomingTitle}>David 미팅 — service contract</Text>
+          <Text style={styles.upcomingWhen}>Tue 2 PM</Text>
+        </View>
+      </View>
+
+      <View style={{ marginTop: 14 }}>
+        <Kicker style={{ color: colors.neutral600, marginBottom: 6 }}>Continue conversation</Kicker>
+        <RuleThick />
+        {CONTINUE.map((c) => (
+          <Row key={c.title} onPress={() => router.push('/topic')} style={styles.continueRow}>
+            <Text style={styles.continueTitle}>{c.title}</Text>
+            <Text style={styles.continueMeta}>{c.meta}</Text>
+          </Row>
+        ))}
+      </View>
+    </Screen>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  sub,
+  side,
+  bottomRule,
+  accent,
+  onPress,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  side: 'left' | 'right';
+  bottomRule?: boolean;
+  accent?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Row
+      onPress={onPress}
+      style={[
+        styles.stat,
+        side === 'left' ? styles.statLeft : styles.statRight,
+        bottomRule && styles.statBottom,
+      ]}
+    >
+      <Kicker style={{ color: colors.neutral600, marginBottom: 2 }}>{label}</Kicker>
+      <Text style={[styles.statValue, accent && { color: colors.accent }]}>{value}</Text>
+      <Text style={styles.statSub}>{sub}</Text>
+    </Row>
+  );
+}
+
+const styles = StyleSheet.create({
+  topRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  ghostSmall: {
+    minHeight: 44,
+    justifyContent: 'center',
+  },
+  uppercaseSmall: {
+    fontSize: 11,
+    letterSpacing: 11 * 0.08,
+    textTransform: 'uppercase',
+  },
+  micBlock: {
+    marginTop: 16,
+    alignItems: 'center',
+    gap: 20,
+  },
+  title: {
+    ...h2,
+    textAlign: 'center',
+  },
+  mic: {
+    width: 148,
+    height: 148,
+    borderRadius: 74,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  micLabel: {
+    fontFamily: font.semibold,
+    fontSize: 11,
+    lineHeight: 13,
+    letterSpacing: 11 * 0.08,
+    textTransform: 'uppercase',
+    color: colors.neutral600,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  stat: {
+    width: '50%',
+    paddingVertical: 12,
+  },
+  statLeft: {
+    paddingRight: 12,
+    borderRightWidth: 1,
+    borderRightColor: colors.divider,
+  },
+  statRight: {
+    paddingLeft: 12,
+  },
+  statBottom: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+  },
+  statValue: {
+    fontFamily: font.extrabold,
+    fontSize: 30,
+    lineHeight: 30,
+    color: colors.text,
+  },
+  statSub: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    lineHeight: 15,
+    color: colors.neutral700,
+    marginTop: 4,
+  },
+  sectionHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  upcoming: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    paddingVertical: 10,
+  },
+  upcomingTitle: {
+    fontFamily: font.regular,
+    fontSize: 14,
+    color: colors.text,
+    flexShrink: 1,
+  },
+  upcomingWhen: {
+    fontFamily: font.regular,
+    fontSize: 14,
+    color: colors.neutral700,
+  },
+  continueRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    minHeight: 48,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+  },
+  continueTitle: {
+    fontFamily: font.semibold,
+    fontSize: 15,
+    color: colors.text,
+  },
+  continueMeta: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.neutral600,
+  },
+});

@@ -1,25 +1,84 @@
-# CODING AGENTS: READ THIS FIRST
+# Mindecho
 
-This is a **handoff bundle** from Claude Design (claude.ai/design).
+Voice memory & action assistant — *Don't organize your life. Just talk. AI organizes it for you.*
 
-A user mocked up designs in HTML/CSS/JS using an AI design tool, then exported this bundle so a coding agent can implement the designs for real.
+An Expo (React Native + TypeScript) app for iOS and Android, built from the Claude Design
+handoff in [`design/`](design/).
 
-## What you should do — IMPORTANT
+## Status
 
-**Read the chat transcripts first.** There are 1 chat transcript(s) in `chats/`. The transcripts show the full back-and-forth between the user and the design assistant — they tell you **what the user actually wants** and **where they landed** after iterating. Don't skip them. The final HTML files are the output, but the chat is where the intent lives.
+**All screens and navigation are complete.** The app runs end to end against in-memory
+mock content taken from the prototype — there is no backend, no persistence, no real audio
+capture or AI yet. See [What isn't built yet](#what-isnt-built-yet).
 
-**Read `project/Mindecho.dc.html` in full.** The user had this file open when they triggered the handoff, so it's almost certainly the primary design they want built. Read it top to bottom — don't skim. Then **follow its imports**: open every file it pulls in (shared components, CSS, scripts) so you understand how the pieces fit together before you start implementing.
+## Running it
 
-**If anything is ambiguous, ask the user to confirm before you start implementing.** It's much cheaper to clarify scope up front than to build the wrong thing.
+```bash
+npm install
+npx expo start          # then press i / a, or scan the QR code with Expo Go
+```
 
-## About the design files
+Other scripts: `npm run typecheck`, `npm run ios`, `npm run android`, `npm run web`.
 
-The design medium is **HTML/CSS/JS** — these are prototypes, not production code. Your job is to **recreate them pixel-perfectly** in whatever technology makes sense for the target codebase (React, Vue, native, whatever fits). Match the visual output; don't copy the prototype's internal structure unless it happens to fit.
+## Screens
 
-**Don't render these files in a browser or take screenshots unless the user asks you to.** Everything you need — dimensions, colors, layout rules — is spelled out in the source. Read the HTML and CSS directly; a screenshot won't tell you anything they don't.
+Fourteen screens, matching prototype `1a` in `design/project/Mindecho.dc.html`:
 
-## Bundle contents
+| Route | Screen | Notes |
+| --- | --- | --- |
+| `/login` | Login | Pastel block header, Apple / Google / Email. App entry point. |
+| `/` | Home | Centred 148px mic, stat grid, Upcoming, Continue conversation. |
+| `/talk` | Talk / Capture session | Capture vs Conversation mode, live transcript, AI related-memory card. |
+| `/summary` | Post-capture summary | Entries + the "needs review" band. |
+| `/inbox` | Inbox | Inline review; choices persist for the session. |
+| `/calendar` | Calendar | September 2026, per-day conversation dots. |
+| `/tasks` | Tasks | Checkboxes, source quotes, Schedule. |
+| `/memory` | Memory | Topics, Idea threads, Journal, Rediscover. |
+| `/topic` | Topic Memory | Structure `1k`: pinned summary + tag counts + dated timeline. |
+| `/thread` | Idea Thread | Subscription Service Idea, Jun 4 → Sep 11. |
+| `/journal` | Daily Journal | Auto-generated day summary. |
+| `/search` | Ask My Memory | Filters, AI answer, sources, voice input. |
+| `/account` | Account | Profile, usage, four preference groups, sign out. |
+| `/driving` | Driving Mode | Dark, large targets, "끝." to finish. |
 
-- `README.md` — this file
-- `chats/` — conversation transcripts (read these!)
-- `project/` — the `Mobile app design planning` project files (HTML prototypes, assets, components)
+### Navigation
+
+Expo Router. The root stack holds `login`, the `(tabs)` group, and the three full-screen
+routes that hide the nav (`talk`, `summary`, `driving`). Bottom nav is the `1l` six-tab bar
+— **Home / Calendar / Tasks / Memory / Search / Account** — with Talk removed; recording
+starts from the Home mic.
+
+`inbox`, `topic`, `thread` and `journal` live inside `(tabs)` so the bar stays visible, and
+borrow a tab's highlight the way the prototype does: Inbox lights up Home, and Topic,
+Thread and Journal light up Memory.
+
+## Layout
+
+```
+app/                    routes (Expo Router)
+  _layout.tsx           root stack, font loading, app state provider
+  (tabs)/               the six tabs + the four nav-visible drill-downs
+src/
+  theme.ts              colours, type ramp, spacing — ported from the design system
+  data.ts               prototype content (tasks, inbox, conversations, preferences)
+  store.tsx             session state: capture, tasks, inbox, calendar, preferences
+  nav.ts                dismiss helper for the full-screen routes
+  components/           Screen, BottomNav, Waveform, Icon, ui primitives
+design/                 the original Claude Design handoff bundle — read-only reference
+```
+
+## Design fidelity
+
+Tokens come from the Modernist design system (`design/project/_ds/…/styles.css`) with the
+overrides the user made in the prototype: pastel coral accent `#ef8a80`, warm ground
+`#f7f4f2`, Archivo at 400/600/800, 2px section rules, zero corner radius everywhere except
+the pastel blocks on Login and Account (14px). UI chrome is English, captured content is
+Korean, as specified in the brief.
+
+## What isn't built yet
+
+- Real audio capture, transcription and AI classification — the Talk screen replays a
+  scripted transcript on a timer, exactly as the prototype does.
+- Backend, sync and persistence — all state is in memory and resets on reload.
+- Real authentication — any provider button on Login signs you straight in.
+- App icon and splash art are still the Expo defaults.
