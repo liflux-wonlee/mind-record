@@ -30,7 +30,10 @@ yarn-error.*
 .DS_Store
 *.pem
 
-# local env files
+# local env files — real Supabase credentials live in .env, never commit it.
+# .env.example is the template and IS tracked.
+.env
+.env.local
 .env*.local
 
 # typescript
