@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router';
-import React from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppleIcon, MailIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { AppleSignInUnavailableError, signInWithApple, signInWithGoogle } from '@/services/auth';
 import { colors, font, radius } from '@/theme';
 
 /** The pastel header blocks — colour and top offset, left to right. */
@@ -15,9 +16,31 @@ const BLOCKS = [
   { color: colors.pastelLavender, offset: 18 },
 ];
 
+type Provider = 'apple' | 'google';
+
 export default function LoginScreen() {
   const router = useRouter();
-  const signIn = () => router.replace('/');
+  const [busy, setBusy] = useState<Provider | null>(null);
+
+  const withBusy = (provider: Provider, action: () => Promise<void>) => async () => {
+    if (busy) return;
+    setBusy(provider);
+    try {
+      await action();
+      // Success just means a session now exists — app/_layout.tsx's auth
+      // guard is what actually navigates to Home once it sees it.
+    } catch (e) {
+      if (e instanceof AppleSignInUnavailableError) {
+        Alert.alert('iOS only', 'Sign in with Apple is only available on iOS right now.');
+      } else if ((e as { name?: string })?.name === 'OAuthCancelledError') {
+        // User closed the browser tab — not an error worth surfacing.
+      } else {
+        Alert.alert('Sign-in failed', e instanceof Error ? e.message : 'Please try again.');
+      }
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <Screen scroll={false} safeBottom bottomPadding={24}>
@@ -39,30 +62,33 @@ export default function LoginScreen() {
 
       <View style={styles.providers}>
         <ProviderButton
-          label="Continue with Apple"
+          label={busy === 'apple' ? 'Please wait…' : 'Continue with Apple'}
           background={colors.text}
           color={colors.bg}
           icon={<AppleIcon size={20} color={colors.bg} />}
-          onPress={signIn}
+          disabled={busy !== null}
+          onPress={withBusy('apple', signInWithApple)}
         />
         <ProviderButton
-          label="Continue with Google"
+          label={busy === 'google' ? 'Please wait…' : 'Continue with Google'}
           background={colors.pastelBlue}
           color={colors.text}
           icon={<Text style={styles.googleGlyph}>G</Text>}
-          onPress={signIn}
+          disabled={busy !== null}
+          onPress={withBusy('google', signInWithGoogle)}
         />
         <ProviderButton
           label="Continue with Email"
           background={colors.pastelYellow}
           color={colors.text}
           icon={<MailIcon size={20} color={colors.text} />}
-          onPress={signIn}
+          disabled={busy !== null}
+          onPress={() => router.push('/email-auth')}
         />
       </View>
 
       <Text style={styles.legal}>
-        음성과 기록은 기기에서 암호화되어 저장됩니다. 계속하면{' '}
+        음성과 기록은 서버에 안전하게 저장됩니다. 계속하면{' '}
         <Text style={styles.legalLink}>Terms</Text> 및{' '}
         <Text style={styles.legalLink}>Privacy</Text>에 동의합니다.
       </Text>
@@ -76,21 +102,25 @@ function ProviderButton({
   color,
   icon,
   onPress,
+  disabled,
 }: {
   label: string;
   background: string;
   color: string;
   icon: React.ReactNode;
   onPress: () => void;
+  disabled?: boolean;
 }) {
   return (
     <Pressable
       accessibilityRole="button"
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => [
         styles.provider,
         { backgroundColor: background },
-        pressed && { opacity: 0.85 },
+        disabled && styles.providerDisabled,
+        pressed && !disabled && { opacity: 0.85 },
       ]}
     >
       {icon}
@@ -139,6 +169,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 18,
+  },
+  providerDisabled: {
+    opacity: 0.6,
   },
   providerLabel: {
     fontFamily: font.extrabold,
