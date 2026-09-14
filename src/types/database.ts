@@ -17,6 +17,8 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type SessionMode = 'capture' | 'conversation' | 'driving';
 export type SessionProcessingStatus = 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error';
+/** Full structured breakdown of a recording (see supabase/functions/process-session) -- bullets may contain `**bold**` spans. */
+export type SessionOutlineSection = { heading: string; bullets: string[] };
 export type MessageRole = 'user' | 'assistant' | 'system';
 export type TaskStatus = 'open' | 'completed' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high';
@@ -57,6 +59,7 @@ export type Database = {
           ended_at: string | null;
           raw_transcript: string | null;
           summary: string | null;
+          outline: SessionOutlineSection[] | null;
           processing_status: SessionProcessingStatus;
           processing_error: string | null;
           created_at: string;
@@ -71,6 +74,7 @@ export type Database = {
           ended_at?: string | null;
           raw_transcript?: string | null;
           summary?: string | null;
+          outline?: SessionOutlineSection[] | null;
           processing_status?: SessionProcessingStatus;
           processing_error?: string | null;
           created_at?: string;
