@@ -1,11 +1,16 @@
 /**
- * Web-based OAuth (Google, and Apple on Android) via Supabase's hosted
- * `/authorize` endpoint + an in-app browser tab.
+ * Web-based OAuth (Apple on Android only, at this point) via Supabase's
+ * hosted `/authorize` endpoint + an in-app browser tab.
  *
  * Apple on iOS does NOT go through here — it uses the native Sign in with
  * Apple sheet instead (see `src/services/auth.ts`'s `signInWithApple`),
  * which is both the nicer UX and what the App Store requires once another
- * third-party login is offered.
+ * third-party login is offered. Google used to go through here too, but
+ * has since moved to native Google Sign-In (see `signInWithGoogle` in
+ * `src/services/auth.ts`) for the same reasons Apple avoids this path on
+ * iOS — this web-relay flow showed Supabase's own URL on the consent
+ * screen instead of the app's name, and was unreliable on Android about
+ * handing control back to the app afterwards.
  */
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -14,7 +19,7 @@ import { supabase } from '@/lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
 
-export type OAuthProvider = 'google' | 'apple';
+export type OAuthProvider = 'apple';
 
 export class OAuthCancelledError extends Error {
   constructor() {

@@ -6,6 +6,7 @@
     "@expo-google-fonts/archivo": "^0.4.2",
     "@expo/metro-runtime": "~57.0.15",
     "@react-native-async-storage/async-storage": "~2.2.0",
+    "@react-native-google-signin/google-signin": "^16.1.5",
     "@supabase/supabase-js": "^2.116.0",
     "expo": "~57.0.22",
     "expo-apple-authentication": "~57.0.2",
