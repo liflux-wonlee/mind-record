@@ -1,26 +1,47 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
 import { dismissToTabs } from '@/nav';
-import { listMemoriesBySession, type Memory } from '@/services/memories';
+import { useAuth } from '@/providers/AuthProvider';
+import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/services/memories';
 import { getSession, type Session } from '@/services/sessions';
-import { listTasksBySession, type Task } from '@/services/tasks';
-import { listSessionTopics, type Topic } from '@/services/topics';
+import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
+import { createTopic, listTopics, type Topic } from '@/services/topics';
 import { colors, font, h2 } from '@/theme';
 
-type Entry = { kicker: string; title: string };
+type EntryKind = 'task' | 'memory';
+type Entry = {
+  id: string;
+  kind: EntryKind;
+  kicker: string;
+  title: string;
+  topicId: string | null;
+  topicSuggestion: string | null;
+};
+
+function topicDisplayName(topic: Topic, all: Topic[]): string {
+  if (!topic.parent_topic_id) return topic.name;
+  const parent = all.find((t) => t.id === topic.parent_topic_id);
+  return parent ? `${parent.name} · ${topic.name}` : topic.name;
+}
 
 /**
  * The transcribe-then-analyze pipeline (supabase/functions/process-session)
  * runs in the background after a recording ends — this screen polls
  * `sessions.processing_status` rather than pretending the result is
  * instant, and renders the real extracted tasks/ideas once it's done.
+ *
+ * Each task/idea carries its own AI-assigned topic (or, when the AI wasn't
+ * confident, a `topic_suggestion` the user confirms or overrides here —
+ * "물어보는 식으로 처리" from the topic-hierarchy request, done as a
+ * deterministic confirm step rather than a live voice conversation).
  */
 export default function SummaryScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const { sessionId } = useLocalSearchParams<{ sessionId?: string }>();
 
   const [session, setSession] = useState<Session | null>(null);
@@ -28,6 +49,20 @@ export default function SummaryScreen() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [picking, setPicking] = useState<Entry | null>(null);
+  const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
+
+  const loadResults = useCallback(async () => {
+    if (!sessionId || !user) return;
+    const [t, m, tp] = await Promise.all([
+      listTasksBySession(sessionId),
+      listMemoriesBySession(sessionId),
+      listTopics(user.id),
+    ]);
+    setTasks(t);
+    setMemories(m);
+    setTopics(tp);
+  }, [sessionId, user]);
 
   useEffect(() => {
     if (!sessionId) return;
@@ -41,15 +76,7 @@ export default function SummaryScreen() {
         setSession(s);
 
         if (s?.processing_status === 'done') {
-          const [t, m, tp] = await Promise.all([
-            listTasksBySession(sessionId),
-            listMemoriesBySession(sessionId),
-            listSessionTopics(sessionId),
-          ]);
-          if (cancelled) return;
-          setTasks(t);
-          setMemories(m);
-          setTopics(tp);
+          await loadResults();
           return;
         }
         if (s?.processing_status !== 'error') {
@@ -65,18 +92,63 @@ export default function SummaryScreen() {
       cancelled = true;
       clearTimeout(timer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   const entries: Entry[] = [
-    ...tasks.map((t) => ({ kicker: 'Task', title: t.title })),
-    ...memories.map((m) => ({ kicker: 'Idea', title: m.content })),
+    ...tasks.map((t) => ({
+      id: t.id,
+      kind: 'task' as const,
+      kicker: 'Task',
+      title: t.title,
+      topicId: t.topic_id,
+      topicSuggestion: t.topic_suggestion,
+    })),
+    ...memories.map((m) => ({
+      id: m.id,
+      kind: 'memory' as const,
+      kicker: 'Idea',
+      title: m.content,
+      topicId: m.topic_id,
+      topicSuggestion: m.topic_suggestion,
+    })),
   ];
-  const topicLabel = topics.map((t) => t.name).join(' · ');
   const processing =
     !!sessionId && session?.processing_status !== 'done' && session?.processing_status !== 'error';
 
+  const assignEntryTopic = async (entry: Entry, topicId: string) => {
+    setBusyEntryId(entry.id);
+    try {
+      if (entry.kind === 'task') {
+        await assignTaskTopic(entry.id, topicId);
+      } else {
+        await assignMemoryTopic(entry.id, topicId);
+      }
+      await loadResults();
+      setPicking(null);
+    } catch {
+      // Leave the suggestion in place -- the user can just try again.
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  const useSuggestion = async (entry: Entry) => {
+    if (!user || !entry.topicSuggestion) return;
+    setBusyEntryId(entry.id);
+    try {
+      const existing = topics.find(
+        (t) => !t.parent_topic_id && t.name.toLowerCase() === entry.topicSuggestion!.toLowerCase()
+      );
+      const topic = existing ?? (await createTopic(user.id, entry.topicSuggestion));
+      await assignEntryTopic(entry, topic.id);
+    } catch {
+      setBusyEntryId(null);
+    }
+  };
+
   return (
-    <Screen scroll={false} safeBottom>
+    <Screen safeBottom>
       {!sessionId ? (
         <>
           <Kicker style={{ color: colors.neutral600 }}>Saved</Kicker>
@@ -113,20 +185,45 @@ export default function SummaryScreen() {
       <RuleThick />
 
       {!processing && entries.length > 0
-        ? entries.map((e, i) => (
-            <View key={`${e.kicker}-${i}`} style={styles.entry}>
-              <View style={styles.entryHead}>
-                <CardKicker>{e.kicker}</CardKicker>
-                {topicLabel ? <Tag variant="neutral">{topicLabel}</Tag> : null}
+        ? entries.map((e) => {
+            const topic = e.topicId ? topics.find((t) => t.id === e.topicId) : undefined;
+            return (
+              <View key={`${e.kind}-${e.id}`} style={styles.entry}>
+                <View style={styles.entryHead}>
+                  <CardKicker>{e.kicker}</CardKicker>
+                  {topic ? <Tag variant="neutral">{topicDisplayName(topic, topics)}</Tag> : null}
+                </View>
+                <Text style={styles.entryTitle}>{e.title}</Text>
+                {!topic && e.topicSuggestion ? (
+                  <View style={styles.suggestRow}>
+                    <Text style={styles.suggestText}>
+                      AI thinks this belongs under &quot;{e.topicSuggestion}&quot;
+                    </Text>
+                    <View style={styles.suggestActions}>
+                      <Button
+                        label={busyEntryId === e.id ? 'Saving…' : `Use "${e.topicSuggestion}"`}
+                        disabled={busyEntryId === e.id}
+                        onPress={() => useSuggestion(e)}
+                        style={styles.suggestButton}
+                        textStyle={{ fontSize: 12 }}
+                      />
+                      <Button
+                        variant="secondary"
+                        label="Pick topic"
+                        disabled={busyEntryId === e.id}
+                        onPress={() => setPicking(e)}
+                        style={styles.suggestButton}
+                        textStyle={{ fontSize: 12 }}
+                      />
+                    </View>
+                  </View>
+                ) : null}
               </View>
-              <Text style={styles.entryTitle}>{e.title}</Text>
-            </View>
-          ))
+            );
+          })
         : !processing && !loadError && session?.processing_status === 'done' && (
             <Text style={styles.footnote}>No tasks or ideas found in this recording.</Text>
           )}
-
-      <View style={styles.spacer} />
 
       <View style={styles.actions}>
         <Button
@@ -142,6 +239,29 @@ export default function SummaryScreen() {
           style={{ minHeight: 52 }}
         />
       </View>
+
+      <Modal visible={picking !== null} transparent animationType="fade" onRequestClose={() => setPicking(null)}>
+        <Pressable style={styles.backdrop} onPress={() => setPicking(null)}>
+          <Pressable style={styles.sheet} onPress={(ev) => ev.stopPropagation()}>
+            <Text style={styles.sheetTitle}>Pick a topic</Text>
+            {topics.length === 0 ? (
+              <Text style={styles.footnote}>No topics yet.</Text>
+            ) : (
+              topics.map((t) => (
+                <Button
+                  key={t.id}
+                  label={topicDisplayName(t, topics)}
+                  align="flex-start"
+                  variant="secondary"
+                  onPress={() => picking && assignEntryTopic(picking, t.id)}
+                  style={{ marginBottom: 8 }}
+                />
+              ))
+            )}
+            <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setPicking(null)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -180,6 +300,26 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginTop: 4,
   },
+  suggestRow: {
+    marginTop: 8,
+    backgroundColor: colors.accent100,
+    padding: 10,
+  },
+  suggestText: {
+    fontFamily: font.regular,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.neutral800,
+  },
+  suggestActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  suggestButton: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+  },
   footnote: {
     fontFamily: font.regular,
     fontSize: 13,
@@ -187,17 +327,33 @@ const styles = StyleSheet.create({
     color: colors.neutral600,
     paddingVertical: 12,
   },
-  spacer: {
-    flex: 1,
-    minHeight: 14,
-  },
   actions: {
     flexDirection: 'row',
     gap: 10,
+    marginTop: 18,
   },
   doneButton: {
     flex: 1,
     minHeight: 52,
     paddingHorizontal: 16,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(32,30,29,0.5)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: colors.bg,
+    padding: 20,
+    paddingBottom: 32,
+    borderTopWidth: 2,
+    borderTopColor: colors.divider,
+    maxHeight: '80%',
+  },
+  sheetTitle: {
+    fontFamily: font.extrabold,
+    fontSize: 18,
+    color: colors.text,
+    marginBottom: 14,
   },
 });
