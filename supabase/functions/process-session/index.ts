@@ -48,8 +48,10 @@ type ExtractedMemory = {
   topic_parent_name?: string | null;
   topic_confidence?: number;
 };
+type OutlineSection = { heading: string; bullets: string[] };
 type Extraction = {
   summary: string;
+  outline: OutlineSection[];
   tasks: ExtractedTask[];
   memories: ExtractedMemory[];
 };
@@ -210,6 +212,7 @@ Deno.serve(async (req) => {
       .from('sessions')
       .update({
         summary: extraction.summary,
+        outline: extraction.outline,
         title: session.title ?? extraction.summary.slice(0, 80),
         processing_status: 'done',
       })
@@ -335,12 +338,22 @@ function formatTopicTree(topics: TopicRow[]): string {
 
 async function analyzeTranscript(transcript: string, topics: TopicRow[]): Promise<Extraction> {
   if (!transcript.trim()) {
-    return { summary: 'No speech was detected in this recording.', tasks: [], memories: [] };
+    return { summary: 'No speech was detected in this recording.', outline: [], tasks: [], memories: [] };
   }
 
   const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.
 
-"summary" is a plain recap of what the speaker actually talked about (topics, events, feelings, plans -- whatever the content was), written the way a diary entry's first line would read. It must describe the CONTENT, never the speech itself -- do not comment on repetition, filler, hesitation, pacing, tone, or recording quality, and never describe the speaker's behavior or mental state as an outside observer (e.g. never write things like "the speaker seems rushed" or "is repeating themselves"). If the recording is short, mundane, or has barely anything in it, summarize whatever little there is in plain terms (e.g. "Brief note testing the recording, no real content.") rather than inventing an interpretation of why it's short.
+There are TWO different summaries to produce, for two different places in the app:
+
+"summary" is a short (1-2 sentence) recap, used in compact list views (a row on a calendar, a line on a home screen) where space is tight.
+
+"outline" is the FULL breakdown, organized into sections with headings and bullet points -- this is the one people actually read to see what they talked about, so it must not throw content away. Cover everything substantive in the transcript, not just the headline point: named people/places/things mentioned, specific reasons or arguments given, numbers or dates, examples, open questions, decisions made or not yet made, plans, feelings expressed. Structure:
+- Start with an "Overview" section: a handful of bullets giving the high-level gist.
+- Follow with additional sections for each distinct topic, theme, or line of thought in the transcript, each with its own heading (2-6 words) and bullet points. Split into more sections rather than fewer when the transcript covers genuinely distinct things -- don't cram unrelated points under one heading just to keep the section count low.
+- Bullets are concise phrases or short sentences, not full paragraphs. Wrap the 2-4 most important words or the key claim of a bullet in **double asterisks** (e.g. "**Prayer** described as essential for spiritual growth.") the way the emphasis reads in a well-formatted outline -- don't bold entire bullets or bold nothing.
+- If the recording is short, mundane, or has barely anything in it, this can be as small as one "Overview" section with one or two honest bullets (e.g. "Brief note testing the recording, no real content.") -- do not pad a thin transcript with invented sections, and do not comment on the recording itself (its length, repetition, audio quality) as if it were content.
+
+Both "summary" and "outline" describe the CONTENT only -- never the speech act itself. Do not comment on repetition, filler, hesitation, pacing, tone, or recording quality, and never describe the speaker's behavior or mental state as an outside observer (e.g. never write "the speaker seems rushed" or "is repeating themselves").
 
 The speaker may explicitly say things like "이건 [이름] 토픽에 넣어줘" or "put this under the X folder" -- treat "topic", "폴더" (folder), and "카테고리" (category) as the same concept, and treat an explicit instruction like that as a highly confident assignment (topic_confidence near 1.0), not a guess.
 
@@ -349,7 +362,8 @@ ${formatTopicTree(topics)}
 
 Respond with strict JSON matching this shape:
 {
-  "summary": string (1-2 sentences, content recap as described above),
+  "summary": string (1-2 sentences, short recap as described above),
+  "outline": [{ "heading": string, "bullets": string[] }] (full breakdown as described above, at least one section),
   "tasks": [{
     "title": string,
     "priority": "low" | "normal" | "high",
@@ -368,7 +382,7 @@ Respond with strict JSON matching this shape:
 
 If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic something belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough.
 
-The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary"/"topic_name" in the same language as the transcript. Never invent tasks or ideas that aren't actually in the transcript.`;
+The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary"/"heading"/bullet text in the same language as the transcript. Never invent tasks, ideas, or outline content that aren't actually in the transcript.`;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -393,8 +407,19 @@ The transcript may be in Korean, English, or a mix -- write "title"/"content"/"s
   if (!content) throw new Error('AI analysis returned no content.');
 
   const parsed = JSON.parse(content);
+  const outline: OutlineSection[] = Array.isArray(parsed.outline)
+    ? parsed.outline
+        .filter((s: unknown): s is { heading: unknown; bullets: unknown } => !!s && typeof s === 'object')
+        .map((s: { heading: unknown; bullets: unknown }) => ({
+          heading: typeof s.heading === 'string' ? s.heading : '',
+          bullets: Array.isArray(s.bullets) ? s.bullets.filter((b: unknown) => typeof b === 'string') : [],
+        }))
+        .filter((s: OutlineSection) => s.heading && s.bullets.length > 0)
+    : [];
+
   return {
     summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+    outline,
     tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
     memories: Array.isArray(parsed.memories) ? parsed.memories : [],
   };
