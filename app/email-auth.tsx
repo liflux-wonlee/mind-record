@@ -19,6 +19,7 @@ type Mode = 'sign-in' | 'sign-up';
 export default function EmailAuthScreen() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>('sign-in');
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -32,13 +33,17 @@ export default function EmailAuthScreen() {
       setError('Enter both an email and a password.');
       return;
     }
+    if (mode === 'sign-up' && !name.trim()) {
+      setError('Enter your name.');
+      return;
+    }
     setLoading(true);
     try {
       if (mode === 'sign-in') {
         await signInWithEmail(email.trim(), password);
         // A session now exists — app/_layout.tsx's guard redirects to Home.
       } else {
-        const result = await signUpWithEmail(email.trim(), password);
+        const result = await signUpWithEmail(email.trim(), password, name.trim());
         if (result.status === 'check-email') {
           setCheckEmail(true);
         }
@@ -107,6 +112,21 @@ export default function EmailAuthScreen() {
             divided
           />
         </View>
+
+        {mode === 'sign-up' ? (
+          <View style={styles.field}>
+            <Text style={styles.label}>Name</Text>
+            <TextInput
+              style={styles.input}
+              value={name}
+              onChangeText={setName}
+              placeholder="Your name"
+              placeholderTextColor={colors.neutral600}
+              autoCapitalize="words"
+              textContentType="name"
+            />
+          </View>
+        ) : null}
 
         <View style={styles.field}>
           <Text style={styles.label}>Email</Text>

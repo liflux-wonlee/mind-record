@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import React from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MicIcon } from '@/components/Icon';
@@ -7,14 +7,37 @@ import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useRecentSessions } from '@/hooks/useRecentSessions';
 import { useTasks } from '@/hooks/useTasks';
+import { useAuth } from '@/providers/AuthProvider';
+import { getProfile } from '@/services/profiles';
 import { useApp } from '@/store';
 import { colors, font, h2 } from '@/theme';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const { inboxCount, startSession } = useApp();
   const tasksState = useTasks();
   const recentSessions = useRecentSessions(3);
+  const [firstName, setFirstName] = useState<string | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      let cancelled = false;
+      getProfile(user.id)
+        .then((profile) => {
+          if (cancelled) return;
+          const name = profile?.display_name?.trim().split(/\s+/)[0];
+          setFirstName(name || null);
+        })
+        .catch(() => {
+          // Greeting is a nice-to-have — leave it off rather than block the screen.
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [user])
+  );
 
   const startTalk = () => {
     startSession();
@@ -35,6 +58,9 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.micBlock}>
+        {firstName ? (
+          <Kicker style={{ color: colors.neutral600 }}>Hi, {firstName}</Kicker>
+        ) : null}
         <Text style={styles.title}>What&apos;s on your mind?</Text>
         <Pressable
           accessibilityRole="button"
