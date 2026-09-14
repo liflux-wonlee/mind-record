@@ -1,14 +1,126 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
-import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
-import { inboxItems } from '@/data';
-import { useApp } from '@/store';
+import { Button, CardKicker, Kicker, RuleThick } from '@/components/ui';
+import { useAuth } from '@/providers/AuthProvider';
+import { assignMemoryTopic, listMemoriesPendingTopicReview } from '@/services/memories';
+import { assignTaskTopic, listTasksPendingTopicReview } from '@/services/tasks';
+import { confirmTopicSuggestion, listTopics, type Topic } from '@/services/topics';
 import { colors, font, h2 } from '@/theme';
 
+type EntryKind = 'task' | 'memory';
+type Entry = {
+  id: string;
+  kind: EntryKind;
+  kicker: string;
+  title: string;
+  topicSuggestion: string;
+};
+
+function topicDisplayName(topic: Topic, all: Topic[]): string {
+  if (!topic.parent_topic_id) return topic.name;
+  const parent = all.find((t) => t.id === topic.parent_topic_id);
+  return parent ? `${parent.name} · ${topic.name}` : topic.name;
+}
+
+/**
+ * The real "AI wasn't confident about this topic" review queue -- every
+ * task/idea here has `topic_id === null` and a non-null `topic_suggestion`
+ * (see listTasksPendingTopicReview / listMemoriesPendingTopicReview).
+ * Confirming here mirrors app/summary.tsx's confirm-flow exactly, via the
+ * shared confirmTopicSuggestion() find-or-create helper.
+ */
 export default function InboxScreen() {
-  const { inboxResolved, resolveInbox } = useApp();
+  const { user } = useAuth();
+
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [topics, setTopics] = useState<Topic[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [picking, setPicking] = useState<Entry | null>(null);
+  const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      let cancelled = false;
+      setLoading(true);
+      setError(null);
+
+      Promise.all([
+        listTasksPendingTopicReview(user.id),
+        listMemoriesPendingTopicReview(user.id),
+        listTopics(user.id),
+      ])
+        .then(([pendingTasks, pendingMemories, tp]) => {
+          if (cancelled) return;
+          const combined: Entry[] = [
+            ...pendingTasks
+              .filter((t) => !!t.topic_suggestion)
+              .map((t) => ({
+                id: t.id,
+                kind: 'task' as const,
+                kicker: 'Task',
+                title: t.title,
+                topicSuggestion: t.topic_suggestion as string,
+              })),
+            ...pendingMemories
+              .filter((m) => !!m.topic_suggestion)
+              .map((m) => ({
+                id: m.id,
+                kind: 'memory' as const,
+                kicker: 'Idea',
+                title: m.content,
+                topicSuggestion: m.topic_suggestion as string,
+              })),
+          ];
+          setEntries(combined);
+          setTopics(tp);
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setError(e instanceof Error ? e.message : 'Could not load your inbox.');
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [user])
+  );
+
+  const assignEntryTopic = async (entry: Entry, topicId: string) => {
+    setBusyEntryId(entry.id);
+    try {
+      if (entry.kind === 'task') {
+        await assignTaskTopic(entry.id, topicId);
+      } else {
+        await assignMemoryTopic(entry.id, topicId);
+      }
+      setEntries((prev) => prev.filter((e) => !(e.kind === entry.kind && e.id === entry.id)));
+      setPicking(null);
+    } catch {
+      // Leave the entry in the queue -- the user can just try again.
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  const useSuggestion = async (entry: Entry) => {
+    if (!user) return;
+    setBusyEntryId(entry.id);
+    try {
+      const topic = await confirmTopicSuggestion(user.id, topics, entry.topicSuggestion);
+      setTopics((prev) => (prev.some((t) => t.id === topic.id) ? prev : [...prev, topic]));
+      await assignEntryTopic(entry, topic.id);
+    } catch {
+      setBusyEntryId(null);
+    }
+  };
 
   return (
     <Screen>
@@ -17,41 +129,68 @@ export default function InboxScreen() {
 
       <RuleThick />
 
-      {inboxItems.map((item, i) => {
-        const resolution = inboxResolved[i];
-        const needsReview = item.review && !resolution;
-        return (
-          <View key={item.title} style={[styles.item, resolution ? { opacity: 0.55 } : null]}>
-            <View style={styles.itemHead}>
-              <CardKicker>{resolution ? `${item.type} · ${resolution}` : item.type}</CardKicker>
-              <Tag variant="neutral">{item.topic}</Tag>
+      {loading ? (
+        <ActivityIndicator color={colors.accent} style={styles.center} />
+      ) : error ? (
+        <Text style={styles.footnote}>{error}</Text>
+      ) : entries.length === 0 ? (
+        <Text style={styles.footnote}>Nothing needs review right now.</Text>
+      ) : (
+        entries.map((entry) => (
+          <View key={`${entry.kind}-${entry.id}`} style={styles.item}>
+            <CardKicker>{entry.kicker}</CardKicker>
+            <Text style={styles.itemTitle}>{entry.title}</Text>
+            <Text style={styles.note}>
+              AI thinks this belongs under &quot;{entry.topicSuggestion}&quot;
+            </Text>
+            <View style={styles.actions}>
+              <Button
+                label={busyEntryId === entry.id ? 'Saving…' : `Use "${entry.topicSuggestion}"`}
+                disabled={busyEntryId === entry.id}
+                onPress={() => useSuggestion(entry)}
+                style={{ minHeight: 40 }}
+                textStyle={{ fontSize: 12 }}
+              />
+              <Button
+                variant="secondary"
+                label="Pick topic"
+                disabled={busyEntryId === entry.id}
+                onPress={() => setPicking(entry)}
+                style={{ minHeight: 40 }}
+                textStyle={{ fontSize: 12 }}
+              />
             </View>
-            <Text style={styles.itemTitle}>{item.title}</Text>
-            {needsReview ? (
-              <>
-                <Text style={styles.note}>{item.note}</Text>
-                <View style={styles.actions}>
-                  <Button
-                    label={item.aLabel}
-                    onPress={() => resolveInbox(i, item.aLabel!)}
-                    style={{ minHeight: 40 }}
-                  />
-                  <Button
-                    variant="secondary"
-                    label={item.bLabel}
-                    onPress={() => resolveInbox(i, item.bLabel!)}
-                    style={{ minHeight: 40 }}
-                  />
-                </View>
-              </>
-            ) : null}
           </View>
-        );
-      })}
+        ))
+      )}
 
-      <Text style={styles.footnote}>
-        AI already filed the rest. Your choices here train future classification.
-      </Text>
+      <Modal
+        visible={picking !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPicking(null)}
+      >
+        <Pressable style={styles.backdrop} onPress={() => setPicking(null)}>
+          <Pressable style={styles.sheet} onPress={(ev) => ev.stopPropagation()}>
+            <Text style={styles.sheetTitle}>Pick a topic</Text>
+            {topics.length === 0 ? (
+              <Text style={styles.footnote}>No topics yet.</Text>
+            ) : (
+              topics.map((t) => (
+                <Button
+                  key={t.id}
+                  label={topicDisplayName(t, topics)}
+                  align="flex-start"
+                  variant="secondary"
+                  onPress={() => picking && assignEntryTopic(picking, t.id)}
+                  style={{ marginBottom: 8 }}
+                />
+              ))
+            )}
+            <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setPicking(null)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Screen>
   );
 }
@@ -62,16 +201,13 @@ const styles = StyleSheet.create({
     marginTop: 6,
     marginBottom: 14,
   },
+  center: {
+    marginTop: 24,
+  },
   item: {
     paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
-  },
-  itemHead: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 8,
   },
   itemTitle: {
     fontFamily: font.semibold,
@@ -94,9 +230,28 @@ const styles = StyleSheet.create({
   },
   footnote: {
     fontFamily: font.regular,
-    fontSize: 12,
-    lineHeight: 18,
-    color: colors.neutral700,
-    marginTop: 12,
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.neutral600,
+    paddingVertical: 12,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(32,30,29,0.5)',
+    justifyContent: 'flex-end',
+  },
+  sheet: {
+    backgroundColor: colors.bg,
+    padding: 20,
+    paddingBottom: 32,
+    borderTopWidth: 2,
+    borderTopColor: colors.divider,
+    maxHeight: '80%',
+  },
+  sheetTitle: {
+    fontFamily: font.extrabold,
+    fontSize: 18,
+    color: colors.text,
+    marginBottom: 14,
   },
 });
