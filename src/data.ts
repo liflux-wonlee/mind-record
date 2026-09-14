@@ -136,7 +136,7 @@ export const prefGroups: PrefGroup[] = [
     rows: [
       { kind: 'value', label: 'Default mode', sub: '앱을 열 때 시작하는 모드', value: 'Capture' },
       { kind: 'value', label: 'Response length', sub: 'AI가 대답하는 길이', value: 'Short' },
-      { kind: 'value', label: 'Language', sub: '음성 인식 · UI', value: '한국어 · EN' },
+      { kind: 'value', label: 'Language', sub: '음성 인식 · UI', value: 'English' },
       {
         kind: 'toggle',
         key: 'autoDrive',
