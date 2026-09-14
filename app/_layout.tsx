@@ -17,7 +17,7 @@ import { colors } from '@/theme';
 SplashScreen.preventAutoHideAsync();
 
 /** Routes reachable without a session. */
-const AUTH_ROUTES = ['login', 'email-auth'];
+const AUTH_ROUTES = ['login', 'email-auth', 'auth'];
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -80,6 +80,7 @@ function RootNavigator() {
     >
       <Stack.Screen name="login" options={{ animation: 'fade' }} />
       <Stack.Screen name="email-auth" options={{ animation: 'slide_from_bottom' }} />
+      <Stack.Screen name="auth/callback" options={{ animation: 'fade' }} />
       <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
       <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom' }} />
       <Stack.Screen name="summary" />
