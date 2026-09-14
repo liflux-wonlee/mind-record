@@ -12,8 +12,9 @@ import {
 } from 'react-native';
 
 import { Screen } from '@/components/Screen';
-import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
+import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
+import { listRecentMemories, type Memory } from '@/services/memories';
 import {
   createTopic,
   deleteTopic,
@@ -26,10 +27,10 @@ import {
 } from '@/services/topics';
 import { colors, font, h2 } from '@/theme';
 
-const THREADS = [
-  { title: 'Subscription Service Idea', meta: '5 · Jun 4 → Sep 11' },
-  { title: 'Migration Wizard', meta: '2 · paused' },
-];
+function truncate(text: string, max = 60): string {
+  const trimmed = text.trim().replace(/\s+/g, ' ');
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
+}
 
 type Sheet =
   | { kind: 'menu'; topic: Topic }
@@ -49,6 +50,10 @@ export default function MemoryScreen() {
   const [sheet, setSheet] = useState<Sheet>(null);
   const [busy, setBusy] = useState(false);
 
+  const [recentMemories, setRecentMemories] = useState<Memory[]>([]);
+  const [memoriesLoading, setMemoriesLoading] = useState(true);
+  const [memoriesError, setMemoriesError] = useState<string | null>(null);
+
   const reload = useCallback(() => {
     if (!user) return;
     setLoading(true);
@@ -62,6 +67,30 @@ export default function MemoryScreen() {
     useCallback(() => {
       reload();
     }, [reload])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      let cancelled = false;
+      setMemoriesLoading(true);
+      setMemoriesError(null);
+      listRecentMemories(user.id, 5)
+        .then((memories) => {
+          if (cancelled) return;
+          setRecentMemories(memories);
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setMemoriesError(e instanceof Error ? e.message : 'Could not load recent ideas.');
+        })
+        .finally(() => {
+          if (!cancelled) setMemoriesLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [user])
   );
 
   const roots = topics.filter((t) => !t.parent_topic_id);
@@ -125,33 +154,40 @@ export default function MemoryScreen() {
         ))
       )}
 
-      <Kicker style={{ color: colors.neutral600, marginTop: 20 }}>Idea threads</Kicker>
+      <Kicker style={{ color: colors.neutral600, marginTop: 20 }}>Recent ideas</Kicker>
       <RuleThick style={{ marginTop: 6 }} />
-      {THREADS.map((thread) => (
-        <Row key={thread.title} onPress={() => router.push('/thread')} style={styles.listRow}>
-          <Text style={styles.listTitle}>{thread.title}</Text>
-          <Text style={styles.listMeta}>{thread.meta}</Text>
-        </Row>
-      ))}
+      {memoriesLoading ? (
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.accent} />
+        </View>
+      ) : memoriesError ? (
+        <Text style={styles.empty}>{memoriesError}</Text>
+      ) : recentMemories.length === 0 ? (
+        <Text style={styles.empty}>No ideas captured yet — they&apos;ll show up here after a session.</Text>
+      ) : (
+        recentMemories.map((memory) => (
+          <Row key={memory.id} style={styles.listRow}>
+            <Text style={styles.listTitle} numberOfLines={1}>
+              {truncate(memory.content)}
+            </Text>
+            <Text style={styles.listMeta}>
+              {new Date(memory.created_at).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+              })}
+            </Text>
+          </Row>
+        ))
+      )}
 
       <Kicker style={{ color: colors.neutral600, marginTop: 20 }}>Journal</Kicker>
       <RuleThick style={{ marginTop: 6 }} />
       <Row onPress={() => router.push('/journal')} style={styles.listRow}>
-        <Text style={styles.listTitle}>September 11, 2026</Text>
-        <Text style={styles.listMeta}>auto-generated</Text>
-      </Row>
-
-      <View style={styles.rediscover}>
-        <CardKicker>Rediscover</CardKicker>
-        <Text style={styles.rediscoverTitle}>AI-based customer onboarding assistant</Text>
-        <Text style={styles.rediscoverNote}>
-          4개월 전에 이야기했지만 다시 언급하지 않은 아이디어입니다.
+        <Text style={styles.listTitle}>
+          {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
         </Text>
-        <View style={styles.rediscoverActions}>
-          <Button variant="secondary" label="Revisit" style={{ minHeight: 40 }} />
-          <Button variant="ghost" label="Archive" style={{ minHeight: 40 }} />
-        </View>
-      </View>
+        <Text style={styles.listMeta}>today</Text>
+      </Row>
 
       {/* Action menu for a tapped topic */}
       <ActionModal visible={sheet?.kind === 'menu'} onClose={closeSheet} title={sheet?.kind === 'menu' ? sheet.topic.name : ''}>
@@ -384,30 +420,6 @@ const styles = StyleSheet.create({
     fontFamily: font.regular,
     fontSize: 11,
     color: colors.neutral600,
-  },
-  rediscover: {
-    marginTop: 20,
-    backgroundColor: colors.accent100,
-    padding: 12,
-  },
-  rediscoverTitle: {
-    fontFamily: font.semibold,
-    fontSize: 15,
-    lineHeight: 22,
-    color: colors.text,
-    marginTop: 4,
-  },
-  rediscoverNote: {
-    fontFamily: font.regular,
-    fontSize: 12,
-    lineHeight: 18,
-    color: colors.neutral700,
-    marginTop: 2,
-    marginBottom: 8,
-  },
-  rediscoverActions: {
-    flexDirection: 'row',
-    gap: 8,
   },
   backdrop: {
     flex: 1,
