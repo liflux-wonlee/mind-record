@@ -88,6 +88,23 @@ export async function mergeTopics(sourceTopicId: string, targetTopicId: string):
   if (error) throw error;
 }
 
+/**
+ * Resolves an AI `topic_suggestion` string to a real top-level topic --
+ * reuses a matching existing one (case-insensitive) or creates it. Shared
+ * by every "confirm this suggestion" flow (Summary, Inbox) so they can't
+ * drift into different matching behavior.
+ */
+export async function confirmTopicSuggestion(
+  userId: string,
+  topics: Topic[],
+  suggestion: string
+): Promise<Topic> {
+  const existing = topics.find(
+    (t) => !t.parent_topic_id && t.name.toLowerCase() === suggestion.toLowerCase()
+  );
+  return existing ?? createTopic(userId, suggestion, null);
+}
+
 /** Tasks/memories tagged with this topic keep their content, just untagged (topic_id set null). */
 export async function deleteTopic(topicId: string): Promise<void> {
   const { error } = await supabase.from('topics').delete().eq('id', topicId);

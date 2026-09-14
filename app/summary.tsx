@@ -9,7 +9,7 @@ import { useAuth } from '@/providers/AuthProvider';
 import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/services/memories';
 import { getSession, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
-import { createTopic, listTopics, type Topic } from '@/services/topics';
+import { confirmTopicSuggestion, listTopics, type Topic } from '@/services/topics';
 import { colors, font, h2 } from '@/theme';
 
 type EntryKind = 'task' | 'memory';
@@ -137,10 +137,7 @@ export default function SummaryScreen() {
     if (!user || !entry.topicSuggestion) return;
     setBusyEntryId(entry.id);
     try {
-      const existing = topics.find(
-        (t) => !t.parent_topic_id && t.name.toLowerCase() === entry.topicSuggestion!.toLowerCase()
-      );
-      const topic = existing ?? (await createTopic(user.id, entry.topicSuggestion));
+      const topic = await confirmTopicSuggestion(user.id, topics, entry.topicSuggestion);
       await assignEntryTopic(entry, topic.id);
     } catch {
       setBusyEntryId(null);

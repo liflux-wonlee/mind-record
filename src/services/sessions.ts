@@ -21,6 +21,38 @@ export async function listRecentSessions(userId: string, limit = 5): Promise<Ses
   return data;
 }
 
+/** Sessions started on the given local calendar day. */
+export async function listSessionsForDay(userId: string, date: Date): Promise<Session[]> {
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('started_at', start.toISOString())
+    .lte('started_at', end.toISOString())
+    .order('started_at', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+/** Sessions started anywhere in the given local calendar month (0-indexed, like Date's `getMonth()`). */
+export async function listSessionsInMonth(userId: string, year: number, month: number): Promise<Session[]> {
+  const start = new Date(year, month, 1, 0, 0, 0, 0);
+  const end = new Date(year, month + 1, 0, 23, 59, 59, 999);
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('started_at', start.toISOString())
+    .lte('started_at', end.toISOString())
+    .order('started_at', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
 export async function getSession(sessionId: string): Promise<Session | null> {
   const { data, error } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
   if (error) throw error;

@@ -24,6 +24,31 @@ export async function listTasksBySession(sessionId: string): Promise<Task[]> {
   return data;
 }
 
+export async function listTasksCreatedInRange(userId: string, startIso: string, endIso: string): Promise<Task[]> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('user_id', userId)
+    .gte('created_at', startIso)
+    .lte('created_at', endIso)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
+/** Tasks the AI extracted but wasn't confident enough about to file under a topic on its own. */
+export async function listTasksPendingTopicReview(userId: string): Promise<Task[]> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('user_id', userId)
+    .is('topic_id', null)
+    .not('topic_suggestion', 'is', null)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
 export async function createTask(
   userId: string,
   input: { title: string; dueDate?: string | null }
