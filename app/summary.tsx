@@ -28,6 +28,29 @@ function topicDisplayName(topic: Topic, all: Topic[]): string {
   return parent ? `${parent.name} · ${topic.name}` : topic.name;
 }
 
+function TabOption({
+  label,
+  selected,
+  onPress,
+  divided,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  divided?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      style={[styles.tabOpt, divided && styles.tabDivider, selected && { backgroundColor: colors.accent }]}
+    >
+      <Text style={[styles.tabText, selected && { color: colors.bg }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 /**
  * The transcribe-then-analyze pipeline (supabase/functions/process-session)
  * runs in the background after a recording ends — this screen polls
@@ -51,6 +74,7 @@ export default function SummaryScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [picking, setPicking] = useState<Entry | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'summary' | 'transcript'>('summary');
 
   const loadResults = useCallback(async () => {
     if (!sessionId || !user) return;
@@ -179,10 +203,23 @@ export default function SummaryScreen() {
         </>
       )}
 
+      {!processing && !loadError && session?.processing_status === 'done' ? (
+        <View style={styles.tabRow}>
+          <TabOption label="Summary" selected={tab === 'summary'} onPress={() => setTab('summary')} />
+          <TabOption
+            label="Transcript"
+            selected={tab === 'transcript'}
+            onPress={() => setTab('transcript')}
+            divided
+          />
+        </View>
+      ) : null}
+
       <RuleThick />
 
-      {!processing && entries.length > 0
-        ? entries.map((e) => {
+      {processing || loadError || session?.processing_status !== 'done' ? null : tab === 'summary' ? (
+        entries.length > 0 ? (
+          entries.map((e) => {
             const topic = e.topicId ? topics.find((t) => t.id === e.topicId) : undefined;
             return (
               <View key={`${e.kind}-${e.id}`} style={styles.entry}>
@@ -218,18 +255,16 @@ export default function SummaryScreen() {
               </View>
             );
           })
-        : !processing && !loadError && session?.processing_status === 'done' && (
-            <Text style={styles.footnote}>
-              Nothing to file as a task or idea — the full recording is still saved below.
-            </Text>
-          )}
-
-      {!processing && !loadError && session?.raw_transcript ? (
-        <View style={styles.transcriptBlock}>
-          <Kicker style={{ color: colors.neutral600, marginBottom: 6 }}>Transcript</Kicker>
-          <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
-        </View>
-      ) : null}
+        ) : (
+          <Text style={styles.footnote}>
+            Nothing to file as a task or idea — tap Transcript to see the full recording.
+          </Text>
+        )
+      ) : session?.raw_transcript ? (
+        <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
+      ) : (
+        <Text style={styles.footnote}>No speech was detected in this recording.</Text>
+      )}
 
       <View style={styles.actions}>
         <Button
@@ -333,17 +368,34 @@ const styles = StyleSheet.create({
     color: colors.neutral600,
     paddingVertical: 12,
   },
-  transcriptBlock: {
-    marginTop: 18,
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
-    paddingTop: 12,
+  tabRow: {
+    flexDirection: 'row',
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: colors.divider,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  tabOpt: {
+    minHeight: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
+  tabDivider: {
+    borderLeftWidth: 1,
+    borderLeftColor: colors.divider,
+  },
+  tabText: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    color: colors.text,
   },
   transcriptText: {
     fontFamily: font.regular,
     fontSize: 13,
     lineHeight: 20,
     color: colors.neutral700,
+    paddingVertical: 12,
   },
   actions: {
     flexDirection: 'row',
