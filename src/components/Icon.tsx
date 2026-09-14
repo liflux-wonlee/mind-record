@@ -142,6 +142,15 @@ export function EyeOffIcon(props: IconProps) {
   );
 }
 
+export function CopyIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
+      <Path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />
+    </Stroke>
+  );
+}
+
 export function AppleIcon({ size = 20, color = colors.bg }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>

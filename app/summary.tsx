@@ -1,7 +1,9 @@
+import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { CopyIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
 import { dismissToTabs } from '@/nav';
@@ -11,6 +13,20 @@ import { getSession, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
 import { confirmTopicSuggestion, listTopics, type Topic } from '@/services/topics';
 import { colors, font, h2 } from '@/theme';
+
+/** Renders `**bold**` spans within an outline bullet or the transcript is never bolded, only bullets are. */
+function renderInlineBold(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) =>
+    part.startsWith('**') && part.endsWith('**') && part.length > 4 ? (
+      <Text key={i} style={styles.bold}>
+        {part.slice(2, -2)}
+      </Text>
+    ) : (
+      part
+    )
+  );
+}
 
 type EntryKind = 'task' | 'memory';
 type Entry = {
@@ -75,6 +91,14 @@ export default function SummaryScreen() {
   const [picking, setPicking] = useState<Entry | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [tab, setTab] = useState<'summary' | 'transcript'>('summary');
+  const [copied, setCopied] = useState(false);
+
+  const copyTranscript = async () => {
+    if (!session?.raw_transcript) return;
+    await Clipboard.setStringAsync(session.raw_transcript);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
   const loadResults = useCallback(async () => {
     if (!sessionId || !user) return;
@@ -218,50 +242,81 @@ export default function SummaryScreen() {
       <RuleThick />
 
       {processing || loadError || session?.processing_status !== 'done' ? null : tab === 'summary' ? (
-        entries.length > 0 ? (
-          entries.map((e) => {
-            const topic = e.topicId ? topics.find((t) => t.id === e.topicId) : undefined;
-            return (
-              <View key={`${e.kind}-${e.id}`} style={styles.entry}>
-                <View style={styles.entryHead}>
-                  <CardKicker>{e.kicker}</CardKicker>
-                  {topic ? <Tag variant="neutral">{topicDisplayName(topic, topics)}</Tag> : null}
-                </View>
-                <Text style={styles.entryTitle}>{e.title}</Text>
-                {!topic && e.topicSuggestion ? (
-                  <View style={styles.suggestRow}>
-                    <Text style={styles.suggestText}>
-                      AI thinks this belongs under &quot;{e.topicSuggestion}&quot;
-                    </Text>
-                    <View style={styles.suggestActions}>
-                      <Button
-                        label={busyEntryId === e.id ? 'Saving…' : `Use "${e.topicSuggestion}"`}
-                        disabled={busyEntryId === e.id}
-                        onPress={() => useSuggestion(e)}
-                        style={styles.suggestButton}
-                        textStyle={{ fontSize: 12 }}
-                      />
-                      <Button
-                        variant="secondary"
-                        label="Pick topic"
-                        disabled={busyEntryId === e.id}
-                        onPress={() => setPicking(e)}
-                        style={styles.suggestButton}
-                        textStyle={{ fontSize: 12 }}
-                      />
+        <>
+          {(session?.outline ?? []).map((section, i) => (
+            <View key={i} style={styles.outlineSection}>
+              <Text style={styles.outlineHeading}>{section.heading}</Text>
+              {section.bullets.map((bullet, j) => (
+                <Text key={j} style={styles.outlineBullet}>
+                  {'•  '}
+                  {renderInlineBold(bullet)}
+                </Text>
+              ))}
+            </View>
+          ))}
+
+          {entries.length > 0 ? (
+            <>
+              <Kicker style={{ color: colors.neutral600, marginTop: 8, marginBottom: 4 }}>
+                Tasks &amp; ideas
+              </Kicker>
+              {entries.map((e) => {
+                const topic = e.topicId ? topics.find((t) => t.id === e.topicId) : undefined;
+                return (
+                  <View key={`${e.kind}-${e.id}`} style={styles.entry}>
+                    <View style={styles.entryHead}>
+                      <CardKicker>{e.kicker}</CardKicker>
+                      {topic ? <Tag variant="neutral">{topicDisplayName(topic, topics)}</Tag> : null}
                     </View>
+                    <Text style={styles.entryTitle}>{e.title}</Text>
+                    {!topic && e.topicSuggestion ? (
+                      <View style={styles.suggestRow}>
+                        <Text style={styles.suggestText}>
+                          AI thinks this belongs under &quot;{e.topicSuggestion}&quot;
+                        </Text>
+                        <View style={styles.suggestActions}>
+                          <Button
+                            label={busyEntryId === e.id ? 'Saving…' : `Use "${e.topicSuggestion}"`}
+                            disabled={busyEntryId === e.id}
+                            onPress={() => useSuggestion(e)}
+                            style={styles.suggestButton}
+                            textStyle={{ fontSize: 12 }}
+                          />
+                          <Button
+                            variant="secondary"
+                            label="Pick topic"
+                            disabled={busyEntryId === e.id}
+                            onPress={() => setPicking(e)}
+                            style={styles.suggestButton}
+                            textStyle={{ fontSize: 12 }}
+                          />
+                        </View>
+                      </View>
+                    ) : null}
                   </View>
-                ) : null}
-              </View>
-            );
-          })
-        ) : (
-          <Text style={styles.footnote}>
-            Nothing to file as a task or idea — tap Transcript to see the full recording.
-          </Text>
-        )
+                );
+              })}
+            </>
+          ) : (session?.outline ?? []).length === 0 ? (
+            <Text style={styles.footnote}>
+              Nothing to file as a task or idea — tap Transcript to see the full recording.
+            </Text>
+          ) : null}
+        </>
       ) : session?.raw_transcript ? (
-        <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
+        <>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Copy transcript"
+            onPress={copyTranscript}
+            style={styles.copyButton}
+            hitSlop={8}
+          >
+            <CopyIcon size={16} color={colors.neutral700} />
+            <Text style={styles.copyButtonText}>{copied ? 'Copied' : 'Copy'}</Text>
+          </Pressable>
+          <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
+        </>
       ) : (
         <Text style={styles.footnote}>No speech was detected in this recording.</Text>
       )}
@@ -367,6 +422,43 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: colors.neutral600,
     paddingVertical: 12,
+  },
+  outlineSection: {
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+  },
+  outlineHeading: {
+    fontFamily: font.extrabold,
+    fontSize: 15,
+    lineHeight: 20,
+    color: colors.text,
+    marginBottom: 6,
+  },
+  outlineBullet: {
+    fontFamily: font.regular,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.text,
+    marginBottom: 4,
+  },
+  bold: {
+    fontFamily: font.semibold,
+    color: colors.text,
+  },
+  copyButton: {
+    flexDirection: 'row',
+    alignSelf: 'flex-end',
+    alignItems: 'center',
+    gap: 5,
+    minHeight: 32,
+    paddingHorizontal: 4,
+    marginBottom: 4,
+  },
+  copyButtonText: {
+    fontFamily: font.semibold,
+    fontSize: 12,
+    color: colors.neutral700,
   },
   tabRow: {
     flexDirection: 'row',
