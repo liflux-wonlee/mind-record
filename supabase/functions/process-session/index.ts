@@ -222,7 +222,8 @@ Deno.serve(async (req) => {
       memoryCount: resolvedMemories.length,
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : 'Unknown error while processing this session.';
+    console.error('process-session failed:', e);
+    const message = errorMessage(e);
     await db
       .from('sessions')
       .update({ processing_status: 'error', processing_error: message })
@@ -230,6 +231,22 @@ Deno.serve(async (req) => {
     return json({ error: message }, 500);
   }
 });
+
+/**
+ * `e instanceof Error` alone misses most Supabase client errors --
+ * PostgrestError (from .from(...).insert/update/select) is a plain object
+ * implementing an interface, not an actual Error subclass, so it was
+ * silently falling through to the generic "Unknown error" message here
+ * and every real failure reason was being discarded before it ever
+ * reached `sessions.processing_error` or the client.
+ */
+function errorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string') {
+    return (e as { message: string }).message;
+  }
+  return 'Unknown error while processing this session.';
+}
 
 /**
  * Finds or creates the topic (and, if named, its parent) an extracted item
