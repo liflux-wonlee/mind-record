@@ -109,6 +109,7 @@ export type Database = {
           name: string;
           description: string | null;
           color: string | null;
+          parent_topic_id: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -118,6 +119,7 @@ export type Database = {
           name: string;
           description?: string | null;
           color?: string | null;
+          parent_topic_id?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -151,6 +153,8 @@ export type Database = {
           priority: TaskPriority;
           due_date: string | null;
           completed_at: string | null;
+          topic_id: string | null;
+          topic_suggestion: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -164,6 +168,8 @@ export type Database = {
           priority?: TaskPriority;
           due_date?: string | null;
           completed_at?: string | null;
+          topic_id?: string | null;
+          topic_suggestion?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -178,6 +184,8 @@ export type Database = {
           content: string;
           category: string | null;
           importance: number | null;
+          topic_id: string | null;
+          topic_suggestion: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -188,6 +196,8 @@ export type Database = {
           content: string;
           category?: string | null;
           importance?: number | null;
+          topic_id?: string | null;
+          topic_suggestion?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -222,6 +232,11 @@ export type Database = {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      merge_topics: {
+        Args: { source_id: string; target_id: string };
+        Returns: void;
+      };
+    };
   };
 };
