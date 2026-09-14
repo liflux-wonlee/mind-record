@@ -16,6 +16,7 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type SessionMode = 'capture' | 'conversation' | 'driving';
+export type SessionProcessingStatus = 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error';
 export type MessageRole = 'user' | 'assistant' | 'system';
 export type TaskStatus = 'open' | 'completed' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high';
@@ -56,6 +57,8 @@ export type Database = {
           ended_at: string | null;
           raw_transcript: string | null;
           summary: string | null;
+          processing_status: SessionProcessingStatus;
+          processing_error: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -68,6 +71,8 @@ export type Database = {
           ended_at?: string | null;
           raw_transcript?: string | null;
           summary?: string | null;
+          processing_status?: SessionProcessingStatus;
+          processing_error?: string | null;
           created_at?: string;
           updated_at?: string;
         };
