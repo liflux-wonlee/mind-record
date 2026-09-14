@@ -4,29 +4,10 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
-import { Button, CardKicker, Kicker, Tag } from '@/components/ui';
+import { Button, Kicker } from '@/components/ui';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { dismissToTabs } from '@/nav';
 import { colors, font } from '@/theme';
-
-/** The three transcript lines the prototype reveals, one every three seconds. */
-const TRANSCRIPT = [
-  {
-    text: '생각해보니까 우리 회사 서비스 계약을 월 구독 형태로 더 만들어야 될 것 같아.',
-    type: 'IDEA',
-    topic: 'Business · Liflux',
-  },
-  {
-    text: '그리고 David한테 내일까지 전화해야겠다.',
-    type: 'TASK · TOMORROW',
-    topic: 'David',
-  },
-  {
-    text: '아 그리고 아침에 읽은 로마서 8장 내용도 다시 한번 공부해봐야 될 것 같아.',
-    type: 'TASK',
-    topic: 'Faith · Bible Study',
-  },
-];
 
 export default function TalkScreen() {
   const router = useRouter();
@@ -37,11 +18,8 @@ export default function TalkScreen() {
     everRecorded,
     saveOnly,
     toggleSaveOnly,
-    related,
-    setRelated,
     toggleRecording,
     endCapture,
-    lines,
     timer,
   } = useCaptureSession();
 
@@ -57,16 +35,6 @@ export default function TalkScreen() {
     await endCapture();
     dismissToTabs();
   };
-
-  const aiText = saveOnly
-    ? '알겠습니다. 저장만 하겠습니다.'
-    : mode === 'capture'
-      ? '네, 말씀하세요.'
-      : '비슷한 아이디어를 전에 이야기했습니다 — Jun 4 Subscription Service Idea. 둘을 연결할까요?';
-
-  const showAi =
-    (everRecorded && !saveOnly && lines >= 1 && mode === 'conv') || (everRecorded && lines === 0);
-  const showRelated = mode === 'conv' && lines >= 1 && related !== 'dismissed';
 
   return (
     <Screen scroll={false} safeBottom>
@@ -110,55 +78,11 @@ export default function TalkScreen() {
           <Text style={styles.idle}>
             말씀하세요. 주제를 나눌 필요 없이 한 번에 이야기하셔도 됩니다.
           </Text>
-        ) : null}
-
-        {TRANSCRIPT.slice(0, lines).map((line) => (
-          <View key={line.text}>
-            <Text style={styles.line}>{line.text}</Text>
-            <View style={styles.tagRow}>
-              <Tag variant="accent">{line.type}</Tag>
-              <Tag variant="neutral">{line.topic}</Tag>
-            </View>
-          </View>
-        ))}
-
-        {showAi ? (
-          <View style={styles.aiBlock}>
-            <Kicker style={{ color: colors.accent700, marginBottom: 4 }}>AI</Kicker>
-            <Text style={styles.aiText}>{aiText}</Text>
-
-            {showRelated ? (
-              <>
-                <View style={styles.relatedCard}>
-                  <View style={styles.flexShrink}>
-                    <CardKicker>Idea · Considering</CardKicker>
-                    <Text style={styles.relatedTitle}>Subscription Service Idea</Text>
-                  </View>
-                  <Button
-                    variant="ghost"
-                    label="Source →"
-                    onPress={() => router.push('/thread')}
-                    style={{ minHeight: 40, justifyContent: 'center' }}
-                    textStyle={{ fontSize: 11 }}
-                  />
-                </View>
-                <View style={styles.relatedActions}>
-                  <Button
-                    label={related === 'linked' ? 'Linked ✓' : 'Link them'}
-                    onPress={() => setRelated('linked')}
-                    style={{ minHeight: 40 }}
-                  />
-                  <Button
-                    variant="secondary"
-                    label="Keep separate"
-                    onPress={() => setRelated('dismissed')}
-                    style={{ minHeight: 40 }}
-                  />
-                </View>
-              </>
-            ) : null}
-          </View>
-        ) : null}
+        ) : (
+          <Text style={styles.idle}>
+            듣고 있어요. 말씀을 마치시면 이해한 내용을 보여드릴게요.
+          </Text>
+        )}
       </ScrollView>
 
       <Waveform active={recording} />
@@ -267,51 +191,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     lineHeight: 25.5,
     color: colors.neutral600,
-  },
-  line: {
-    fontFamily: font.regular,
-    fontSize: 17,
-    lineHeight: 25.5,
-    color: colors.text,
-    marginBottom: 6,
-  },
-  tagRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  aiBlock: {
-    borderLeftWidth: 2,
-    borderLeftColor: colors.accent,
-    paddingVertical: 4,
-    paddingLeft: 12,
-  },
-  aiText: {
-    fontFamily: font.regular,
-    fontSize: 14,
-    lineHeight: 21,
-    color: colors.neutral800,
-  },
-  relatedCard: {
-    backgroundColor: colors.surface,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
-  },
-  flexShrink: {
-    flexShrink: 1,
-  },
-  relatedTitle: {
-    fontFamily: font.semibold,
-    fontSize: 14,
-    color: colors.text,
-  },
-  relatedActions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
   },
   controls: {
     flexDirection: 'row',
