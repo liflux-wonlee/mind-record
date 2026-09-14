@@ -9,16 +9,26 @@ import { useRecentSessions } from '@/hooks/useRecentSessions';
 import { useTasks } from '@/hooks/useTasks';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
-import { useApp } from '@/store';
+import { listMemoriesCreatedInRange, listMemoriesPendingTopicReview, listRecentMemories } from '@/services/memories';
+import { listSessionsForDay } from '@/services/sessions';
+import { listTasks, listTasksCreatedInRange, listTasksPendingTopicReview, type Task } from '@/services/tasks';
 import { colors, font, h2 } from '@/theme';
+
+type HomeStats = {
+  inboxCount: number;
+  openLoopsCount: number;
+  todayCount: number;
+  todaySessionsCount: number;
+};
 
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const { inboxCount } = useApp();
   const tasksState = useTasks();
   const recentSessions = useRecentSessions(3);
   const [firstName, setFirstName] = useState<string | null>(null);
+  const [stats, setStats] = useState<HomeStats | null>(null);
+  const [upcomingTask, setUpcomingTask] = useState<Task | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -39,14 +49,72 @@ export default function HomeScreen() {
     }, [user])
   );
 
+  useFocusEffect(
+    useCallback(() => {
+      if (!user) return;
+      let cancelled = false;
+
+      const now = new Date();
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(now);
+      endOfDay.setHours(23, 59, 59, 999);
+      const startIso = startOfDay.toISOString();
+      const endIso = endOfDay.toISOString();
+
+      Promise.all([
+        listTasksPendingTopicReview(user.id),
+        listMemoriesPendingTopicReview(user.id),
+        listRecentMemories(user.id, 50),
+        listTasksCreatedInRange(user.id, startIso, endIso),
+        listMemoriesCreatedInRange(user.id, startIso, endIso),
+        listSessionsForDay(user.id, now),
+      ])
+        .then(([pendingTasks, pendingMemories, recentMemories, todayTasks, todayMemories, todaySessions]) => {
+          if (cancelled) return;
+          setStats({
+            inboxCount: pendingTasks.length + pendingMemories.length,
+            openLoopsCount: recentMemories.length,
+            todayCount: todayTasks.length + todayMemories.length,
+            todaySessionsCount: todaySessions.length,
+          });
+        })
+        .catch(() => {
+          // Leave the stat grid blank rather than crash the screen.
+        });
+
+      listTasks(user.id)
+        .then((tasks) => {
+          if (cancelled) return;
+          const withDueDate = tasks
+            .filter((t) => t.status === 'open' && t.due_date != null)
+            .sort((a, b) => (a.due_date as string).localeCompare(b.due_date as string));
+          setUpcomingTask(withDueDate[0] ?? null);
+        })
+        .catch(() => {
+          // Leave "Upcoming" hidden rather than crash the screen.
+        });
+
+      return () => {
+        cancelled = true;
+      };
+    }, [user])
+  );
+
   const startTalk = () => {
     router.push('/talk');
   };
 
+  const today = new Date().toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+
   return (
     <Screen>
       <View style={styles.topRow}>
-        <Kicker style={{ color: colors.neutral600 }}>Sat, Sep 12</Kicker>
+        <Kicker style={{ color: colors.neutral600 }}>{today}</Kicker>
         <Button
           variant="ghost"
           label="Driving mode"
@@ -87,7 +155,7 @@ export default function HomeScreen() {
         />
         <Stat
           label="Inbox"
-          value={String(inboxCount)}
+          value={stats ? String(stats.inboxCount) : '—'}
           sub="needs review"
           side="right"
           bottomRule
@@ -96,36 +164,45 @@ export default function HomeScreen() {
         />
         <Stat
           label="Open loops"
-          value="3"
-          sub="pricing 결정 외 2"
+          value={stats ? String(stats.openLoopsCount) : '—'}
+          sub="ideas"
           side="left"
           onPress={() => router.push('/memory')}
         />
         <Stat
           label="Today"
-          value="7"
-          sub="thoughts · 3 ideas"
+          value={stats ? String(stats.todayCount) : '—'}
+          sub={stats ? `${stats.todaySessionsCount} session${stats.todaySessionsCount === 1 ? '' : 's'}` : ''}
           side="right"
           onPress={() => router.push('/journal')}
         />
       </View>
 
-      <View style={{ marginTop: 18 }}>
-        <View style={styles.sectionHead}>
-          <Kicker style={{ color: colors.neutral600 }}>Upcoming</Kicker>
-          <Button
-            variant="ghost"
-            label="Calendar →"
-            onPress={() => router.push('/calendar')}
-            style={styles.ghostSmall}
-            textStyle={{ fontSize: 11, color: colors.accent700 }}
-          />
+      {upcomingTask ? (
+        <View style={{ marginTop: 18 }}>
+          <View style={styles.sectionHead}>
+            <Kicker style={{ color: colors.neutral600 }}>Upcoming</Kicker>
+            <Button
+              variant="ghost"
+              label="Calendar →"
+              onPress={() => router.push('/calendar')}
+              style={styles.ghostSmall}
+              textStyle={{ fontSize: 11, color: colors.accent700 }}
+            />
+          </View>
+          <View style={styles.upcoming}>
+            <Text style={styles.upcomingTitle} numberOfLines={1}>
+              {upcomingTask.title}
+            </Text>
+            <Text style={styles.upcomingWhen}>
+              {new Date(upcomingTask.due_date as string).toLocaleDateString(undefined, {
+                month: 'short',
+                day: 'numeric',
+              })}
+            </Text>
+          </View>
         </View>
-        <View style={styles.upcoming}>
-          <Text style={styles.upcomingTitle}>David 미팅 — service contract</Text>
-          <Text style={styles.upcomingWhen}>Tue 2 PM</Text>
-        </View>
-      </View>
+      ) : null}
 
       <View style={{ marginTop: 14 }}>
         <Kicker style={{ color: colors.neutral600, marginBottom: 6 }}>Continue conversation</Kicker>
@@ -142,7 +219,11 @@ export default function HomeScreen() {
           </Text>
         ) : (
           recentSessions.sessions.map((session) => (
-            <Row key={session.id} onPress={() => router.push('/topic')} style={styles.continueRow}>
+            <Row
+              key={session.id}
+              onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
+              style={styles.continueRow}
+            >
               <Text style={styles.continueTitle}>{session.title ?? session.mode}</Text>
               <Text style={styles.continueMeta}>
                 {new Date(session.started_at).toLocaleDateString(undefined, {
