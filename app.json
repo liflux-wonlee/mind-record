@@ -39,6 +39,13 @@
           "backgroundColor": "#f7f4f2",
           "imageWidth": 180
         }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Mind Record uses your microphone to record what you say.",
+          "enableBackgroundPlayback": false
+        }
       ]
     ],
     "experiments": {
