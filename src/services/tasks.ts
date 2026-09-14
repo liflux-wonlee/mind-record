@@ -37,6 +37,18 @@ export async function createTask(
   return data;
 }
 
+/** Confirms a task's AI-suggested topic (or a different one the user picked instead). */
+export async function assignTaskTopic(taskId: string, topicId: string): Promise<Task> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .update({ topic_id: topicId, topic_suggestion: null })
+    .eq('id', taskId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<Task> {
   const { data, error } = await supabase
     .from('tasks')

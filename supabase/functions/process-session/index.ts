@@ -1,39 +1,57 @@
 // Runs after a recording ends: downloads the session's audio segments,
 // transcribes them with OpenAI Whisper, then asks GPT to extract tasks,
-// ideas, a summary, and topic tags from the transcript. Writes everything
-// back to `sessions` / `tasks` / `memories` / `session_topics`.
+// ideas, a summary, and a topic for each one from the transcript. Writes
+// everything back to `sessions` / `tasks` / `memories` / `topics` /
+// `session_topics`.
 //
 // Invoked by the app via
 //   supabase.functions.invoke('process-session', { body: { sessionId } })
 // right after src/hooks/useCaptureSession.ts ends a capture session (see
 // src/services/processing.ts). The OpenAI API key never touches the mobile
-// app — it only lives here, as an Edge Function secret:
+// app -- it only lives here, as an Edge Function secret:
 //   supabase secrets set OPENAI_API_KEY=sk-...
 //
 // SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are provided
 // automatically by the Edge Functions runtime; only OPENAI_API_KEY needs to
 // be set by hand.
 
-import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
+import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// Below this, an item's topic_name is kept only as `topic_suggestion` (not
+// auto-assigned) -- the app asks the user to confirm it on Summary instead
+// of silently filing something AI wasn't sure about.
+const TOPIC_CONFIDENCE_THRESHOLD = 0.6;
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-type ExtractedTask = { title: string; priority?: 'low' | 'normal' | 'high' };
-type ExtractedMemory = { content: string; category?: string };
-type ExtractedTopic = { name: string; confidence?: number };
+type TopicRow = { id: string; name: string; parent_topic_id: string | null };
+
+type ExtractedTask = {
+  title: string;
+  priority?: 'low' | 'normal' | 'high';
+  topic_name?: string | null;
+  topic_parent_name?: string | null;
+  topic_confidence?: number;
+};
+type ExtractedMemory = {
+  content: string;
+  category?: string | null;
+  topic_name?: string | null;
+  topic_parent_name?: string | null;
+  topic_confidence?: number;
+};
 type Extraction = {
   summary: string;
   tasks: ExtractedTask[];
   memories: ExtractedMemory[];
-  topics: ExtractedTopic[];
 };
 
 Deno.serve(async (req) => {
@@ -120,50 +138,72 @@ Deno.serve(async (req) => {
       .update({ raw_transcript: transcript, processing_status: 'analyzing' })
       .eq('id', sessionId);
 
-    const { data: topics, error: topicsError } = await db
+    const { data: existingTopics, error: topicsError } = await db
       .from('topics')
-      .select('id, name')
+      .select('id, name, parent_topic_id')
       .eq('user_id', user.id);
     if (topicsError) throw topicsError;
+    const topics: TopicRow[] = existingTopics ?? [];
 
-    const extraction = await analyzeTranscript(
-      transcript,
-      (topics ?? []).map((t) => t.name)
-    );
+    const extraction = await analyzeTranscript(transcript, topics);
 
-    if (extraction.tasks.length > 0) {
-      await db.from('tasks').insert(
-        extraction.tasks.map((t) => ({
-          user_id: user.id,
-          source_session_id: sessionId,
-          title: t.title,
-          priority: t.priority ?? 'normal',
-        }))
-      );
+    // Resolve each item's topic (find-or-create) before inserting, so the
+    // insert already carries the right topic_id -- or, below the
+    // confidence threshold, no topic_id and a topic_suggestion instead.
+    const resolvedTasks = [];
+    for (const t of extraction.tasks) {
+      const resolved = await resolveTopic(db, user.id, topics, t);
+      resolvedTasks.push({
+        user_id: user.id,
+        source_session_id: sessionId,
+        title: t.title,
+        priority: t.priority ?? 'normal',
+        topic_id: resolved.topicId,
+        topic_suggestion: resolved.suggestion,
+      });
     }
 
-    if (extraction.memories.length > 0) {
-      await db.from('memories').insert(
-        extraction.memories.map((m) => ({
-          user_id: user.id,
-          source_session_id: sessionId,
-          content: m.content,
-          category: m.category ?? null,
-        }))
-      );
+    const resolvedMemories = [];
+    for (const m of extraction.memories) {
+      const resolved = await resolveTopic(db, user.id, topics, m);
+      resolvedMemories.push({
+        user_id: user.id,
+        source_session_id: sessionId,
+        content: m.content,
+        category: m.category ?? null,
+        topic_id: resolved.topicId,
+        topic_suggestion: resolved.suggestion,
+      });
     }
 
-    const topicByName = new Map((topics ?? []).map((t) => [t.name, t.id]));
-    const topicLinks = extraction.topics
-      .map((t) => {
-        const topicId = topicByName.get(t.name);
-        return topicId
-          ? { session_id: sessionId, topic_id: topicId, confidence: t.confidence ?? null }
-          : null;
-      })
-      .filter((row): row is { session_id: string; topic_id: string; confidence: number | null } => row !== null);
-    if (topicLinks.length > 0) {
-      await db.from('session_topics').insert(topicLinks);
+    if (resolvedTasks.length > 0) {
+      await db.from('tasks').insert(resolvedTasks);
+    }
+    if (resolvedMemories.length > 0) {
+      await db.from('memories').insert(resolvedMemories);
+    }
+
+    // session_topics is a rollup of every topic actually assigned above --
+    // not a separate thing the model produces, so it can never disagree
+    // with what the tasks/memories themselves say.
+    const confidenceByTopic = new Map<string, number>();
+    const allResolved = [...resolvedTasks, ...resolvedMemories];
+    const allExtracted = [...extraction.tasks, ...extraction.memories];
+    allResolved.forEach((row, i) => {
+      if (!row.topic_id) return;
+      const confidence = allExtracted[i]?.topic_confidence ?? null;
+      const prev = confidenceByTopic.get(row.topic_id) ?? 0;
+      if (confidence !== null && confidence > prev) confidenceByTopic.set(row.topic_id, confidence);
+    });
+    if (confidenceByTopic.size > 0) {
+      await db.from('session_topics').upsert(
+        Array.from(confidenceByTopic.entries()).map(([topic_id, confidence]) => ({
+          session_id: sessionId,
+          topic_id,
+          confidence,
+        })),
+        { onConflict: 'session_id,topic_id' }
+      );
     }
 
     await db
@@ -178,8 +218,8 @@ Deno.serve(async (req) => {
     return json({
       status: 'done',
       summary: extraction.summary,
-      taskCount: extraction.tasks.length,
-      memoryCount: extraction.memories.length,
+      taskCount: resolvedTasks.length,
+      memoryCount: resolvedMemories.length,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : 'Unknown error while processing this session.';
@@ -190,6 +230,61 @@ Deno.serve(async (req) => {
     return json({ error: message }, 500);
   }
 });
+
+/**
+ * Finds or creates the topic (and, if named, its parent) an extracted item
+ * should be filed under. Topics are nested at most one level deep -- a
+ * `topic_parent_name` is only ever looked up/created as a TOP-LEVEL topic,
+ * matching the "major category -> sub-topic" model this app uses.
+ *
+ * `topics` is mutated in place with anything newly created, so later items
+ * in the same request reuse it instead of creating duplicates.
+ */
+async function resolveTopic(
+  db: SupabaseClient,
+  userId: string,
+  topics: TopicRow[],
+  item: { topic_name?: string | null; topic_parent_name?: string | null; topic_confidence?: number }
+): Promise<{ topicId: string | null; suggestion: string | null }> {
+  const name = item.topic_name?.trim();
+  if (!name || (item.topic_confidence ?? 0) < TOPIC_CONFIDENCE_THRESHOLD) {
+    return { topicId: null, suggestion: name ?? null };
+  }
+
+  let parentId: string | null = null;
+  const parentName = item.topic_parent_name?.trim();
+  if (parentName) {
+    let parent = topics.find(
+      (t) => t.parent_topic_id === null && t.name.toLowerCase() === parentName.toLowerCase()
+    );
+    if (!parent) {
+      const { data, error } = await db
+        .from('topics')
+        .insert({ user_id: userId, name: parentName })
+        .select('id, name, parent_topic_id')
+        .single();
+      if (error) throw error;
+      parent = data;
+      topics.push(parent);
+    }
+    parentId = parent.id;
+  }
+
+  let topic = topics.find(
+    (t) => t.parent_topic_id === parentId && t.name.toLowerCase() === name.toLowerCase()
+  );
+  if (!topic) {
+    const { data, error } = await db
+      .from('topics')
+      .insert({ user_id: userId, name, parent_topic_id: parentId })
+      .select('id, name, parent_topic_id')
+      .single();
+    if (error) throw error;
+    topic = data;
+    topics.push(topic);
+  }
+  return { topicId: topic.id, suggestion: null };
+}
 
 async function transcribeAudio(file: Blob, fileName: string): Promise<string> {
   const form = new FormData();
@@ -208,20 +303,53 @@ async function transcribeAudio(file: Blob, fileName: string): Promise<string> {
   return data.text ?? '';
 }
 
-async function analyzeTranscript(transcript: string, topicNames: string[]): Promise<Extraction> {
+function formatTopicTree(topics: TopicRow[]): string {
+  if (topics.length === 0) return '(none yet)';
+  const roots = topics.filter((t) => !t.parent_topic_id);
+  const lines: string[] = [];
+  for (const root of roots) {
+    lines.push(`- ${root.name}`);
+    for (const child of topics.filter((t) => t.parent_topic_id === root.id)) {
+      lines.push(`  - ${child.name}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+async function analyzeTranscript(transcript: string, topics: TopicRow[]): Promise<Extraction> {
   if (!transcript.trim()) {
-    return { summary: 'No speech was detected in this recording.', tasks: [], memories: [], topics: [] };
+    return { summary: 'No speech was detected in this recording.', tasks: [], memories: [] };
   }
 
-  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. Respond with strict JSON matching this shape:
+  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it.
+
+The speaker may explicitly say things like "이건 [이름] 토픽에 넣어줘" or "put this under the X folder" -- treat "topic", "폴더" (folder), and "카테고리" (category) as the same concept, and treat an explicit instruction like that as a highly confident assignment (topic_confidence near 1.0), not a guess.
+
+Topics are nested at most one level deep: a major category (e.g. "Business") can have sub-topics under it (e.g. "Business" -> "Liflux"). The user's current topics:
+${formatTopicTree(topics)}
+
+Respond with strict JSON matching this shape:
 {
   "summary": string (1-2 sentences),
-  "tasks": [{ "title": string, "priority": "low" | "normal" | "high" }],
-  "memories": [{ "content": string, "category": string }] (ideas, decisions, or things worth remembering that are not actionable tasks),
-  "topics": [{ "name": string, "confidence": number between 0 and 1 }]
+  "tasks": [{
+    "title": string,
+    "priority": "low" | "normal" | "high",
+    "topic_name": string or null,
+    "topic_parent_name": string or null (only if topic_name is/should be a sub-topic; must name a TOP-LEVEL topic),
+    "topic_confidence": number between 0 and 1
+  }],
+  "memories": [{
+    "content": string,
+    "category": string or null,
+    "topic_name": string or null,
+    "topic_parent_name": string or null,
+    "topic_confidence": number between 0 and 1
+  }]
 }
-Only use topic names from this exact list (choose "Other" if nothing fits): ${topicNames.join(', ')}.
-The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary" in the same language as the transcript. If nothing qualifies for a field, return an empty array for it. Never invent tasks or ideas that aren't actually in the transcript.`;
+
+If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic something belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough.
+
+The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary"/"topic_name" in the same language as the transcript. Never invent tasks or ideas that aren't actually in the transcript.`;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -250,7 +378,6 @@ The transcript may be in Korean, English, or a mix -- write "title"/"content"/"s
     summary: typeof parsed.summary === 'string' ? parsed.summary : '',
     tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
     memories: Array.isArray(parsed.memories) ? parsed.memories : [],
-    topics: Array.isArray(parsed.topics) ? parsed.topics : [],
   };
 }
 

@@ -12,3 +12,15 @@ export async function listMemoriesBySession(sessionId: string): Promise<Memory[]
   if (error) throw error;
   return data;
 }
+
+/** Confirms a memory's AI-suggested topic (or a different one the user picked instead). */
+export async function assignMemoryTopic(memoryId: string, topicId: string): Promise<Memory> {
+  const { data, error } = await supabase
+    .from('memories')
+    .update({ topic_id: topicId, topic_suggestion: null })
+    .eq('id', memoryId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
