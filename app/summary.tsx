@@ -219,8 +219,17 @@ export default function SummaryScreen() {
             );
           })
         : !processing && !loadError && session?.processing_status === 'done' && (
-            <Text style={styles.footnote}>No tasks or ideas found in this recording.</Text>
+            <Text style={styles.footnote}>
+              Nothing to file as a task or idea — the full recording is still saved below.
+            </Text>
           )}
+
+      {!processing && !loadError && session?.raw_transcript ? (
+        <View style={styles.transcriptBlock}>
+          <Kicker style={{ color: colors.neutral600, marginBottom: 6 }}>Transcript</Kicker>
+          <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
+        </View>
+      ) : null}
 
       <View style={styles.actions}>
         <Button
@@ -323,6 +332,18 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: colors.neutral600,
     paddingVertical: 12,
+  },
+  transcriptBlock: {
+    marginTop: 18,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    paddingTop: 12,
+  },
+  transcriptText: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.neutral700,
   },
   actions: {
     flexDirection: 'row',

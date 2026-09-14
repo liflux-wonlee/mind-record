@@ -338,7 +338,9 @@ async function analyzeTranscript(transcript: string, topics: TopicRow[]): Promis
     return { summary: 'No speech was detected in this recording.', tasks: [], memories: [] };
   }
 
-  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it.
+  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.
+
+"summary" is a plain recap of what the speaker actually talked about (topics, events, feelings, plans -- whatever the content was), written the way a diary entry's first line would read. It must describe the CONTENT, never the speech itself -- do not comment on repetition, filler, hesitation, pacing, tone, or recording quality, and never describe the speaker's behavior or mental state as an outside observer (e.g. never write things like "the speaker seems rushed" or "is repeating themselves"). If the recording is short, mundane, or has barely anything in it, summarize whatever little there is in plain terms (e.g. "Brief note testing the recording, no real content.") rather than inventing an interpretation of why it's short.
 
 The speaker may explicitly say things like "이건 [이름] 토픽에 넣어줘" or "put this under the X folder" -- treat "topic", "폴더" (folder), and "카테고리" (category) as the same concept, and treat an explicit instruction like that as a highly confident assignment (topic_confidence near 1.0), not a guess.
 
@@ -347,7 +349,7 @@ ${formatTopicTree(topics)}
 
 Respond with strict JSON matching this shape:
 {
-  "summary": string (1-2 sentences),
+  "summary": string (1-2 sentences, content recap as described above),
   "tasks": [{
     "title": string,
     "priority": "low" | "normal" | "high",
