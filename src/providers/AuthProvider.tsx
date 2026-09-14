@@ -5,8 +5,11 @@
  * (sign in/up/out); this provider only *observes* Supabase's session.
  */
 import type { Session, User } from '@supabase/supabase-js';
+import * as Linking from 'expo-linking';
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { Alert } from 'react-native';
 
+import { processAuthDeepLink } from '@/lib/authLinking';
 import { supabase } from '@/lib/supabase';
 
 type AuthState = {
@@ -42,6 +45,26 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       cancelled = true;
       subscription.unsubscribe();
     };
+  }, []);
+
+  // Email confirmation / magic link / password recovery links open the app
+  // via a deep link rather than an in-app browser session (see
+  // src/lib/authLinking.ts for why this needs its own listener).
+  useEffect(() => {
+    const handleUrl = (url: string) => {
+      processAuthDeepLink(url).then((result) => {
+        if (result.status === 'error') {
+          Alert.alert('Sign-in link problem', result.message);
+        }
+      });
+    };
+
+    Linking.getInitialURL().then((url) => {
+      if (url) handleUrl(url);
+    });
+
+    const subscription = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => subscription.remove();
   }, []);
 
   const value = useMemo<AuthState>(

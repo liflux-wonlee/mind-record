@@ -4,6 +4,7 @@
  * session/user state these actions end up feeding.
  */
 import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
 
 import { signInWithOAuth } from '@/lib/oauth';
@@ -14,8 +15,25 @@ export type EmailAuthResult =
   /** Supabase's "Confirm email" setting is on — no session yet until the user clicks the link. */
   | { status: 'check-email' };
 
-export async function signUpWithEmail(email: string, password: string): Promise<EmailAuthResult> {
-  const { data, error } = await supabase.auth.signUp({ email, password });
+/**
+ * `emailRedirectTo` makes the confirmation link land back on Home via a
+ * deep link the app actually listens for (see `src/lib/authLinking.ts`),
+ * instead of falling back to Supabase's dashboard-configured Site URL.
+ */
+export async function signUpWithEmail(
+  email: string,
+  password: string,
+  displayName?: string
+): Promise<EmailAuthResult> {
+  const trimmedName = displayName?.trim();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: Linking.createURL('/'),
+      data: trimmedName ? { display_name: trimmedName } : undefined,
+    },
+  });
   if (error) throw error;
   return data.session ? { status: 'signed-in' } : { status: 'check-email' };
 }
