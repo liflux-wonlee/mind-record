@@ -21,6 +21,12 @@ export async function listRecentSessions(userId: string, limit = 5): Promise<Ses
   return data;
 }
 
+export async function getSession(sessionId: string): Promise<Session | null> {
+  const { data, error } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function createSession(userId: string, mode: SessionMode): Promise<Session> {
   const { data, error } = await supabase
     .from('sessions')

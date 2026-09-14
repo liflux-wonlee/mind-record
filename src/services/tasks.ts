@@ -14,6 +14,16 @@ export async function listTasks(userId: string): Promise<Task[]> {
   return data;
 }
 
+export async function listTasksBySession(sessionId: string): Promise<Task[]> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('source_session_id', sessionId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data;
+}
+
 export async function createTask(
   userId: string,
   input: { title: string; dueDate?: string | null }
