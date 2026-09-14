@@ -5,8 +5,8 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
 import { Button, CardKicker, Kicker, Tag } from '@/components/ui';
+import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { dismissToTabs } from '@/nav';
-import { useApp } from '@/store';
 import { colors, font } from '@/theme';
 
 /** The three transcript lines the prototype reveals, one every three seconds. */
@@ -40,13 +40,22 @@ export default function TalkScreen() {
     related,
     setRelated,
     toggleRecording,
+    endCapture,
     lines,
     timer,
-  } = useApp();
+  } = useCaptureSession();
 
-  const onToggleRecording = () => {
-    const stopped = toggleRecording();
-    if (stopped) router.replace('/summary');
+  const onToggleRecording = async () => {
+    const stopped = await toggleRecording();
+    if (stopped) {
+      await endCapture();
+      router.replace('/summary');
+    }
+  };
+
+  const onEnd = async () => {
+    await endCapture();
+    dismissToTabs();
   };
 
   const aiText = saveOnly
@@ -168,7 +177,7 @@ export default function TalkScreen() {
         <Button
           variant="secondary"
           label="End"
-          onPress={dismissToTabs}
+          onPress={onEnd}
           style={styles.endButton}
         />
       </View>

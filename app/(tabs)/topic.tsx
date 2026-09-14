@@ -5,7 +5,6 @@ import { StyleSheet, Text, View } from 'react-native';
 import { ChevronLeftIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Row, RuleThick, Tag } from '@/components/ui';
-import { useApp } from '@/store';
 import { colors, font, h2 } from '@/theme';
 
 /** Timeline structure from variation 1k: pinned summary, tag counts, dated entries. */
@@ -55,7 +54,6 @@ const ENTRIES: {
 
 export default function TopicScreen() {
   const router = useRouter();
-  const { startSession } = useApp();
 
   return (
     <Screen>
@@ -103,10 +101,7 @@ export default function TopicScreen() {
       <Button
         label="Continue this conversation"
         align="flex-start"
-        onPress={() => {
-          startSession();
-          router.push('/talk');
-        }}
+        onPress={() => router.push('/talk')}
         style={styles.continue}
       />
     </Screen>

@@ -5,7 +5,6 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick, Tag } from '@/components/ui';
-import { useApp } from '@/store';
 import { colors, font, h2 } from '@/theme';
 
 const SOURCES: { title: string; meta: string; to: '/thread' | '/topic' | '/memory' }[] = [
@@ -16,7 +15,6 @@ const SOURCES: { title: string; meta: string; to: '/thread' | '/topic' | '/memor
 
 export default function SearchScreen() {
   const router = useRouter();
-  const { startSession } = useApp();
   const [query, setQuery] = useState('');
 
   return (
@@ -68,10 +66,7 @@ export default function SearchScreen() {
         />
         <Button
           accessibilityLabel="voice"
-          onPress={() => {
-            startSession();
-            router.push('/talk');
-          }}
+          onPress={() => router.push('/talk')}
           icon={<MicIcon size={22} color={colors.bg} />}
           style={styles.voiceButton}
         />

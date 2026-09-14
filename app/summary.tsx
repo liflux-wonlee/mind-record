@@ -5,7 +5,6 @@ import { StyleSheet, Text, View } from 'react-native';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
 import { dismissToTabs } from '@/nav';
-import { useApp } from '@/store';
 import { GUTTER, colors, font, h2 } from '@/theme';
 
 const ENTRIES = [
@@ -29,7 +28,6 @@ const ENTRIES = [
 
 export default function SummaryScreen() {
   const router = useRouter();
-  const { startSession } = useApp();
 
   return (
     <Screen scroll={false} safeBottom>
@@ -82,10 +80,7 @@ export default function SummaryScreen() {
         <Button
           variant="secondary"
           label="Keep talking"
-          onPress={() => {
-            startSession();
-            router.replace('/talk');
-          }}
+          onPress={() => router.replace('/talk')}
           style={{ minHeight: 52 }}
         />
       </View>

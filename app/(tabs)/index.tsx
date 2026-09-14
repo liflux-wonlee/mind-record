@@ -15,7 +15,7 @@ import { colors, font, h2 } from '@/theme';
 export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const { inboxCount, startSession } = useApp();
+  const { inboxCount } = useApp();
   const tasksState = useTasks();
   const recentSessions = useRecentSessions(3);
   const [firstName, setFirstName] = useState<string | null>(null);
@@ -40,7 +40,6 @@ export default function HomeScreen() {
   );
 
   const startTalk = () => {
-    startSession();
     router.push('/talk');
   };
 

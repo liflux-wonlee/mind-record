@@ -6,13 +6,14 @@ import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
 import { Button, Kicker } from '@/components/ui';
+import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { dismissToTabs } from '@/nav';
-import { useApp } from '@/store';
 import { colors, font } from '@/theme';
 
 export default function DrivingScreen() {
   const router = useRouter();
-  const { recording, saveOnly, toggleSaveOnly, toggleRecording, stopRecording } = useApp();
+  const { recording, saveOnly, toggleSaveOnly, toggleRecording, endCapture } =
+    useCaptureSession('driving');
 
   return (
     <Screen scroll={false} dark safeBottom bottomPadding={28}>
@@ -21,8 +22,8 @@ export default function DrivingScreen() {
         <Button
           variant="ghost"
           label="Exit"
-          onPress={() => {
-            stopRecording();
+          onPress={async () => {
+            await endCapture();
             dismissToTabs();
           }}
           style={{ minHeight: 44, justifyContent: 'center' }}
@@ -45,7 +46,9 @@ export default function DrivingScreen() {
 
       <Pressable
         accessibilityRole="button"
-        onPress={() => toggleRecording()}
+        onPress={() => {
+          toggleRecording();
+        }}
         style={({ pressed }) => [
           styles.micButton,
           { backgroundColor: recording ? colors.neutral900 : pressed ? colors.accent600 : colors.accent },
@@ -65,8 +68,8 @@ export default function DrivingScreen() {
         </Pressable>
         <Pressable
           accessibilityRole="button"
-          onPress={() => {
-            stopRecording();
+          onPress={async () => {
+            await endCapture();
             router.replace('/summary');
           }}
           style={styles.action}
