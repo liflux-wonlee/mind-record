@@ -48,8 +48,8 @@ export default function TalkScreen() {
   const onToggleRecording = async () => {
     const stopped = await toggleRecording();
     if (stopped) {
-      await endCapture();
-      router.replace('/summary');
+      const sessionId = await endCapture();
+      router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
     }
   };
 

@@ -24,6 +24,7 @@ import { useCallback, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import { useAuth } from '@/providers/AuthProvider';
+import { processSession } from '@/services/processing';
 import { uploadRecording } from '@/services/recordings';
 import { createSession, endSession } from '@/services/sessions';
 import type { SessionMode } from '@/types/database';
@@ -101,11 +102,14 @@ export function useCaptureSession(fixedSessionMode?: Extract<SessionMode, 'drivi
     return false;
   }, [recorder, ensureSession, uploadCurrentSegment]);
 
-  /** Stops recording if active, uploads any final segment, and marks the
-   *  session ended. Call this at every point the capture flow is left
+  /** Stops recording if active, uploads any final segment, marks the
+   *  session ended, and kicks off transcription/AI analysis in the
+   *  background. Call this at every point the capture flow is left
    *  (End/Exit buttons, or after toggleRecording reports a stop that leads
-   *  straight to Summary) — never leave the recorder running unattended. */
-  const endCapture = useCallback(async () => {
+   *  straight to Summary) — never leave the recorder running unattended.
+   *  Returns the session id that was ended (or null if nothing was ever
+   *  recorded), so the caller can pass it to Summary. */
+  const endCapture = useCallback(async (): Promise<string | null> => {
     if (recorder.isRecording) {
       await recorder.stop();
       await uploadCurrentSegment();
@@ -118,7 +122,17 @@ export function useCaptureSession(fixedSessionMode?: Extract<SessionMode, 'drivi
       } catch (e) {
         Alert.alert('Could not finish saving', e instanceof Error ? e.message : 'Please try again.');
       }
+      // Not awaited: transcription + AI analysis can take a while, and
+      // Summary polls sessions.processing_status itself rather than
+      // blocking the screen transition on this call.
+      processSession(sessionId).catch((e) => {
+        Alert.alert(
+          'Could not process this recording',
+          e instanceof Error ? e.message : 'Please try again.'
+        );
+      });
     }
+    return sessionId;
   }, [recorder, uploadCurrentSegment]);
 
   return {
