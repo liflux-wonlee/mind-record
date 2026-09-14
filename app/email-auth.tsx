@@ -8,7 +8,7 @@ import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { ChevronLeftIcon } from '@/components/Icon';
+import { ChevronLeftIcon, EyeIcon, EyeOffIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button } from '@/components/ui';
 import { signInWithEmail, signUpWithEmail } from '@/services/auth';
@@ -21,6 +21,7 @@ export default function EmailAuthScreen() {
   const [mode, setMode] = useState<Mode>('sign-in');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [checkEmail, setCheckEmail] = useState(false);
@@ -124,15 +125,30 @@ export default function EmailAuthScreen() {
 
         <View style={styles.field}>
           <Text style={styles.label}>Password</Text>
-          <TextInput
-            style={styles.input}
-            value={password}
-            onChangeText={setPassword}
-            placeholder={mode === 'sign-up' ? 'At least 6 characters' : 'Password'}
-            placeholderTextColor={colors.neutral600}
-            secureTextEntry
-            textContentType={mode === 'sign-up' ? 'newPassword' : 'password'}
-          />
+          <View style={styles.passwordRow}>
+            <TextInput
+              style={[styles.input, styles.passwordInput]}
+              value={password}
+              onChangeText={setPassword}
+              placeholder={mode === 'sign-up' ? 'At least 6 characters' : 'Password'}
+              placeholderTextColor={colors.neutral600}
+              secureTextEntry={!showPassword}
+              textContentType={mode === 'sign-up' ? 'newPassword' : 'password'}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+              onPress={() => setShowPassword((s) => !s)}
+              style={styles.eyeButton}
+              hitSlop={8}
+            >
+              {showPassword ? (
+                <EyeOffIcon size={20} color={colors.neutral600} />
+              ) : (
+                <EyeIcon size={20} color={colors.neutral600} />
+              )}
+            </Pressable>
+          </View>
         </View>
 
         {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -229,6 +245,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.divider,
+  },
+  passwordRow: {
+    justifyContent: 'center',
+  },
+  passwordInput: {
+    paddingRight: 44,
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: 0,
+    top: 0,
+    bottom: 0,
+    width: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   error: {
     fontFamily: font.regular,
