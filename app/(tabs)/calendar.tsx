@@ -1,12 +1,12 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ChevronLeftIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
-import { listSessionsInMonth, type Session } from '@/services/sessions';
+import { deleteSession, listSessionsInMonth, type Session } from '@/services/sessions';
 import { useApp } from '@/store';
 import { colors, font, h2 } from '@/theme';
 
@@ -44,40 +44,50 @@ export default function CalendarScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
+  const loadMonth = useCallback(() => {
+    if (!user) return;
+    setLoading(true);
+    setError(false);
+    listSessionsInMonth(user.id, year, month)
+      .then((sessions) => {
+        const map = new Map<number, Session[]>();
+        for (const s of sessions) {
+          const day = new Date(s.started_at).getDate();
+          const list = map.get(day) ?? [];
+          list.push(s);
+          map.set(day, list);
+        }
+        setSessionsByDay(map);
+      })
+      .catch(() => setError(true))
+      .finally(() => setLoading(false));
+  }, [user, year, month]);
+
   useFocusEffect(
     useCallback(() => {
-      if (!user) return;
-      let cancelled = false;
-      setLoading(true);
-      setError(false);
-
-      listSessionsInMonth(user.id, year, month)
-        .then((sessions) => {
-          if (cancelled) return;
-          const map = new Map<number, Session[]>();
-          for (const s of sessions) {
-            const day = new Date(s.started_at).getDate();
-            const list = map.get(day) ?? [];
-            list.push(s);
-            map.set(day, list);
-          }
-          setSessionsByDay(map);
-        })
-        .catch(() => {
-          if (cancelled) return;
-          setError(true);
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-
-      return () => {
-        cancelled = true;
-      };
-    }, [user, year, month])
+      loadMonth();
+    }, [loadMonth])
   );
 
   const dayConversations = sessionsByDay.get(selectedDay) ?? [];
+
+  const confirmDeleteSession = (session: Session) => {
+    Alert.alert(
+      'Delete this recording?',
+      `${session.title ?? session.mode} will be permanently deleted, including its audio. Tasks or ideas it already created are kept.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () =>
+            deleteSession(session.id)
+              .then(loadMonth)
+              .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+        },
+      ]
+    );
+  };
 
   return (
     <Screen>
@@ -168,6 +178,7 @@ export default function CalendarScreen() {
             <Row
               key={session.id}
               onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
+              onLongPress={() => confirmDeleteSession(session)}
               style={styles.convo}
             >
               <Text style={styles.convoTime}>

@@ -138,13 +138,13 @@ export default function MemoryScreen() {
       ) : (
         roots.map((topic) => (
           <View key={topic.id}>
-            <Row onPress={() => setSheet({ kind: 'menu', topic })} style={styles.topicRow}>
+            <Row onLongPress={() => setSheet({ kind: 'menu', topic })} style={styles.topicRow}>
               <Text style={styles.topicName}>{topic.name}</Text>
             </Row>
             {childrenOf(topic.id).map((child) => (
               <Row
                 key={child.id}
-                onPress={() => setSheet({ kind: 'menu', topic: child })}
+                onLongPress={() => setSheet({ kind: 'menu', topic: child })}
                 style={[styles.topicRow, styles.childRow]}
               >
                 <Text style={styles.childName}>{child.name}</Text>

@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
@@ -10,7 +10,7 @@ import { useTasks } from '@/hooks/useTasks';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
 import { listMemoriesCreatedInRange, listMemoriesPendingTopicReview, listRecentMemories } from '@/services/memories';
-import { listSessionsForDay } from '@/services/sessions';
+import { deleteSession, listSessionsForDay, type Session } from '@/services/sessions';
 import { listTasks, listTasksCreatedInRange, listTasksPendingTopicReview, type Task } from '@/services/tasks';
 import { colors, font, h2 } from '@/theme';
 
@@ -103,6 +103,24 @@ export default function HomeScreen() {
 
   const startTalk = () => {
     router.push('/talk');
+  };
+
+  const confirmDeleteSession = (session: Session) => {
+    Alert.alert(
+      'Delete this recording?',
+      `${session.title ?? session.mode} will be permanently deleted, including its audio. Tasks or ideas it already created are kept.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () =>
+            deleteSession(session.id)
+              .then(() => recentSessions.refresh())
+              .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+        },
+      ]
+    );
   };
 
   const today = new Date().toLocaleDateString(undefined, {
@@ -222,6 +240,7 @@ export default function HomeScreen() {
             <Row
               key={session.id}
               onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
+              onLongPress={() => confirmDeleteSession(session)}
               style={styles.continueRow}
             >
               <Text style={styles.continueTitle}>{session.title ?? session.mode}</Text>
