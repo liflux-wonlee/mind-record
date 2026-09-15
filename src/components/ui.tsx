@@ -178,17 +178,23 @@ export function RuleThin({ style }: { style?: StyleProp<ViewStyle> }) {
 export function Row({
   children,
   onPress,
+  onLongPress,
   style,
 }: {
   children: React.ReactNode;
   onPress?: () => void;
+  onLongPress?: () => void;
   style?: StyleProp<ViewStyle>;
 }) {
   return (
     <Pressable
-      accessibilityRole={onPress ? 'button' : undefined}
+      accessibilityRole={onPress || onLongPress ? 'button' : undefined}
       onPress={onPress}
-      style={({ pressed }) => [style, pressed && onPress ? { backgroundColor: colors.neutral200 } : null]}
+      onLongPress={onLongPress}
+      style={({ pressed }) => [
+        style,
+        pressed && (onPress || onLongPress) ? { backgroundColor: colors.neutral200 } : null,
+      ]}
     >
       {children}
     </Pressable>

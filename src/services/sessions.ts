@@ -76,3 +76,30 @@ export async function endSession(sessionId: string): Promise<void> {
     .eq('id', sessionId);
   if (error) throw error;
 }
+
+/**
+ * Deletes a session -- for a failed/errored recording, or one stopped too
+ * fast to matter. Removes the actual audio files from Storage first (the
+ * `attachments` rows cascade-delete with the session automatically, but
+ * that never deletes the underlying Storage object, which would otherwise
+ * leak orphaned files). tasks/memories that came from this session are
+ * kept, just with source_session_id cleared (`on delete set null`) --
+ * deleting a recording shouldn't delete the task it produced.
+ */
+export async function deleteSession(sessionId: string): Promise<void> {
+  const { data: attachments, error: attachmentsError } = await supabase
+    .from('attachments')
+    .select('storage_path')
+    .eq('session_id', sessionId);
+  if (attachmentsError) throw attachmentsError;
+
+  if (attachments && attachments.length > 0) {
+    const { error: removeError } = await supabase.storage
+      .from('recordings')
+      .remove(attachments.map((a) => a.storage_path));
+    if (removeError) throw removeError;
+  }
+
+  const { error } = await supabase.from('sessions').delete().eq('id', sessionId);
+  if (error) throw error;
+}
