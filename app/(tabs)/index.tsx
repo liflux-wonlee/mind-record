@@ -102,7 +102,7 @@ export default function HomeScreen() {
   );
 
   const startTalk = () => {
-    router.push('/talk');
+    router.push({ pathname: '/talk', params: { autoStart: '1' } });
   };
 
   const confirmDeleteSession = (session: Session) => {

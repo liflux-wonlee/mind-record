@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import React from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useRef } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
@@ -11,6 +11,7 @@ import { colors, font } from '@/theme';
 
 export default function TalkScreen() {
   const router = useRouter();
+  const { autoStart } = useLocalSearchParams<{ autoStart?: string }>();
   const {
     mode,
     setMode,
@@ -22,6 +23,13 @@ export default function TalkScreen() {
     endCapture,
     timer,
   } = useCaptureSession();
+
+  const didAutoStart = useRef(false);
+  useEffect(() => {
+    if (didAutoStart.current || autoStart !== '1' || everRecorded) return;
+    didAutoStart.current = true;
+    toggleRecording();
+  }, [autoStart, everRecorded, toggleRecording]);
 
   const onToggleRecording = async () => {
     const stopped = await toggleRecording();
