@@ -12,7 +12,7 @@ import { getProfile } from '@/services/profiles';
 import { listMemoriesCreatedInRange, listMemoriesPendingTopicReview, listRecentMemories } from '@/services/memories';
 import { deleteSession, listSessionsForDay, type Session } from '@/services/sessions';
 import { listTasks, listTasksCreatedInRange, listTasksPendingTopicReview, type Task } from '@/services/tasks';
-import { colors, font, h2 } from '@/theme';
+import { colors, font, h2, radius } from '@/theme';
 
 type HomeStats = {
   inboxCount: number;
@@ -170,38 +170,39 @@ export default function HomeScreen() {
       </View>
 
       <RuleThick style={{ marginTop: 20 }} />
-      <View style={styles.grid}>
-        <Stat
-          label="Tasks"
-          value={String(tasksState.openCount)}
-          sub="open"
-          side="left"
-          bottomRule
-          onPress={() => router.push('/tasks')}
-        />
-        <Stat
-          label="Inbox"
-          value={stats ? String(stats.inboxCount) : '—'}
-          sub="needs review"
-          side="right"
-          bottomRule
-          accent
-          onPress={() => router.push('/inbox')}
-        />
-        <Stat
-          label="Open loops"
-          value={stats ? String(stats.openLoopsCount) : '—'}
-          sub="ideas"
-          side="left"
-          onPress={() => router.push('/memory')}
-        />
-        <Stat
-          label="Today"
-          value={stats ? String(stats.todayCount) : '—'}
-          sub={stats ? `${stats.todaySessionsCount} session${stats.todaySessionsCount === 1 ? '' : 's'}` : ''}
-          side="right"
-          onPress={() => router.push('/journal')}
-        />
+      <View style={styles.statsGrid}>
+        <View style={styles.statsRow}>
+          <StatCard
+            label="Tasks"
+            value={String(tasksState.openCount)}
+            sub="open"
+            background={colors.pastelBlue}
+            onPress={() => router.push('/tasks')}
+          />
+          <StatCard
+            label="Inbox"
+            value={stats ? String(stats.inboxCount) : '—'}
+            sub="needs review"
+            background={colors.pastelPink}
+            onPress={() => router.push('/inbox')}
+          />
+        </View>
+        <View style={styles.statsRow}>
+          <StatCard
+            label="Open loops"
+            value={stats ? String(stats.openLoopsCount) : '—'}
+            sub="ideas"
+            background={colors.pastelLavender}
+            onPress={() => router.push('/memory')}
+          />
+          <StatCard
+            label="Today"
+            value={stats ? String(stats.todayCount) : '—'}
+            sub={stats ? `${stats.todaySessionsCount} session${stats.todaySessionsCount === 1 ? '' : 's'}` : ''}
+            background={colors.pastelYellow}
+            onPress={() => router.push('/journal')}
+          />
+        </View>
       </View>
 
       {upcomingTask ? (
@@ -268,34 +269,23 @@ export default function HomeScreen() {
   );
 }
 
-function Stat({
+function StatCard({
   label,
   value,
   sub,
-  side,
-  bottomRule,
-  accent,
+  background,
   onPress,
 }: {
   label: string;
   value: string;
   sub: string;
-  side: 'left' | 'right';
-  bottomRule?: boolean;
-  accent?: boolean;
+  background: string;
   onPress: () => void;
 }) {
   return (
-    <Row
-      onPress={onPress}
-      style={[
-        styles.stat,
-        side === 'left' ? styles.statLeft : styles.statRight,
-        bottomRule && styles.statBottom,
-      ]}
-    >
-      <Kicker style={{ color: colors.neutral600, marginBottom: 2 }}>{label}</Kicker>
-      <Text style={[styles.statValue, accent && { color: colors.accent }]}>{value}</Text>
+    <Row onPress={onPress} style={[styles.statCard, { backgroundColor: background }]}>
+      <Kicker style={{ color: colors.neutral700, marginBottom: 2 }}>{label}</Kicker>
+      <Text style={styles.statValue}>{value}</Text>
       <Text style={styles.statSub}>{sub}</Text>
     </Row>
   );
@@ -335,30 +325,25 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     color: colors.neutral600,
   },
-  grid: {
+  statsGrid: {
+    marginTop: 14,
+    gap: 8,
+  },
+  statsRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    gap: 8,
   },
-  stat: {
-    width: '50%',
-    paddingVertical: 12,
-  },
-  statLeft: {
-    paddingRight: 12,
-    borderRightWidth: 1,
-    borderRightColor: colors.divider,
-  },
-  statRight: {
-    paddingLeft: 12,
-  },
-  statBottom: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+  statCard: {
+    flex: 1,
+    borderRadius: radius.pastel,
+    padding: 14,
+    minHeight: 84,
+    justifyContent: 'center',
   },
   statValue: {
     fontFamily: font.extrabold,
-    fontSize: 30,
-    lineHeight: 30,
+    fontSize: 26,
+    lineHeight: 28,
     color: colors.text,
   },
   statSub: {

@@ -21,7 +21,7 @@ import { Alert } from 'react-native';
 import { useAuth } from '@/providers/AuthProvider';
 import { processSession } from '@/services/processing';
 import { uploadRecording } from '@/services/recordings';
-import { createSession, endSession } from '@/services/sessions';
+import { createSession, deleteSession, endSession } from '@/services/sessions';
 
 export function useCaptureSession() {
   const { user } = useAuth();
@@ -119,6 +119,26 @@ export function useCaptureSession() {
     return sessionId;
   }, [recorder, uploadCurrentSegment]);
 
+  /** Stops recording if active and discards the whole session -- no
+   *  transcription, no summary, the audio is deleted. This is Cancel, not
+   *  a quiet version of finishing; use endCapture to actually keep what
+   *  was recorded. */
+  const cancelCapture = useCallback(async (): Promise<void> => {
+    if (recorder.isRecording) {
+      await recorder.stop();
+    }
+    const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
+    setEverRecorded(false);
+    if (sessionId) {
+      try {
+        await deleteSession(sessionId);
+      } catch {
+        // Best-effort -- the user is already leaving the screen either way.
+      }
+    }
+  }, [recorder]);
+
   return {
     recording,
     everRecorded,
@@ -126,6 +146,7 @@ export function useCaptureSession() {
     toggleSaveOnly: () => setSaveOnly((s) => !s),
     toggleRecording,
     endCapture,
+    cancelCapture,
     timer,
   };
 }

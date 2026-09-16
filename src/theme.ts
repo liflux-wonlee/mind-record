@@ -35,12 +35,13 @@ export const colors = {
   /** color-mix(in srgb, #201e1d 40%, transparent) */
   divider: 'rgba(32,30,29,0.4)',
 
-  // — pastel blocks used by Login and Account —
+  // — pastel blocks used by Login, Account, Home and the bottom nav —
   pastelPink: '#fbd9d4',
   pastelYellow: '#fde9b8',
   pastelGreen: '#cfe6d2',
   pastelBlue: '#cfe0f5',
   pastelLavender: '#e1d8f5',
+  pastelPeach: '#fde3cf',
 } as const;
 
 export const font = {

@@ -40,7 +40,7 @@ import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn } from '@/services/conversation';
 import { processSession } from '@/services/processing';
 import { uploadRecording } from '@/services/recordings';
-import { createSession, endSession } from '@/services/sessions';
+import { createSession, deleteSession, endSession } from '@/services/sessions';
 
 export type ConversationTurn = { role: 'user' | 'assistant'; content: string };
 export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
@@ -184,11 +184,34 @@ export function useConversationSession() {
     return sessionId;
   }, [recorder, recorderState.isRecording, player]);
 
+  /** Stops any in-flight turn/playback and discards the whole
+   *  conversation -- no processing, the audio and any transcript captured
+   *  so far are deleted. This is Cancel, not a quiet version of ending;
+   *  use endConversation to actually keep what was said. */
+  const cancelConversation = useCallback(async (): Promise<void> => {
+    if (recorderState.isRecording) {
+      await recorder.stop();
+    }
+    player.pause();
+    const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
+    setTurns([]);
+    setState('idle');
+    if (sessionId) {
+      try {
+        await deleteSession(sessionId);
+      } catch {
+        // Best-effort -- the user is already leaving the screen either way.
+      }
+    }
+  }, [recorder, recorderState.isRecording, player]);
+
   return {
     state,
     turns,
     startTurn,
     stopTurn,
     endConversation,
+    cancelConversation,
   };
 }

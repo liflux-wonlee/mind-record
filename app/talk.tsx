@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
@@ -41,14 +41,40 @@ export default function TalkScreen() {
     }
   };
 
-  const onEndCapture = async () => {
-    await capture.endCapture();
-    dismissToTabs();
+  const onCancelCapture = () => {
+    if (!captureStarted) {
+      dismissToTabs();
+      return;
+    }
+    Alert.alert('Discard this recording?', 'What you said so far will not be saved.', [
+      { text: 'Keep recording', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: async () => {
+          await capture.cancelCapture();
+          dismissToTabs();
+        },
+      },
+    ]);
   };
 
-  const onEndConversation = async () => {
-    await conversation.endConversation();
-    dismissToTabs();
+  const onCancelConversation = () => {
+    if (!conversationStarted) {
+      dismissToTabs();
+      return;
+    }
+    Alert.alert('Discard this conversation?', 'What you said so far will not be saved.', [
+      { text: 'Keep talking', style: 'cancel' },
+      {
+        text: 'Discard',
+        style: 'destructive',
+        onPress: async () => {
+          await conversation.cancelConversation();
+          dismissToTabs();
+        },
+      },
+    ]);
   };
 
   return (
@@ -84,9 +110,9 @@ export default function TalkScreen() {
       </View>
 
       {mode === 'capture' ? (
-        <CapturePanel capture={capture} onToggleRecording={onToggleRecording} onEnd={onEndCapture} />
+        <CapturePanel capture={capture} onToggleRecording={onToggleRecording} onCancel={onCancelCapture} />
       ) : (
-        <ConversationPanel conversation={conversation} onEnd={onEndConversation} />
+        <ConversationPanel conversation={conversation} onCancel={onCancelConversation} />
       )}
     </Screen>
   );
@@ -95,11 +121,11 @@ export default function TalkScreen() {
 function CapturePanel({
   capture,
   onToggleRecording,
-  onEnd,
+  onCancel,
 }: {
   capture: ReturnType<typeof useCaptureSession>;
   onToggleRecording: () => void;
-  onEnd: () => void;
+  onCancel: () => void;
 }) {
   const { recording, everRecorded, timer } = capture;
   return (
@@ -129,7 +155,7 @@ function CapturePanel({
           style={[styles.micButton, { backgroundColor: recording ? colors.neutral900 : colors.accent }]}
           textStyle={{ fontSize: 16 }}
         />
-        <Button variant="secondary" label="End" onPress={onEnd} style={styles.endButton} />
+        <Button variant="secondary" label="Cancel" onPress={onCancel} style={styles.cancelButton} />
       </View>
     </>
   );
@@ -151,10 +177,10 @@ const TALK_BUTTON_LABEL: Record<string, string> = {
 
 function ConversationPanel({
   conversation,
-  onEnd,
+  onCancel,
 }: {
   conversation: ReturnType<typeof useConversationSession>;
-  onEnd: () => void;
+  onCancel: () => void;
 }) {
   const { state, turns, startTurn, stopTurn } = conversation;
   const scrollRef = useRef<ScrollView>(null);
@@ -211,10 +237,10 @@ function ConversationPanel({
         />
         <Button
           variant="secondary"
-          label="End"
-          onPress={onEnd}
+          label="Cancel"
+          onPress={onCancel}
           disabled={state === 'thinking'}
-          style={styles.endButton}
+          style={styles.cancelButton}
         />
       </View>
     </>
@@ -320,7 +346,7 @@ const styles = StyleSheet.create({
     minHeight: 64,
     paddingHorizontal: 16,
   },
-  endButton: {
+  cancelButton: {
     minHeight: 64,
     minWidth: 64,
   },
