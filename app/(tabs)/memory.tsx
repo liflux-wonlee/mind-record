@@ -14,7 +14,7 @@ import {
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
-import { listRecentMemories, type Memory } from '@/services/memories';
+import { deleteMemory, listRecentMemories, type Memory } from '@/services/memories';
 import {
   createTopic,
   deleteTopic,
@@ -69,29 +69,39 @@ export default function MemoryScreen() {
     }, [reload])
   );
 
+  const loadMemories = useCallback(() => {
+    if (!user) return;
+    setMemoriesLoading(true);
+    setMemoriesError(null);
+    listRecentMemories(user.id, 5)
+      .then(setRecentMemories)
+      .catch((e) => setMemoriesError(e instanceof Error ? e.message : 'Could not load recent ideas.'))
+      .finally(() => setMemoriesLoading(false));
+  }, [user]);
+
   useFocusEffect(
     useCallback(() => {
-      if (!user) return;
-      let cancelled = false;
-      setMemoriesLoading(true);
-      setMemoriesError(null);
-      listRecentMemories(user.id, 5)
-        .then((memories) => {
-          if (cancelled) return;
-          setRecentMemories(memories);
-        })
-        .catch((e) => {
-          if (cancelled) return;
-          setMemoriesError(e instanceof Error ? e.message : 'Could not load recent ideas.');
-        })
-        .finally(() => {
-          if (!cancelled) setMemoriesLoading(false);
-        });
-      return () => {
-        cancelled = true;
-      };
-    }, [user])
+      loadMemories();
+    }, [loadMemories])
   );
+
+  const confirmDeleteMemory = (memory: Memory) => {
+    Alert.alert(
+      'Delete this idea?',
+      `"${truncate(memory.content, 80)}" will be permanently deleted.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () =>
+            deleteMemory(memory.id)
+              .then(loadMemories)
+              .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+        },
+      ]
+    );
+  };
 
   const roots = topics.filter((t) => !t.parent_topic_id);
   const childrenOf = (id: string) => topics.filter((t) => t.parent_topic_id === id);
@@ -166,7 +176,16 @@ export default function MemoryScreen() {
         <Text style={styles.empty}>No ideas captured yet — they&apos;ll show up here after a session.</Text>
       ) : (
         recentMemories.map((memory) => (
-          <Row key={memory.id} style={styles.listRow}>
+          <Row
+            key={memory.id}
+            onPress={
+              memory.source_session_id
+                ? () => router.push({ pathname: '/summary', params: { sessionId: memory.source_session_id! } })
+                : undefined
+            }
+            onLongPress={() => confirmDeleteMemory(memory)}
+            style={styles.listRow}
+          >
             <Text style={styles.listTitle} numberOfLines={1}>
               {truncate(memory.content)}
             </Text>
@@ -407,16 +426,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     minHeight: 48,
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
   },
   listTitle: {
+    flex: 1,
     fontFamily: font.semibold,
     fontSize: 15,
     color: colors.text,
   },
   listMeta: {
+    flexShrink: 0,
     fontFamily: font.regular,
     fontSize: 11,
     color: colors.neutral600,

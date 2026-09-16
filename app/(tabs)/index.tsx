@@ -251,7 +251,9 @@ export default function HomeScreen() {
               onLongPress={() => confirmDeleteSession(session)}
               style={styles.continueRow}
             >
-              <Text style={styles.continueTitle}>{session.title ?? session.mode}</Text>
+              <Text style={styles.continueTitle} numberOfLines={1}>
+                {session.title ?? session.mode}
+              </Text>
               <Text style={styles.continueMeta}>
                 {new Date(session.started_at).toLocaleDateString(undefined, {
                   month: 'short',
@@ -393,16 +395,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 8,
     minHeight: 48,
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
   },
   continueTitle: {
+    flex: 1,
     fontFamily: font.semibold,
     fontSize: 15,
     color: colors.text,
   },
   continueMeta: {
+    flexShrink: 0,
     fontFamily: font.regular,
     fontSize: 11,
     color: colors.neutral600,

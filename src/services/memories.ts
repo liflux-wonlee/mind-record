@@ -65,3 +65,8 @@ export async function assignMemoryTopic(memoryId: string, topicId: string): Prom
   if (error) throw error;
   return data;
 }
+
+export async function deleteMemory(memoryId: string): Promise<void> {
+  const { error } = await supabase.from('memories').delete().eq('id', memoryId);
+  if (error) throw error;
+}
