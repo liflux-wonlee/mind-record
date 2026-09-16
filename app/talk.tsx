@@ -144,7 +144,7 @@ const STATE_LABEL: Record<string, string> = {
 
 const TALK_BUTTON_LABEL: Record<string, string> = {
   idle: '말하기',
-  recording: 'Listening… tap to stop',
+  recording: 'Listening… (pauses when you stop talking)',
   thinking: 'Thinking…',
   speaking: 'Speaking…',
 };
@@ -184,7 +184,7 @@ function ConversationPanel({
       >
         {turns.length === 0 ? (
           <Text style={styles.idle}>
-            말씀하세요. 한 마디씩 주고받으며 대화하듯 이야기하시면 됩니다.
+            말씀하세요. 잠깐 멈추면 자동으로 전송되고 AI가 대답합니다. 다시 눌러서 직접 끝낼 수도 있어요.
           </Text>
         ) : (
           turns.map((turn, i) => (

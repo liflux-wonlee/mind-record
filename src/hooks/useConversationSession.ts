@@ -1,12 +1,21 @@
 /**
  * Backs Talk's Conversation mode: a real turn-based voice chat, not a
  * single continuous recording (see useCaptureSession.ts for that). Each
- * turn is its own short recording -- start, speak, stop -- which gets
- * uploaded and sent to the `converse` Edge Function (transcribe -> GPT
- * reply, using the session's full message history for context -> TTS).
- * The reply is written to a local file (expo-file-system) so expo-audio's
- * player can play it back, then the turn loop returns to idle for the next
- * one.
+ * turn is its own short recording -- start, speak, and then either a pause
+ * in speech auto-ends the turn, or the user taps the button to end it
+ * manually -- which gets uploaded and sent to the `converse` Edge Function
+ * (transcribe -> GPT reply, using the session's full message history for
+ * context -> TTS). The reply is written to a local file (expo-file-system)
+ * so expo-audio's player can play it back, then the turn loop returns to
+ * idle for the next one.
+ *
+ * The auto-stop is a simple silence timer over the recorder's metering
+ * (dB) level, not real voice-activity detection -- it's a heuristic tuned
+ * for "a normal pause after finishing a sentence," and may need
+ * SILENCE_THRESHOLD_DB/SILENCE_DURATION_MS adjusted after real-device
+ * testing (too eager: cuts off mid-thought; too lax: never fires in a
+ * noisy room). Tapping the button always still ends the turn immediately
+ * as a manual override either way.
  *
  * expo-file-system's config plugin only adds Android storage permissions
  * and iOS document-sharing flags that this hook doesn't need -- it only
@@ -36,11 +45,18 @@ import { createSession, endSession } from '@/services/sessions';
 export type ConversationTurn = { role: 'user' | 'assistant'; content: string };
 export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 
+// Metering is in dBFS (0 = loudest, more negative = quieter); typical room
+// noise/breathing sits well below -35dB on a phone mic.
+const SILENCE_THRESHOLD_DB = -35;
+const SILENCE_DURATION_MS = 1500;
+
 export function useConversationSession() {
   const { user } = useAuth();
   const [state, setState] = useState<ConversationState>('idle');
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const sessionIdRef = useRef<string | null>(null);
+  const hasSpokenRef = useRef(false);
+  const silenceStartRef = useRef<number | null>(null);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 200);
@@ -74,7 +90,7 @@ export function useConversationSession() {
     try {
       await ensureSession();
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync();
+      await recorder.prepareToRecordAsync({ isMeteringEnabled: true });
       recorder.record();
       setState('recording');
     } catch (e) {
@@ -113,6 +129,32 @@ export function useConversationSession() {
       setState('idle');
     }
   }, [state, user, recorder, player]);
+
+  // Auto-ends the turn after a pause in speech, so the user doesn't have
+  // to tap the button every time -- see the file header for the caveats.
+  useEffect(() => {
+    if (state !== 'recording') {
+      hasSpokenRef.current = false;
+      silenceStartRef.current = null;
+      return;
+    }
+    const level = recorderState.metering;
+    if (level === undefined) return;
+
+    if (level > SILENCE_THRESHOLD_DB) {
+      hasSpokenRef.current = true;
+      silenceStartRef.current = null;
+      return;
+    }
+    if (!hasSpokenRef.current) return; // hasn't started talking yet -- don't count this as a pause
+    if (silenceStartRef.current === null) {
+      silenceStartRef.current = Date.now();
+      return;
+    }
+    if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
+      stopTurn();
+    }
+  }, [state, recorderState.metering, stopTurn]);
 
   /** Stops any in-flight turn/playback, ends the session, and kicks off
    *  process-session in the background (it reuses the transcript already
