@@ -105,6 +105,14 @@ export default function HomeScreen() {
     router.push({ pathname: '/talk', params: { autoStart: '1' } });
   };
 
+  /** Capture mode is the one-tap default above -- this is the only way to
+   *  land on Talk with Conversation mode already selected, since auto-
+   *  starting Capture (see app/talk.tsx) locks the mode toggle almost
+   *  immediately after landing there. */
+  const startConversation = () => {
+    router.push({ pathname: '/talk', params: { mode: 'conv' } });
+  };
+
   const confirmDeleteSession = (session: Session) => {
     Alert.alert(
       'Delete this recording?',
@@ -152,6 +160,13 @@ export default function HomeScreen() {
           <MicIcon size={56} color={colors.bg} />
         </Pressable>
         <Text style={styles.micLabel}>Tap to talk</Text>
+        <Button
+          variant="ghost"
+          label="Or start a conversation instead"
+          onPress={startConversation}
+          style={{ minHeight: 36 }}
+          textStyle={{ fontSize: 12 }}
+        />
       </View>
 
       <RuleThick style={{ marginTop: 20 }} />

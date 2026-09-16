@@ -14,8 +14,8 @@ type ScreenMode = 'capture' | 'conv';
 
 export default function TalkScreen() {
   const router = useRouter();
-  const { autoStart } = useLocalSearchParams<{ autoStart?: string }>();
-  const [mode, setMode] = useState<ScreenMode>('capture');
+  const { autoStart, mode: initialMode } = useLocalSearchParams<{ autoStart?: string; mode?: string }>();
+  const [mode, setMode] = useState<ScreenMode>(initialMode === 'conv' ? 'conv' : 'capture');
 
   const capture = useCaptureSession();
   const conversation = useConversationSession();

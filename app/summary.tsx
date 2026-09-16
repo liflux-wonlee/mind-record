@@ -12,7 +12,7 @@ import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/service
 import { getSession, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
 import { confirmTopicSuggestion, listTopics, type Topic } from '@/services/topics';
-import { colors, font, h2 } from '@/theme';
+import { colors, font } from '@/theme';
 
 /** Renders `**bold**` spans within an outline bullet or the transcript is never bolded, only bullets are. */
 function renderInlineBold(text: string): React.ReactNode {
@@ -364,7 +364,10 @@ export default function SummaryScreen() {
 
 const styles = StyleSheet.create({
   title: {
-    ...h2,
+    fontFamily: font.semibold,
+    fontSize: 19,
+    lineHeight: 26,
+    color: colors.text,
     marginTop: 6,
     marginBottom: 14,
   },
