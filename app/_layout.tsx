@@ -84,7 +84,6 @@ function RootNavigator() {
       <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
       <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom' }} />
       <Stack.Screen name="summary" />
-      <Stack.Screen name="driving" options={{ animation: 'slide_from_bottom' }} />
     </Stack>
   );
 }

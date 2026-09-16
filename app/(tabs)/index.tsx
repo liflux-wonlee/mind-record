@@ -133,13 +133,6 @@ export default function HomeScreen() {
     <Screen>
       <View style={styles.topRow}>
         <Kicker style={{ color: colors.neutral600 }}>{today}</Kicker>
-        <Button
-          variant="ghost"
-          label="Driving mode"
-          onPress={() => router.push('/driving')}
-          style={styles.ghostSmall}
-          textStyle={styles.uppercaseSmall}
-        />
       </View>
 
       <View style={styles.micBlock}>
@@ -300,11 +293,6 @@ const styles = StyleSheet.create({
   ghostSmall: {
     minHeight: 44,
     justifyContent: 'center',
-  },
-  uppercaseSmall: {
-    fontSize: 11,
-    letterSpacing: 11 * 0.08,
-    textTransform: 'uppercase',
   },
   micBlock: {
     marginTop: 16,

@@ -1,46 +1,53 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
 import { Button, Kicker } from '@/components/ui';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
+import { useConversationSession } from '@/hooks/useConversationSession';
 import { dismissToTabs } from '@/nav';
 import { colors, font } from '@/theme';
+
+type ScreenMode = 'capture' | 'conv';
 
 export default function TalkScreen() {
   const router = useRouter();
   const { autoStart } = useLocalSearchParams<{ autoStart?: string }>();
-  const {
-    mode,
-    setMode,
-    recording,
-    everRecorded,
-    saveOnly,
-    toggleSaveOnly,
-    toggleRecording,
-    endCapture,
-    timer,
-  } = useCaptureSession();
+  const [mode, setMode] = useState<ScreenMode>('capture');
+
+  const capture = useCaptureSession();
+  const conversation = useConversationSession();
+
+  const captureStarted = capture.everRecorded;
+  const conversationStarted = conversation.turns.length > 0 || conversation.state !== 'idle';
+  // Switching modes mid-flow would orphan whichever session already
+  // started -- once either has begun, the toggle stops responding.
+  const modeLocked = mode === 'capture' ? captureStarted : conversationStarted;
 
   const didAutoStart = useRef(false);
   useEffect(() => {
-    if (didAutoStart.current || autoStart !== '1' || everRecorded) return;
+    if (didAutoStart.current || autoStart !== '1' || mode !== 'capture' || captureStarted) return;
     didAutoStart.current = true;
-    toggleRecording();
-  }, [autoStart, everRecorded, toggleRecording]);
+    capture.toggleRecording();
+  }, [autoStart, mode, captureStarted, capture]);
 
   const onToggleRecording = async () => {
-    const stopped = await toggleRecording();
+    const stopped = await capture.toggleRecording();
     if (stopped) {
-      const sessionId = await endCapture();
+      const sessionId = await capture.endCapture();
       router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
     }
   };
 
-  const onEnd = async () => {
-    await endCapture();
+  const onEndCapture = async () => {
+    await capture.endCapture();
+    dismissToTabs();
+  };
+
+  const onEndConversation = async () => {
+    await conversation.endConversation();
     dismissToTabs();
   };
 
@@ -51,29 +58,52 @@ export default function TalkScreen() {
           <SegOption
             label="Capture"
             selected={mode === 'capture'}
-            onPress={() => setMode('capture')}
+            onPress={() => !modeLocked && setMode('capture')}
           />
           <SegOption
             label="Conversation"
             selected={mode === 'conv'}
-            onPress={() => setMode('conv')}
+            onPress={() => !modeLocked && setMode('conv')}
             divided
           />
         </View>
-        <Button
-          variant="ghost"
-          label="Save only"
-          onPress={toggleSaveOnly}
-          style={{ minHeight: 44, justifyContent: 'center' }}
-          textStyle={{
-            fontSize: 11,
-            letterSpacing: 11 * 0.08,
-            textTransform: 'uppercase',
-            color: saveOnly ? colors.accent : colors.neutral600,
-          }}
-        />
+        {mode === 'capture' ? (
+          <Button
+            variant="ghost"
+            label="Save only"
+            onPress={capture.toggleSaveOnly}
+            style={{ minHeight: 44, justifyContent: 'center' }}
+            textStyle={{
+              fontSize: 11,
+              letterSpacing: 11 * 0.08,
+              textTransform: 'uppercase',
+              color: capture.saveOnly ? colors.accent : colors.neutral600,
+            }}
+          />
+        ) : null}
       </View>
 
+      {mode === 'capture' ? (
+        <CapturePanel capture={capture} onToggleRecording={onToggleRecording} onEnd={onEndCapture} />
+      ) : (
+        <ConversationPanel conversation={conversation} onEnd={onEndConversation} />
+      )}
+    </Screen>
+  );
+}
+
+function CapturePanel({
+  capture,
+  onToggleRecording,
+  onEnd,
+}: {
+  capture: ReturnType<typeof useCaptureSession>;
+  onToggleRecording: () => void;
+  onEnd: () => void;
+}) {
+  const { recording, everRecorded, timer } = capture;
+  return (
+    <>
       <View style={styles.statusRow}>
         <Kicker style={{ color: recording ? colors.accent : colors.neutral600 }}>
           {recording ? '● Listening' : everRecorded ? 'Paused' : 'Ready'}
@@ -83,13 +113,9 @@ export default function TalkScreen() {
 
       <ScrollView style={styles.transcript} contentContainerStyle={styles.transcriptContent}>
         {!everRecorded ? (
-          <Text style={styles.idle}>
-            말씀하세요. 주제를 나눌 필요 없이 한 번에 이야기하셔도 됩니다.
-          </Text>
+          <Text style={styles.idle}>말씀하세요. 주제를 나눌 필요 없이 한 번에 이야기하셔도 됩니다.</Text>
         ) : (
-          <Text style={styles.idle}>
-            듣고 있어요. 말씀을 마치시면 이해한 내용을 보여드릴게요.
-          </Text>
+          <Text style={styles.idle}>듣고 있어요. 말씀을 마치시면 이해한 내용을 보여드릴게요.</Text>
         )}
       </ScrollView>
 
@@ -100,20 +126,98 @@ export default function TalkScreen() {
           label={recording ? 'Listening… tap to stop' : everRecorded ? 'Resume' : 'Start talking'}
           onPress={onToggleRecording}
           align="flex-start"
-          style={[
-            styles.micButton,
-            { backgroundColor: recording ? colors.neutral900 : colors.accent },
-          ]}
+          style={[styles.micButton, { backgroundColor: recording ? colors.neutral900 : colors.accent }]}
+          textStyle={{ fontSize: 16 }}
+        />
+        <Button variant="secondary" label="End" onPress={onEnd} style={styles.endButton} />
+      </View>
+    </>
+  );
+}
+
+const STATE_LABEL: Record<string, string> = {
+  idle: 'Ready',
+  recording: '● Listening',
+  thinking: 'Thinking…',
+  speaking: '● Speaking',
+};
+
+const TALK_BUTTON_LABEL: Record<string, string> = {
+  idle: '말하기',
+  recording: 'Listening… tap to stop',
+  thinking: 'Thinking…',
+  speaking: 'Speaking…',
+};
+
+function ConversationPanel({
+  conversation,
+  onEnd,
+}: {
+  conversation: ReturnType<typeof useConversationSession>;
+  onEnd: () => void;
+}) {
+  const { state, turns, startTurn, stopTurn } = conversation;
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    scrollRef.current?.scrollToEnd({ animated: true });
+  }, [turns.length]);
+
+  const onPressTalk = () => {
+    if (state === 'idle') startTurn();
+    else if (state === 'recording') stopTurn();
+  };
+  const talkDisabled = state === 'thinking' || state === 'speaking';
+
+  return (
+    <>
+      <View style={styles.statusRow}>
+        <Kicker style={{ color: state === 'idle' ? colors.neutral600 : colors.accent }}>
+          {STATE_LABEL[state]}
+        </Kicker>
+      </View>
+
+      <ScrollView
+        ref={scrollRef}
+        style={styles.transcript}
+        contentContainerStyle={styles.transcriptContent}
+      >
+        {turns.length === 0 ? (
+          <Text style={styles.idle}>
+            말씀하세요. 한 마디씩 주고받으며 대화하듯 이야기하시면 됩니다.
+          </Text>
+        ) : (
+          turns.map((turn, i) => (
+            <View key={i}>
+              <Kicker style={{ color: colors.neutral600, marginBottom: 4 }}>
+                {turn.role === 'user' ? 'You' : 'Mind Record'}
+              </Kicker>
+              <Text style={styles.turnText}>{turn.content}</Text>
+            </View>
+          ))
+        )}
+      </ScrollView>
+
+      <Waveform active={state === 'recording'} />
+
+      <View style={styles.controls}>
+        <Button
+          label={TALK_BUTTON_LABEL[state]}
+          onPress={onPressTalk}
+          disabled={talkDisabled}
+          align="flex-start"
+          style={[styles.micButton, { backgroundColor: state === 'recording' ? colors.neutral900 : colors.accent }]}
           textStyle={{ fontSize: 16 }}
         />
         <Button
           variant="secondary"
           label="End"
           onPress={onEnd}
+          disabled={state === 'thinking'}
           style={styles.endButton}
         />
       </View>
-    </Screen>
+    </>
   );
 }
 
@@ -199,6 +303,12 @@ const styles = StyleSheet.create({
     fontSize: 17,
     lineHeight: 25.5,
     color: colors.neutral600,
+  },
+  turnText: {
+    fontFamily: font.regular,
+    fontSize: 16,
+    lineHeight: 23,
+    color: colors.text,
   },
   controls: {
     flexDirection: 'row',

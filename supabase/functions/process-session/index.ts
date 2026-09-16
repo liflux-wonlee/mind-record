@@ -105,35 +105,55 @@ Deno.serve(async (req) => {
   try {
     await db.from('sessions').update({ processing_status: 'transcribing' }).eq('id', sessionId);
 
-    const { data: attachments, error: attachmentsError } = await db
-      .from('attachments')
-      .select('*')
+    // Conversation mode (see supabase/functions/converse) already transcribes
+    // each turn live and leaves the result in `messages` -- reuse that
+    // instead of re-running Whisper on the same audio a second time. Capture
+    // mode never writes to `messages`, so it always falls through to the
+    // attachment-transcription path below.
+    const { data: existingMessages, error: messagesError } = await db
+      .from('messages')
+      .select('role, content')
       .eq('session_id', sessionId)
-      .eq('type', 'audio')
-      .order('created_at', { ascending: true });
-    if (attachmentsError) throw attachmentsError;
+      .order('position', { ascending: true });
+    if (messagesError) throw messagesError;
 
-    if (!attachments || attachments.length === 0) {
-      await db
-        .from('sessions')
-        .update({
-          processing_status: 'error',
-          processing_error: 'No audio was recorded for this session.',
-        })
-        .eq('id', sessionId);
-      return json({ error: 'No audio to process.' }, 400);
-    }
+    let transcript: string;
+    if (existingMessages && existingMessages.length > 0) {
+      transcript = existingMessages
+        .filter((m) => m.role === 'user')
+        .map((m) => m.content)
+        .join('\n\n');
+    } else {
+      const { data: attachments, error: attachmentsError } = await db
+        .from('attachments')
+        .select('*')
+        .eq('session_id', sessionId)
+        .eq('type', 'audio')
+        .order('created_at', { ascending: true });
+      if (attachmentsError) throw attachmentsError;
 
-    const transcriptParts: string[] = [];
-    for (const attachment of attachments) {
-      const { data: file, error: downloadError } = await db.storage
-        .from('recordings')
-        .download(attachment.storage_path);
-      if (downloadError) throw downloadError;
-      const text = await transcribeAudio(file, attachment.file_name);
-      if (text.trim()) transcriptParts.push(text.trim());
+      if (!attachments || attachments.length === 0) {
+        await db
+          .from('sessions')
+          .update({
+            processing_status: 'error',
+            processing_error: 'No audio was recorded for this session.',
+          })
+          .eq('id', sessionId);
+        return json({ error: 'No audio to process.' }, 400);
+      }
+
+      const transcriptParts: string[] = [];
+      for (const attachment of attachments) {
+        const { data: file, error: downloadError } = await db.storage
+          .from('recordings')
+          .download(attachment.storage_path);
+        if (downloadError) throw downloadError;
+        const text = await transcribeAudio(file, attachment.file_name);
+        if (text.trim()) transcriptParts.push(text.trim());
+      }
+      transcript = transcriptParts.join('\n\n');
     }
-    const transcript = transcriptParts.join('\n\n');
 
     await db
       .from('sessions')
@@ -343,6 +363,8 @@ async function analyzeTranscript(transcript: string, topics: TopicRow[]): Promis
 
   const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.
 
+CRITICAL: Detect the transcript's own language and write EVERY string you output -- "summary" included, not just "outline" -- in that same language. A Korean transcript gets a Korean "summary", Korean "outline" headings/bullets, Korean "title"/"content" for tasks and memories. Never default to English or translate; match the transcript exactly.
+
 There are TWO different summaries to produce, for two different places in the app:
 
 "summary" is a short (1-2 sentence) recap, used in compact list views (a row on a calendar, a line on a home screen) where space is tight.
@@ -362,7 +384,7 @@ ${formatTopicTree(topics)}
 
 Respond with strict JSON matching this shape:
 {
-  "summary": string (1-2 sentences, short recap as described above),
+  "summary": string (1-2 sentences, short recap as described above, in the transcript's own language),
   "outline": [{ "heading": string, "bullets": string[] }] (full breakdown as described above, at least one section),
   "tasks": [{
     "title": string,

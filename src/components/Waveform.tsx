@@ -1,5 +1,5 @@
 /**
- * The 24-bar level meter from the capture and driving screens.
+ * The 24-bar level meter from Talk's Capture and Conversation panels.
  *
  * Mirrors the prototype's `bars()` + `@keyframes mePulse`: bars sit at 15% when
  * idle, and pulse between 30% and 100% with a per-bar duration and delay while
