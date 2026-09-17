@@ -8,14 +8,27 @@ import { Button, Kicker } from '@/components/ui';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { useConversationSession } from '@/hooks/useConversationSession';
 import { dismissToTabs } from '@/nav';
+import { useAuth } from '@/providers/AuthProvider';
+import { getProfile } from '@/services/profiles';
 import { colors, font } from '@/theme';
 
 type ScreenMode = 'capture' | 'conv';
 
 export default function TalkScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const { autoStart, mode: initialMode } = useLocalSearchParams<{ autoStart?: string; mode?: string }>();
   const [mode, setMode] = useState<ScreenMode>(initialMode === 'conv' ? 'conv' : 'capture');
+  const [aiName, setAiName] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    getProfile(user.id)
+      .then((profile) => setAiName(profile?.ai_name?.trim() || null))
+      .catch(() => {
+        // The chat label just falls back to "AI" -- not worth blocking the screen over.
+      });
+  }, [user]);
 
   const capture = useCaptureSession();
   const conversation = useConversationSession((sessionId) => {
@@ -123,6 +136,7 @@ export default function TalkScreen() {
           conversation={conversation}
           onCancel={onCancelConversation}
           onDone={onDoneConversation}
+          aiName={aiName}
         />
       )}
     </Screen>
@@ -190,10 +204,12 @@ function ConversationPanel({
   conversation,
   onCancel,
   onDone,
+  aiName,
 }: {
   conversation: ReturnType<typeof useConversationSession>;
   onCancel: () => void;
   onDone: () => void;
+  aiName: string | null;
 }) {
   const { state, turns, startTurn, stopTurn } = conversation;
   const scrollRef = useRef<ScrollView>(null);
@@ -230,7 +246,7 @@ function ConversationPanel({
           turns.map((turn, i) => (
             <View key={i}>
               <Kicker style={{ color: colors.neutral600, marginBottom: 4 }}>
-                {turn.role === 'user' ? 'You' : 'Mind Record'}
+                {turn.role === 'user' ? 'You' : aiName ?? 'AI'}
               </Kicker>
               <Text style={styles.turnText}>{turn.content}</Text>
             </View>

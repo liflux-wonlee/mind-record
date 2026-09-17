@@ -1,9 +1,12 @@
 // One turn of the live, continuous conversation in Talk's "Conversation"
 // mode: transcribes the audio segment the client just uploaded, replies
 // using the session's full message history for context, and synthesizes
-// the reply as speech. Also decides whether the user just told it, in
-// plain speech, to end and save the conversation right now (`shouldEnd`)
-// -- the client auto-relistens after every reply unless that's set.
+// the reply as speech -- in the user's chosen ai_name/user_honorific/
+// ai_voice from `profiles` (see supabase/migrations/
+// 20260918000001_ai_personalization.sql and Account's voice picker).
+// Also decides whether the user just told it, in plain speech, to end and
+// save the conversation right now (`shouldEnd`) -- the client
+// auto-relistens after every reply unless that's set.
 //
 // Invoked by the app via
 //   supabase.functions.invoke('converse', { body: { sessionId, storagePath } })
@@ -30,6 +33,12 @@ const CORS_HEADERS = {
 // Spoken when Whisper heard nothing usable -- no point spending a GPT call
 // (or polluting the conversation history) on an empty turn.
 const NOTHING_HEARD_REPLY = '잘 안 들렸어요. 다시 한 번 말씀해 주시겠어요?';
+
+// Kept in sync with the `profiles_ai_voice_check` constraint
+// (supabase/migrations/20260918000001_ai_personalization.sql) and
+// preview-voice/index.ts's own ALLOWED_VOICES.
+const ALLOWED_VOICES = new Set(['alloy', 'echo', 'onyx', 'nova', 'shimmer']);
+const DEFAULT_VOICE = 'alloy';
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -75,6 +84,16 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const { data: profile, error: profileError } = await db
+      .from('profiles')
+      .select('ai_name, user_honorific, ai_voice')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (profileError) throw profileError;
+    const aiName = profile?.ai_name?.trim() || null;
+    const userHonorific = profile?.user_honorific?.trim() || null;
+    const voice = profile?.ai_voice && ALLOWED_VOICES.has(profile.ai_voice) ? profile.ai_voice : DEFAULT_VOICE;
+
     const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath);
     if (downloadError) throw downloadError;
     const userText = (await transcribeAudio(file, storagePath)).trim();
@@ -96,13 +115,13 @@ Deno.serve(async (req) => {
         .order('position', { ascending: true });
       if (historyError) throw historyError;
 
-      const reply = await generateReply(history ?? []);
+      const reply = await generateReply(history ?? [], aiName, userHonorific);
       assistantText = reply.reply;
       shouldEnd = reply.end;
       await insertMessage(db, sessionId, user.id, 'assistant', assistantText);
     }
 
-    const audioBase64 = await synthesizeSpeech(assistantText);
+    const audioBase64 = await synthesizeSpeech(assistantText, voice);
 
     return json({ userText, assistantText, shouldEnd, audioBase64 });
   } catch (e) {
@@ -148,7 +167,8 @@ async function transcribeAudio(file: Blob, storagePath: string): Promise<string>
   return data.text ?? '';
 }
 
-const SYSTEM_PROMPT = `You are the voice on the other end of a live, continuous conversation inside Mind Record, a voice-journaling app. The conversation auto-listens again after every reply you give -- the user never has to tap anything between turns, it just flows. The user is thinking out loud, like talking to a supportive friend while journaling -- your job is to listen and respond BRIEFLY (1-2 short, natural spoken sentences) so the conversation keeps flowing without you taking over it. This is read aloud by text-to-speech, so never use markdown, bullet points, or a written-essay register -- write the way a person actually talks.
+function buildSystemPrompt(aiName: string | null, userHonorific: string | null): string {
+  let prompt = `You are the voice on the other end of a live, continuous conversation inside Mind Record, a voice-journaling app. The conversation auto-listens again after every reply you give -- the user never has to tap anything between turns, it just flows. The user is thinking out loud, like talking to a supportive friend while journaling -- your job is to listen and respond BRIEFLY (1-2 short, natural spoken sentences) so the conversation keeps flowing without you taking over it. This is read aloud by text-to-speech, so never use markdown, bullet points, or a written-essay register -- write the way a person actually talks.
 
 Reply in the SAME language the user is speaking (Korean if they're speaking Korean, English if English).
 
@@ -160,15 +180,26 @@ If they mention wanting something filed under a specific topic/folder (e.g. "이
 
 Ending the conversation: set "end" to true ONLY when the user is clearly telling you, right now, to stop and save -- e.g. "저장하고 끝내", "그만할게", "끝낼게", "여기까지 할게", "save and end", "that's all for now". Give a brief, warm closing line as "reply" when you do (e.g. "네, 여기까지 저장할게요."). Do NOT set "end" to true just because ending was mentioned as a topic of what they're thinking about (e.g. "오늘 하루를 어떻게 마무리할지 고민했다" is content, not a command) -- only an actual instruction to you, right now, counts. When in doubt, treat it as content and keep "end" false; the user can always tap Cancel/End on screen themselves.
 
-Never invent facts about the user. Never break character to explain that you're an AI language model.
+Never invent facts about the user. Never break character to explain that you're an AI language model.`;
 
-Respond with strict JSON: { "reply": string, "end": boolean }`;
+  if (aiName) {
+    prompt += `\n\nThe user calls you "${aiName}" -- that's your name in this conversation. If they address you by it (e.g. "${aiName}, ...") or ask who you are, respond as ${aiName} naturally; don't explain that this is a configured name.`;
+  }
+  if (userHonorific) {
+    prompt += `\n\nAddress the user as "${userHonorific}" when it feels natural -- not in every single reply, just where a person would actually say it.`;
+  }
+
+  prompt += `\n\nRespond with strict JSON: { "reply": string, "end": boolean }`;
+  return prompt;
+}
 
 async function generateReply(
-  history: { role: string; content: string }[]
+  history: { role: string; content: string }[],
+  aiName: string | null,
+  userHonorific: string | null
 ): Promise<{ reply: string; end: boolean }> {
   const messages = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: buildSystemPrompt(aiName, userHonorific) },
     ...history
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({ role: m.role, content: m.content })),
@@ -196,14 +227,14 @@ async function generateReply(
   return { reply, end: parsed.end === true };
 }
 
-async function synthesizeSpeech(text: string): Promise<string> {
+async function synthesizeSpeech(text: string, voice: string): Promise<string> {
   const res = await fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${OPENAI_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model: 'tts-1', voice: 'alloy', input: text, response_format: 'mp3' }),
+    body: JSON.stringify({ model: 'tts-1', voice, input: text, response_format: 'mp3' }),
   });
   if (!res.ok) {
     throw new Error(`Speech synthesis failed (${res.status}): ${await res.text()}`);

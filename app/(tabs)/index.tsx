@@ -19,6 +19,7 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const [firstName, setFirstName] = useState<string | null>(null);
+  const [aiName, setAiName] = useState<string | null>(null);
   const [todayCount, setTodayCount] = useState<number | null>(null);
   const [recentLimit, setRecentLimit] = useState<number>(5);
   const [menuSession, setMenuSession] = useState<Session | null>(null);
@@ -47,6 +48,7 @@ export default function HomeScreen() {
           if (cancelled) return;
           const name = profile?.display_name?.trim().split(/\s+/)[0];
           setFirstName(name || null);
+          setAiName(profile?.ai_name?.trim() || null);
         })
         .catch(() => {
           // Greeting is a nice-to-have — leave it off rather than block the screen.
@@ -139,7 +141,7 @@ export default function HomeScreen() {
         <Text style={styles.micLabel}>Tap to talk</Text>
         <Button
           variant="ghost"
-          label="Or start a conversation instead"
+          label={aiName ? `Or talk with ${aiName} instead` : 'Or start a conversation instead'}
           onPress={startConversation}
           style={{ minHeight: 36 }}
           textStyle={{ fontSize: 12 }}

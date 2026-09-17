@@ -23,6 +23,8 @@ export type MessageRole = 'user' | 'assistant' | 'system';
 export type TaskStatus = 'open' | 'completed' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high';
 export type AttachmentType = 'audio' | 'image' | 'document';
+/** The OpenAI TTS voices the app offers a preview for -- see preview-voice/converse Edge Functions. */
+export type AiVoice = 'alloy' | 'echo' | 'onyx' | 'nova' | 'shimmer';
 
 export type Database = {
   public: {
@@ -34,6 +36,11 @@ export type Database = {
           avatar_url: string | null;
           timezone: string;
           locale: string;
+          /** What the user calls the AI (e.g. "Lina") -- null means no name is set. */
+          ai_name: string | null;
+          /** How the AI should address the user (e.g. "Won님") -- null means don't use one. */
+          user_honorific: string | null;
+          ai_voice: AiVoice;
           created_at: string;
           updated_at: string;
         };
@@ -43,6 +50,9 @@ export type Database = {
           avatar_url?: string | null;
           timezone?: string;
           locale?: string;
+          ai_name?: string | null;
+          user_honorific?: string | null;
+          ai_voice?: AiVoice;
           created_at?: string;
           updated_at?: string;
         };
