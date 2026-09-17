@@ -16,6 +16,30 @@ function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
+/**
+ * Splits the month into explicit 7-cell week rows (`null` for a leading/
+ * trailing blank). Rendering each week as its own `flexDirection: 'row'`
+ * of exactly 7 `flex: 1` cells -- rather than one long `flexWrap: 'wrap'`
+ * row of `width: '14.2857…%'` cells -- avoids a real bug that showed up
+ * here: percentage widths that don't divide evenly accumulate enough
+ * sub-pixel rounding error that the 7th cell of a row overflows and wraps
+ * early, which silently shifts every later day by however many cells wrapped
+ * prematurely (e.g. the 16th rendering under Friday instead of Wednesday).
+ */
+function weeksOf(leadingBlanks: number, daysInMonth: number): (number | null)[][] {
+  const cells: (number | null)[] = [
+    ...Array.from({ length: leadingBlanks }, () => null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  const weeks: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    weeks.push(cells.slice(i, i + 7));
+  }
+  return weeks;
+}
+
 export default function CalendarScreen() {
   const router = useRouter();
   const { user } = useAuth();
@@ -118,46 +142,47 @@ export default function CalendarScreen() {
             ))}
           </View>
 
-          <View style={styles.grid}>
-            {Array.from({ length: leadingBlanks }, (_, i) => (
-              <View key={`blank-${i}`} style={[styles.day, styles.dayRule]} />
-            ))}
-            {Array.from({ length: daysInMonth }, (_, i) => {
-              const n = i + 1;
-              const count = (sessionsByDay.get(n) ?? []).length;
-              const selected = n === selectedDay;
-              return (
-                <Pressable
-                  key={n}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={`${monthShort} ${n}`}
-                  onPress={() => setSelectedDay(n)}
-                  style={({ pressed }) => [
-                    styles.day,
-                    styles.dayCell,
-                    styles.dayRule,
-                    selected && { backgroundColor: colors.accent },
-                    pressed && !selected && { backgroundColor: colors.neutral200 },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.dayNumber,
-                      {
-                        color: selected ? colors.bg : n > today ? colors.neutral500 : colors.text,
-                      },
+          {weeksOf(leadingBlanks, daysInMonth).map((week, w) => (
+            <View key={w} style={styles.weekRow}>
+              {week.map((n, i) => {
+                if (n === null) {
+                  return <View key={i} style={[styles.day, styles.dayRule]} />;
+                }
+                const count = (sessionsByDay.get(n) ?? []).length;
+                const selected = n === selectedDay;
+                return (
+                  <Pressable
+                    key={i}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    accessibilityLabel={`${monthShort} ${n}`}
+                    onPress={() => setSelectedDay(n)}
+                    style={({ pressed }) => [
+                      styles.day,
+                      styles.dayCell,
+                      styles.dayRule,
+                      selected && { backgroundColor: colors.accent },
+                      pressed && !selected && { backgroundColor: colors.neutral200 },
                     ]}
                   >
-                    {n}
-                  </Text>
-                  <Text style={[styles.dots, { color: selected ? colors.bg : colors.text }]}>
-                    {'•'.repeat(count)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+                    <Text
+                      style={[
+                        styles.dayNumber,
+                        {
+                          color: selected ? colors.bg : n > today ? colors.neutral500 : colors.text,
+                        },
+                      ]}
+                    >
+                      {n}
+                    </Text>
+                    <Text style={[styles.dots, { color: selected ? colors.bg : colors.text }]}>
+                      {'•'.repeat(count)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ))}
 
           <View style={styles.selectedHead}>
             <Kicker style={{ color: colors.neutral600 }}>
@@ -207,8 +232,6 @@ export default function CalendarScreen() {
   );
 }
 
-const CELL = `${100 / 7}%` as const;
-
 const styles = StyleSheet.create({
   back: {
     alignSelf: 'flex-start',
@@ -232,19 +255,18 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   weekday: {
-    width: CELL,
+    flex: 1,
     fontFamily: font.semibold,
     fontSize: 9,
     lineHeight: 12,
     letterSpacing: 9 * 0.08,
     color: colors.neutral600,
   },
-  grid: {
+  weekRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
   },
   day: {
-    width: CELL,
+    flex: 1,
     minHeight: 48,
   },
   dayCell: {
