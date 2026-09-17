@@ -8,7 +8,7 @@ import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
 import { deleteSession, listSessionsInMonth, type Session } from '@/services/sessions';
 import { useApp } from '@/store';
-import { colors, font, h2 } from '@/theme';
+import { colors, font, h2, monthColors } from '@/theme';
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
@@ -124,7 +124,7 @@ export default function CalendarScreen() {
         textStyle={{ fontSize: 12 }}
       />
       <Kicker style={{ color: colors.neutral600 }}>Calendar</Kicker>
-      <Text style={styles.title}>{monthLabel}</Text>
+      <Text style={[styles.title, { color: monthColors[month] }]}>{monthLabel}</Text>
 
       {loading ? (
         <View style={styles.center}>

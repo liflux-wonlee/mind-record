@@ -35,7 +35,7 @@ export const colors = {
   /** color-mix(in srgb, #201e1d 40%, transparent) */
   divider: 'rgba(32,30,29,0.4)',
 
-  // — pastel blocks used by Login, Account, Home and the bottom nav —
+  // — pastel blocks used by Login, Account and the bottom nav —
   pastelPink: '#fbd9d4',
   pastelYellow: '#fde9b8',
   pastelGreen: '#cfe6d2',
@@ -43,6 +43,30 @@ export const colors = {
   pastelLavender: '#e1d8f5',
   pastelPeach: '#fde3cf',
 } as const;
+
+/**
+ * One color per calendar month (Jan = index 0), for Calendar's month
+ * title -- a lightweight way to make each month visually distinct at a
+ * glance while flipping through them. These are deliberately darker/more
+ * saturated than the `pastelX` block colors above -- those are only ever
+ * used as light backgrounds with dark text on top; this is standalone
+ * 28px text directly on `colors.bg`, so it needs real contrast rather
+ * than a near-white pastel disappearing into the page.
+ */
+export const monthColors: readonly string[] = [
+  '#5b84ab', // Jan
+  '#8f6fc0', // Feb
+  '#4f9468', // Mar
+  '#3f9c85', // Apr
+  '#b98f1f', // May
+  '#d1793f', // Jun
+  '#d16b62', // Jul
+  '#a98a4c', // Aug
+  '#cf6f8d', // Sep
+  '#c85f52', // Oct
+  '#7c62a8', // Nov
+  '#4f83a8', // Dec
+];
 
 export const font = {
   regular: 'Archivo_400Regular',
