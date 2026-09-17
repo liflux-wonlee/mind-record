@@ -79,7 +79,7 @@ export default function AccountScreen() {
   };
 
   return (
-    <Screen>
+    <Screen showAccount={false}>
       <Kicker style={{ color: colors.neutral600 }}>Account</Kicker>
 
       <View style={styles.profile}>

@@ -1,11 +1,16 @@
 /**
  * Screen shell — the device-safe top inset plus the prototype's
- * `padding: 8px 20px 20px` page box.
+ * `padding: 8px 20px 20px` page box. Also the single place the Account
+ * icon is rendered from, so it shows up top-right on every real screen
+ * without every screen having to build its own header row for it.
  */
+import { useRouter } from 'expo-router';
 import React from 'react';
-import { ScrollView, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
+import { Pressable, ScrollView, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { AccountIcon } from '@/components/Icon';
+import { useAuth } from '@/providers/AuthProvider';
 import { GUTTER, colors } from '@/theme';
 
 export function Screen({
@@ -25,6 +30,10 @@ export function Screen({
   safeBottom = false,
   /** Base bottom padding before any safe-area inset from `safeBottom` is added. */
   bottomPadding = 20,
+  /** Off on screens that already have their own top-right control in that
+   *  corner (Talk's mode toggle + Save-only button) or before a session
+   *  exists (login/email-auth) -- everywhere else, on by default. */
+  showAccount = true,
   style,
   contentStyle,
 }: {
@@ -34,10 +43,13 @@ export function Screen({
   padded?: boolean;
   safeBottom?: boolean;
   bottomPadding?: number;
+  showAccount?: boolean;
   style?: StyleProp<ViewStyle>;
   contentStyle?: StyleProp<ViewStyle>;
 }) {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
+  const { user } = useAuth();
   const background = dark ? colors.neutral900 : colors.bg;
 
   const box: StyleProp<ViewStyle> = [
@@ -60,6 +72,21 @@ export function Screen({
       ) : (
         <View style={[styles.flex, box]}>{children}</View>
       )}
+
+      {showAccount && user ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Account"
+          onPress={() => router.push('/account')}
+          style={({ pressed }) => [
+            styles.accountButton,
+            { top: insets.top + 8 },
+            pressed && { opacity: 0.7 },
+          ]}
+        >
+          <AccountIcon size={20} color={colors.accent800} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -75,5 +102,15 @@ const styles = StyleSheet.create({
     paddingTop: 8,
     // paddingBottom is set explicitly below (bottomPadding + safe-area inset).
     flexGrow: 1,
+  },
+  accountButton: {
+    position: 'absolute',
+    right: GUTTER,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.pastelYellow,
   },
 });

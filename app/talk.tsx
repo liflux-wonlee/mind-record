@@ -98,7 +98,7 @@ export default function TalkScreen() {
   };
 
   return (
-    <Screen scroll={false} safeBottom>
+    <Screen scroll={false} safeBottom showAccount={false}>
       <View style={styles.head}>
         <View style={styles.seg}>
           <SegOption

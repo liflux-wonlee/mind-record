@@ -1,19 +1,17 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
-import { AccountIcon, MicIcon } from '@/components/Icon';
+import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useRecentSessions } from '@/hooks/useRecentSessions';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
 import { deleteSession, listSessionsForDay, type Session } from '@/services/sessions';
-import { colors, font, h2 } from '@/theme';
+import { colors, font, h2, radius } from '@/theme';
 
-const RECENT_LIMIT_KEY = 'mindrecord.home.recentLimit';
-const RECENT_LIMIT_OPTIONS = [5, 10, 20] as const;
+const RECENT_LIMIT = 10;
 
 export default function HomeScreen() {
   const router = useRouter();
@@ -21,23 +19,8 @@ export default function HomeScreen() {
   const [firstName, setFirstName] = useState<string | null>(null);
   const [aiName, setAiName] = useState<string | null>(null);
   const [todayCount, setTodayCount] = useState<number | null>(null);
-  const [recentLimit, setRecentLimit] = useState<number>(5);
   const [menuSession, setMenuSession] = useState<Session | null>(null);
-  const recentSessions = useRecentSessions(recentLimit);
-
-  useEffect(() => {
-    AsyncStorage.getItem(RECENT_LIMIT_KEY).then((value) => {
-      const n = value ? parseInt(value, 10) : NaN;
-      if ((RECENT_LIMIT_OPTIONS as readonly number[]).includes(n)) setRecentLimit(n);
-    });
-  }, []);
-
-  const chooseRecentLimit = (n: number) => {
-    setRecentLimit(n);
-    AsyncStorage.setItem(RECENT_LIMIT_KEY, String(n)).catch(() => {
-      // Not critical -- worst case the choice doesn't survive a restart.
-    });
-  };
+  const recentSessions = useRecentSessions(RECENT_LIMIT);
 
   useFocusEffect(
     useCallback(() => {
@@ -117,14 +100,6 @@ export default function HomeScreen() {
     <Screen>
       <View style={styles.topRow}>
         <Kicker style={{ color: colors.neutral600 }}>{today}</Kicker>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Account"
-          onPress={() => router.push('/account')}
-          style={({ pressed }) => [styles.profileButton, pressed && { opacity: 0.6 }]}
-        >
-          <AccountIcon size={22} color={colors.text} />
-        </Pressable>
       </View>
 
       <View style={styles.micBlock}>
@@ -160,58 +135,41 @@ export default function HomeScreen() {
         </Pressable>
       ) : null}
 
-      <View style={styles.sectionHead}>
-        <Kicker style={{ color: colors.neutral600 }}>Recent conversations</Kicker>
-        <View style={styles.limitSeg}>
-          {RECENT_LIMIT_OPTIONS.map((n, i) => (
-            <Pressable
-              key={n}
-              accessibilityRole="radio"
-              accessibilityState={{ selected: recentLimit === n }}
-              onPress={() => chooseRecentLimit(n)}
-              style={[
-                styles.limitOpt,
-                i > 0 && styles.limitDivider,
-                recentLimit === n && { backgroundColor: colors.accent },
-              ]}
-            >
-              <Text style={[styles.limitText, recentLimit === n && { color: colors.bg }]}>{n}</Text>
-            </Pressable>
-          ))}
-        </View>
-      </View>
-      <RuleThick />
-      {recentSessions.status === 'loading' ? (
-        <View style={styles.sessionsCenter}>
-          <ActivityIndicator color={colors.accent} />
-        </View>
-      ) : recentSessions.status === 'error' ? (
-        <Text style={styles.sessionsEmpty}>Couldn&apos;t load recent sessions.</Text>
-      ) : recentSessions.sessions.length === 0 ? (
-        <Text style={styles.sessionsEmpty}>Nothing yet — tap the mic above to start your first session.</Text>
-      ) : (
-        recentSessions.sessions.map((session) => (
-          <Row
-            key={session.id}
-            onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
-            onLongPress={() => setMenuSession(session)}
-            style={styles.continueRow}
-          >
-            <Text style={styles.continueTitle} numberOfLines={1}>
-              {session.title ?? session.mode}
-            </Text>
-            <Text style={styles.continueMeta}>
-              {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-            </Text>
-          </Row>
-        ))
-      )}
+      <View style={styles.recentCard}>
+        <Kicker style={{ color: colors.neutral700 }}>Recent conversations</Kicker>
+        <Pressable onPress={() => router.push('/calendar')} style={{ marginTop: 6 }}>
+          <Text style={styles.footerLink}>
+            이전 기록은 기록 메뉴에서 날짜별로 확인할 수 있습니다. 전체 기록 보기 →
+          </Text>
+        </Pressable>
 
-      <Pressable onPress={() => router.push('/calendar')} style={{ marginTop: 4, paddingVertical: 10 }}>
-        <Text style={styles.footerLink}>
-          이전 기록은 기록 메뉴에서 날짜별로 확인할 수 있습니다. 전체 기록 보기 →
-        </Text>
-      </Pressable>
+        <RuleThick style={{ marginTop: 10 }} />
+        {recentSessions.status === 'loading' ? (
+          <View style={styles.sessionsCenter}>
+            <ActivityIndicator color={colors.accent} />
+          </View>
+        ) : recentSessions.status === 'error' ? (
+          <Text style={styles.sessionsEmpty}>Couldn&apos;t load recent sessions.</Text>
+        ) : recentSessions.sessions.length === 0 ? (
+          <Text style={styles.sessionsEmpty}>Nothing yet — tap the mic above to start your first session.</Text>
+        ) : (
+          recentSessions.sessions.map((session) => (
+            <Row
+              key={session.id}
+              onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
+              onLongPress={() => setMenuSession(session)}
+              style={styles.continueRow}
+            >
+              <Text style={styles.continueTitle} numberOfLines={1}>
+                {session.title ?? session.mode}
+              </Text>
+              <Text style={styles.continueMeta}>
+                {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+              </Text>
+            </Row>
+          ))
+        )}
+      </View>
 
       <Modal
         visible={menuSession !== null}
@@ -258,12 +216,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  profileButton: {
-    minHeight: 44,
-    minWidth: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   micBlock: {
     marginTop: 16,
     alignItems: 'center',
@@ -297,33 +249,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.accent700,
   },
-  sectionHead: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  recentCard: {
     marginTop: 20,
-  },
-  limitSeg: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: colors.divider,
-    overflow: 'hidden',
-  },
-  limitOpt: {
-    minHeight: 28,
-    minWidth: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 8,
-  },
-  limitDivider: {
-    borderLeftWidth: 1,
-    borderLeftColor: colors.divider,
-  },
-  limitText: {
-    fontFamily: font.semibold,
-    fontSize: 11,
-    color: colors.text,
+    borderRadius: radius.pastel,
+    padding: 14,
+    backgroundColor: colors.pastelYellow,
   },
   continueRow: {
     flexDirection: 'row',

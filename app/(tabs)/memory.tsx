@@ -15,7 +15,6 @@ import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
-import { deleteMemory, listRecentMemories, type Memory } from '@/services/memories';
 import {
   createTopic,
   deleteTopic,
@@ -27,11 +26,6 @@ import {
   type Topic,
 } from '@/services/topics';
 import { colors, font, h2 } from '@/theme';
-
-function truncate(text: string, max = 60): string {
-  const trimmed = text.trim().replace(/\s+/g, ' ');
-  return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
-}
 
 type Sheet =
   | { kind: 'menu'; topic: Topic }
@@ -61,10 +55,6 @@ export default function MemoryScreen() {
     });
   };
 
-  const [recentMemories, setRecentMemories] = useState<Memory[]>([]);
-  const [memoriesLoading, setMemoriesLoading] = useState(true);
-  const [memoriesError, setMemoriesError] = useState<string | null>(null);
-
   const reload = useCallback(() => {
     if (!user) return;
     setLoading(true);
@@ -79,40 +69,6 @@ export default function MemoryScreen() {
       reload();
     }, [reload])
   );
-
-  const loadMemories = useCallback(() => {
-    if (!user) return;
-    setMemoriesLoading(true);
-    setMemoriesError(null);
-    listRecentMemories(user.id, 5)
-      .then(setRecentMemories)
-      .catch((e) => setMemoriesError(e instanceof Error ? e.message : 'Could not load recent ideas.'))
-      .finally(() => setMemoriesLoading(false));
-  }, [user]);
-
-  useFocusEffect(
-    useCallback(() => {
-      loadMemories();
-    }, [loadMemories])
-  );
-
-  const confirmDeleteMemory = (memory: Memory) => {
-    Alert.alert(
-      'Delete this idea?',
-      `"${truncate(memory.content, 80)}" will be permanently deleted.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () =>
-            deleteMemory(memory.id)
-              .then(loadMemories)
-              .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
-        },
-      ]
-    );
-  };
 
   const roots = topics.filter((t) => !t.parent_topic_id);
   const childrenOf = (id: string) => topics.filter((t) => t.parent_topic_id === id);
@@ -203,50 +159,6 @@ export default function MemoryScreen() {
           );
         })
       )}
-
-      <Kicker style={{ color: colors.neutral600, marginTop: 20 }}>Recent ideas</Kicker>
-      <RuleThick style={{ marginTop: 6 }} />
-      {memoriesLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.accent} />
-        </View>
-      ) : memoriesError ? (
-        <Text style={styles.empty}>{memoriesError}</Text>
-      ) : recentMemories.length === 0 ? (
-        <Text style={styles.empty}>No ideas captured yet — they&apos;ll show up here after a session.</Text>
-      ) : (
-        recentMemories.map((memory) => (
-          <Row
-            key={memory.id}
-            onPress={
-              memory.source_session_id
-                ? () => router.push({ pathname: '/summary', params: { sessionId: memory.source_session_id! } })
-                : undefined
-            }
-            onLongPress={() => confirmDeleteMemory(memory)}
-            style={styles.listRow}
-          >
-            <Text style={styles.listTitle} numberOfLines={1}>
-              {truncate(memory.content)}
-            </Text>
-            <Text style={styles.listMeta}>
-              {new Date(memory.created_at).toLocaleDateString(undefined, {
-                month: 'short',
-                day: 'numeric',
-              })}
-            </Text>
-          </Row>
-        ))
-      )}
-
-      <Kicker style={{ color: colors.neutral600, marginTop: 20 }}>Journal</Kicker>
-      <RuleThick style={{ marginTop: 6 }} />
-      <Row onPress={() => router.push('/journal')} style={styles.listRow}>
-        <Text style={styles.listTitle}>
-          {new Date().toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}
-        </Text>
-        <Text style={styles.listMeta}>today</Text>
-      </Row>
 
       {/* Action menu for a tapped topic */}
       <ActionModal visible={sheet?.kind === 'menu'} onClose={closeSheet} title={sheet?.kind === 'menu' ? sheet.topic.name : ''}>
@@ -471,27 +383,6 @@ const styles = StyleSheet.create({
     fontFamily: font.semibold,
     fontSize: 14,
     color: colors.neutral800,
-  },
-  listRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 8,
-    minHeight: 48,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  listTitle: {
-    flex: 1,
-    fontFamily: font.semibold,
-    fontSize: 15,
-    color: colors.text,
-  },
-  listMeta: {
-    flexShrink: 0,
-    fontFamily: font.regular,
-    fontSize: 11,
-    color: colors.neutral600,
   },
   backdrop: {
     flex: 1,

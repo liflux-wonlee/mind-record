@@ -7,10 +7,22 @@ import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
 import { deleteSession, listSessionsInMonth, listSessionsPage, type Session } from '@/services/sessions';
-import { colors, font, h2, monthColors } from '@/theme';
+import { colors, font, h2, monthColors, radius } from '@/theme';
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 const LIST_PAGE_SIZE = 30;
+
+const CARD_COLORS = [
+  colors.pastelPink,
+  colors.pastelBlue,
+  colors.pastelGreen,
+  colors.pastelYellow,
+  colors.pastelLavender,
+  colors.pastelPeach,
+];
+function cardColor(i: number): string {
+  return CARD_COLORS[i % CARD_COLORS.length];
+}
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
@@ -262,12 +274,12 @@ export default function RecordsScreen() {
               </View>
 
               <RuleThick style={{ marginTop: 6 }} />
-              {dayConversations.map((session) => (
+              {dayConversations.map((session, i) => (
                 <Row
                   key={session.id}
                   onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
                   onLongPress={() => confirmDeleteSession(session, loadMonth)}
-                  style={styles.convo}
+                  style={[styles.convo, { backgroundColor: cardColor(i) }]}
                 >
                   <Text style={styles.convoTime}>
                     {new Date(session.started_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
@@ -296,12 +308,12 @@ export default function RecordsScreen() {
           ) : (
             <>
               <RuleThick style={{ marginTop: 10 }} />
-              {listSessions.map((session) => (
+              {listSessions.map((session, i) => (
                 <Row
                   key={session.id}
                   onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
                   onLongPress={() => confirmDeleteSession(session, loadList)}
-                  style={styles.convo}
+                  style={[styles.convo, { backgroundColor: cardColor(i) }]}
                 >
                   <Text style={styles.convoDate}>
                     {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
@@ -471,9 +483,9 @@ const styles = StyleSheet.create({
   convo: {
     flexDirection: 'row',
     gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    padding: 12,
+    marginBottom: 8,
+    borderRadius: radius.pastel,
   },
   convoTime: {
     width: 64,
