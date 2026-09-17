@@ -93,7 +93,11 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   const endConversation = useCallback(async (): Promise<string | null> => {
     activeRef.current = false;
     if (recorderState.isRecording) {
-      await recorder.stop();
+      try {
+        await recorder.stop();
+      } catch {
+        // Best-effort -- we're ending the conversation either way.
+      }
     }
     player.pause();
 
@@ -122,7 +126,11 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   const cancelConversation = useCallback(async (): Promise<void> => {
     activeRef.current = false;
     if (recorderState.isRecording) {
-      await recorder.stop();
+      try {
+        await recorder.stop();
+      } catch {
+        // Best-effort -- discarding the conversation either way.
+      }
     }
     player.pause();
     const sessionId = sessionIdRef.current;
@@ -165,7 +173,14 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     const sessionId = sessionIdRef.current;
     if (!sessionId) return;
 
-    await recorder.stop();
+    try {
+      await recorder.stop();
+    } catch {
+      // The native recorder can throw on stop (e.g. it was already
+      // winding down on its own) -- press on and try to use whatever it
+      // captured rather than leaving the turn stuck on "Listening…"
+      // forever, which is what silently swallowing this used to do.
+    }
     setState('thinking');
 
     try {

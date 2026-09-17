@@ -60,7 +60,13 @@ export function useCaptureSession() {
   /** Starts recording, or stops it. Returns true when this call stopped it. */
   const toggleRecording = useCallback(async (): Promise<boolean> => {
     if (recorder.isRecording) {
-      await recorder.stop();
+      try {
+        await recorder.stop();
+      } catch {
+        // The native recorder can throw on stop (e.g. it was already
+        // winding down on its own) -- treat it as stopped either way
+        // rather than leaving the UI stuck mid-recording.
+      }
       await uploadCurrentSegment();
       return true;
     }
@@ -95,7 +101,11 @@ export function useCaptureSession() {
    *  recorded), so the caller can pass it to Summary. */
   const endCapture = useCallback(async (): Promise<string | null> => {
     if (recorder.isRecording) {
-      await recorder.stop();
+      try {
+        await recorder.stop();
+      } catch {
+        // Best-effort -- we still want to upload/save whatever was captured.
+      }
       await uploadCurrentSegment();
     }
     const sessionId = sessionIdRef.current;
@@ -125,7 +135,11 @@ export function useCaptureSession() {
    *  was recorded. */
   const cancelCapture = useCallback(async (): Promise<void> => {
     if (recorder.isRecording) {
-      await recorder.stop();
+      try {
+        await recorder.stop();
+      } catch {
+        // Best-effort -- discarding the session either way.
+      }
     }
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;

@@ -10,15 +10,22 @@ import { useConversationSession } from '@/hooks/useConversationSession';
 import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
-import { colors, font } from '@/theme';
+import { colors, font, radius } from '@/theme';
 
 type ScreenMode = 'capture' | 'conv';
 
 export default function TalkScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const { autoStart, mode: initialMode } = useLocalSearchParams<{ autoStart?: string; mode?: string }>();
-  const [mode, setMode] = useState<ScreenMode>(initialMode === 'conv' ? 'conv' : 'capture');
+  const { mode: initialMode } = useLocalSearchParams<{ mode?: string }>();
+  // No mode in the params (the plain mic button on Home, or "Keep talking" /
+  // Search's voice button) -> ask which one before touching the mic at all.
+  // Once a mode is picked there is no way back -- switching mid-session
+  // would orphan whichever recording already started, so this is a
+  // one-time choice rather than a toggle.
+  const [mode, setMode] = useState<ScreenMode | null>(
+    initialMode === 'conv' ? 'conv' : initialMode === 'capture' ? 'capture' : null
+  );
   const [aiName, setAiName] = useState<string | null>(null);
 
   useEffect(() => {
@@ -37,16 +44,13 @@ export default function TalkScreen() {
 
   const captureStarted = capture.everRecorded;
   const conversationStarted = conversation.turns.length > 0 || conversation.state !== 'idle';
-  // Switching modes mid-flow would orphan whichever session already
-  // started -- once either has begun, the toggle stops responding.
-  const modeLocked = mode === 'capture' ? captureStarted : conversationStarted;
 
-  const didAutoStart = useRef(false);
-  useEffect(() => {
-    if (didAutoStart.current || autoStart !== '1' || mode !== 'capture' || captureStarted) return;
-    didAutoStart.current = true;
-    capture.toggleRecording();
-  }, [autoStart, mode, captureStarted, capture]);
+  const pickMode = (picked: ScreenMode) => {
+    setMode(picked);
+    if (picked === 'capture') {
+      capture.toggleRecording();
+    }
+  };
 
   const onToggleRecording = async () => {
     const stopped = await capture.toggleRecording();
@@ -97,23 +101,18 @@ export default function TalkScreen() {
     router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
   };
 
+  if (mode === null) {
+    return (
+      <Screen scroll={false} safeBottom showAccount={false}>
+        <ModePicker onCancel={dismissToTabs} onPick={pickMode} />
+      </Screen>
+    );
+  }
+
   return (
     <Screen scroll={false} safeBottom showAccount={false}>
-      <View style={styles.head}>
-        <View style={styles.seg}>
-          <SegOption
-            label="Capture"
-            selected={mode === 'capture'}
-            onPress={() => !modeLocked && setMode('capture')}
-          />
-          <SegOption
-            label="Conversation"
-            selected={mode === 'conv'}
-            onPress={() => !modeLocked && setMode('conv')}
-            divided
-          />
-        </View>
-        {mode === 'capture' ? (
+      {mode === 'capture' ? (
+        <View style={styles.head}>
           <Button
             variant="ghost"
             label="Save only"
@@ -126,8 +125,8 @@ export default function TalkScreen() {
               color: capture.saveOnly ? colors.accent : colors.neutral600,
             }}
           />
-        ) : null}
-      </View>
+        </View>
+      ) : null}
 
       {mode === 'capture' ? (
         <CapturePanel capture={capture} onToggleRecording={onToggleRecording} onCancel={onCancelCapture} />
@@ -195,7 +194,7 @@ const STATE_LABEL: Record<string, string> = {
 
 const TALK_BUTTON_LABEL: Record<string, string> = {
   idle: '말하기',
-  recording: 'Listening… (pauses when you stop talking)',
+  recording: 'Listening… tap to stop',
   thinking: 'Thinking…',
   speaking: 'Speaking…',
 };
@@ -285,59 +284,73 @@ function ConversationPanel({
   );
 }
 
-function SegOption({
-  label,
-  selected,
-  onPress,
-  divided,
+function ModePicker({
+  onPick,
+  onCancel,
 }: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-  divided?: boolean;
+  onPick: (mode: ScreenMode) => void;
+  onCancel: () => void;
 }) {
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={[
-        styles.segOpt,
-        divided && styles.segDivider,
-        selected && { backgroundColor: colors.accent },
-      ]}
-    >
-      <Text style={[styles.segText, selected && { color: colors.bg }]}>{label}</Text>
-    </Pressable>
+    <View style={styles.pickerWrap}>
+      <Text style={styles.pickerTitle}>어떻게 이야기할까요?</Text>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => onPick('conv')}
+        style={({ pressed }) => [styles.pickerCard, { backgroundColor: colors.pastelBlue }, pressed && styles.pickerCardPressed]}
+      >
+        <Text style={styles.pickerCardTitle}>Conversation</Text>
+        <Text style={styles.pickerCardDesc}>한 마디씩 주고받아요. 말을 멈추면 AI가 바로 답해요.</Text>
+      </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => onPick('capture')}
+        style={({ pressed }) => [styles.pickerCard, { backgroundColor: colors.pastelGreen }, pressed && styles.pickerCardPressed]}
+      >
+        <Text style={styles.pickerCardTitle}>Capture</Text>
+        <Text style={styles.pickerCardDesc}>끊기지 않고 하고 싶은 말을 쭉 녹음해요.</Text>
+      </Pressable>
+      <Button variant="ghost" label="Cancel" align="flex-start" onPress={onCancel} style={{ marginTop: 8 }} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   head: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'flex-end',
     alignItems: 'center',
   },
-  seg: {
-    flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: colors.divider,
-    overflow: 'hidden',
-  },
-  segOpt: {
-    minHeight: 36,
+  pickerWrap: {
+    flex: 1,
     justifyContent: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 7,
+    gap: 14,
   },
-  segDivider: {
-    borderLeftWidth: 1,
-    borderLeftColor: colors.divider,
-  },
-  segText: {
-    fontFamily: font.regular,
-    fontSize: 13,
+  pickerTitle: {
+    fontFamily: font.extrabold,
+    fontSize: 22,
     color: colors.text,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  pickerCard: {
+    borderRadius: radius.pastel,
+    padding: 20,
+    gap: 6,
+  },
+  pickerCardPressed: {
+    opacity: 0.8,
+  },
+  pickerCardTitle: {
+    fontFamily: font.extrabold,
+    fontSize: 20,
+    color: colors.text,
+  },
+  pickerCardDesc: {
+    fontFamily: font.regular,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.neutral700,
   },
   statusRow: {
     marginTop: 22,
