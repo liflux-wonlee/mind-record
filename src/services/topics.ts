@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import type { Session } from '@/services/sessions';
 import type { Database } from '@/types/database';
 
 export type Topic = Database['public']['Tables']['topics']['Row'];
@@ -109,6 +110,67 @@ export async function confirmTopicSuggestion(
 export async function deleteTopic(topicId: string): Promise<void> {
   const { error } = await supabase.from('topics').delete().eq('id', topicId);
   if (error) throw error;
+}
+
+/**
+ * Every id in the subtree rooted at `topicId` (itself included) -- used so
+ * "include sub-topics" on Topics' detail view can query tasks/memories/
+ * sessions across the whole branch in one shot, from the flat `topics`
+ * list already loaded client-side (no need for a recursive DB query).
+ */
+export function descendantTopicIds(topics: Topic[], topicId: string): string[] {
+  const ids = [topicId];
+  const children = topics.filter((t) => t.parent_topic_id === topicId);
+  for (const child of children) ids.push(...descendantTopicIds(topics, child.id));
+  return ids;
+}
+
+/** Sessions tagged with any of these topics (via `session_topics`), most recent first. */
+export async function listSessionsByTopics(topicIds: string[]): Promise<Session[]> {
+  if (topicIds.length === 0) return [];
+  const { data: links, error: linksError } = await supabase
+    .from('session_topics')
+    .select('session_id')
+    .in('topic_id', topicIds);
+  if (linksError) throw linksError;
+  const sessionIds = [...new Set((links ?? []).map((l) => l.session_id))];
+  if (sessionIds.length === 0) return [];
+
+  const { data: sessions, error: sessionsError } = await supabase
+    .from('sessions')
+    .select('*')
+    .in('id', sessionIds)
+    .order('started_at', { ascending: false });
+  if (sessionsError) throw sessionsError;
+  return sessions;
+}
+
+/**
+ * Sessions with no `session_topics` link at all -- Topics' "Unclassified"
+ * view. Two round trips (ids, then the diff) rather than a single query,
+ * since Postgrest can't express "not linked in another table" directly;
+ * capped at the 200 most recent so this stays a quick client-side diff.
+ */
+export async function listSessionsUnclassified(userId: string): Promise<Session[]> {
+  const { data: recent, error: recentError } = await supabase
+    .from('sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .order('started_at', { ascending: false })
+    .limit(200);
+  if (recentError) throw recentError;
+  if (!recent || recent.length === 0) return [];
+
+  const { data: links, error: linksError } = await supabase
+    .from('session_topics')
+    .select('session_id')
+    .in(
+      'session_id',
+      recent.map((s) => s.id)
+    );
+  if (linksError) throw linksError;
+  const classified = new Set((links ?? []).map((l) => l.session_id));
+  return recent.filter((s) => !classified.has(s.id));
 }
 
 export async function listSessionTopics(sessionId: string): Promise<Topic[]> {

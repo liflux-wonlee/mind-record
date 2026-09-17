@@ -53,6 +53,29 @@ export async function listSessionsInMonth(userId: string, year: number, month: n
   return data;
 }
 
+/**
+ * Records' List view -- pages through EVERY session, oldest never falling
+ * out of reach the way Home's `listRecentSessions`/`listSessionsInMonth`
+ * top out. `before` is the `started_at` of the last row already loaded
+ * (an ISO timestamp cursor, not an offset) so a page boundary landing
+ * mid-second can't skip or repeat a row.
+ */
+export async function listSessionsPage(
+  userId: string,
+  { before, limit = 20 }: { before?: string; limit?: number } = {}
+): Promise<Session[]> {
+  let query = supabase
+    .from('sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .order('started_at', { ascending: false })
+    .limit(limit);
+  if (before) query = query.lt('started_at', before);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
 export async function getSession(sessionId: string): Promise<Session | null> {
   const { data, error } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
   if (error) throw error;

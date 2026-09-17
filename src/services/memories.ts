@@ -54,11 +54,47 @@ export async function listMemoriesPendingTopicReview(userId: string): Promise<Me
   return data;
 }
 
+/** Ideas filed under any of these topics -- callers pass a topic plus its descendant ids to include sub-topics. */
+export async function listMemoriesByTopics(topicIds: string[]): Promise<Memory[]> {
+  if (topicIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from('memories')
+    .select('*')
+    .in('topic_id', topicIds)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+/** Ideas with no topic at all -- Topics' "Unclassified" view (absorbs the old standalone Inbox). */
+export async function listMemoriesUnclassified(userId: string): Promise<Memory[]> {
+  const { data, error } = await supabase
+    .from('memories')
+    .select('*')
+    .eq('user_id', userId)
+    .is('topic_id', null)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
 /** Confirms a memory's AI-suggested topic (or a different one the user picked instead). */
 export async function assignMemoryTopic(memoryId: string, topicId: string): Promise<Memory> {
   const { data, error } = await supabase
     .from('memories')
     .update({ topic_id: topicId, topic_suggestion: null })
+    .eq('id', memoryId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Removes this idea from its topic -- the idea itself is kept, just untagged. */
+export async function clearMemoryTopic(memoryId: string): Promise<Memory> {
+  const { data, error } = await supabase
+    .from('memories')
+    .update({ topic_id: null })
     .eq('id', memoryId)
     .select()
     .single();

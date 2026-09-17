@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
@@ -49,6 +50,16 @@ export default function MemoryScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [sheet, setSheet] = useState<Sheet>(null);
   const [busy, setBusy] = useState(false);
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
+  const toggleCollapsed = (id: string) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const [recentMemories, setRecentMemories] = useState<Memory[]>([]);
   const [memoriesLoading, setMemoriesLoading] = useState(true);
@@ -123,7 +134,7 @@ export default function MemoryScreen() {
 
   return (
     <Screen>
-      <Kicker style={{ color: colors.neutral600 }}>Memory</Kicker>
+      <Kicker style={{ color: colors.neutral600 }}>Topics</Kicker>
       <View style={styles.titleRow}>
         <Text style={styles.title}>Topics</Text>
         <Button
@@ -137,6 +148,10 @@ export default function MemoryScreen() {
 
       <RuleThick />
 
+      <Row onPress={() => router.push('/topic?unclassified=1')} style={styles.topicRow}>
+        <Text style={[styles.topicName, { color: colors.neutral700 }]}>Unclassified</Text>
+      </Row>
+
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator color={colors.accent} />
@@ -146,22 +161,47 @@ export default function MemoryScreen() {
       ) : roots.length === 0 ? (
         <Text style={styles.empty}>No topics yet — create one, or just talk and one will get suggested.</Text>
       ) : (
-        roots.map((topic) => (
-          <View key={topic.id}>
-            <Row onLongPress={() => setSheet({ kind: 'menu', topic })} style={styles.topicRow}>
-              <Text style={styles.topicName}>{topic.name}</Text>
-            </Row>
-            {childrenOf(topic.id).map((child) => (
+        roots.map((topic) => {
+          const children = childrenOf(topic.id);
+          const isCollapsed = collapsed.has(topic.id);
+          return (
+            <View key={topic.id}>
               <Row
-                key={child.id}
-                onLongPress={() => setSheet({ kind: 'menu', topic: child })}
-                style={[styles.topicRow, styles.childRow]}
+                onPress={() => router.push(`/topic?id=${topic.id}`)}
+                onLongPress={() => setSheet({ kind: 'menu', topic })}
+                style={styles.topicRow}
               >
-                <Text style={styles.childName}>{child.name}</Text>
+                {children.length > 0 ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={isCollapsed ? 'Expand' : 'Collapse'}
+                    hitSlop={10}
+                    onPress={() => toggleCollapsed(topic.id)}
+                    style={styles.chevron}
+                  >
+                    <View style={isCollapsed ? undefined : styles.chevronOpen}>
+                      <ChevronRightIcon size={14} color={colors.neutral600} />
+                    </View>
+                  </Pressable>
+                ) : (
+                  <View style={styles.chevron} />
+                )}
+                <Text style={styles.topicName}>{topic.name}</Text>
               </Row>
-            ))}
-          </View>
-        ))
+              {!isCollapsed &&
+                children.map((child) => (
+                  <Row
+                    key={child.id}
+                    onPress={() => router.push(`/topic?id=${child.id}`)}
+                    onLongPress={() => setSheet({ kind: 'menu', topic: child })}
+                    style={[styles.topicRow, styles.childRow]}
+                  >
+                    <Text style={styles.childName}>{child.name}</Text>
+                  </Row>
+                ))}
+            </View>
+          );
+        })
       )}
 
       <Kicker style={{ color: colors.neutral600, marginTop: 20 }}>Recent ideas</Kicker>
@@ -403,13 +443,23 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   topicRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     minHeight: 52,
-    justifyContent: 'center',
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
   },
+  chevron: {
+    width: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chevronOpen: {
+    transform: [{ rotate: '90deg' }],
+  },
   childRow: {
-    paddingLeft: 16,
+    paddingLeft: 28,
     minHeight: 44,
   },
   topicName: {

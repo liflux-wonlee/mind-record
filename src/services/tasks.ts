@@ -62,6 +62,30 @@ export async function createTask(
   return data;
 }
 
+/** Tasks filed under any of these topics -- callers pass a topic plus its descendant ids to include sub-topics. */
+export async function listTasksByTopics(topicIds: string[]): Promise<Task[]> {
+  if (topicIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .in('topic_id', topicIds)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+/** Tasks with no topic at all -- Topics' "Unclassified" view (absorbs the old standalone Inbox). */
+export async function listTasksUnclassified(userId: string): Promise<Task[]> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .select('*')
+    .eq('user_id', userId)
+    .is('topic_id', null)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
 /** Confirms a task's AI-suggested topic (or a different one the user picked instead). */
 export async function assignTaskTopic(taskId: string, topicId: string): Promise<Task> {
   const { data, error } = await supabase
@@ -72,6 +96,23 @@ export async function assignTaskTopic(taskId: string, topicId: string): Promise<
     .single();
   if (error) throw error;
   return data;
+}
+
+/** Removes this task from its topic -- the task itself is kept, just untagged. */
+export async function clearTaskTopic(taskId: string): Promise<Task> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .update({ topic_id: null })
+    .eq('id', taskId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteTask(taskId: string): Promise<void> {
+  const { error } = await supabase.from('tasks').delete().eq('id', taskId);
+  if (error) throw error;
 }
 
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<Task> {
