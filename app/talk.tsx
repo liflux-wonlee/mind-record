@@ -18,7 +18,9 @@ export default function TalkScreen() {
   const [mode, setMode] = useState<ScreenMode>(initialMode === 'conv' ? 'conv' : 'capture');
 
   const capture = useCaptureSession();
-  const conversation = useConversationSession();
+  const conversation = useConversationSession((sessionId) => {
+    router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
+  });
 
   const captureStarted = capture.everRecorded;
   const conversationStarted = conversation.turns.length > 0 || conversation.state !== 'idle';
@@ -77,6 +79,11 @@ export default function TalkScreen() {
     ]);
   };
 
+  const onDoneConversation = async () => {
+    const sessionId = await conversation.endConversation();
+    router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
+  };
+
   return (
     <Screen scroll={false} safeBottom>
       <View style={styles.head}>
@@ -112,7 +119,11 @@ export default function TalkScreen() {
       {mode === 'capture' ? (
         <CapturePanel capture={capture} onToggleRecording={onToggleRecording} onCancel={onCancelCapture} />
       ) : (
-        <ConversationPanel conversation={conversation} onCancel={onCancelConversation} />
+        <ConversationPanel
+          conversation={conversation}
+          onCancel={onCancelConversation}
+          onDone={onDoneConversation}
+        />
       )}
     </Screen>
   );
@@ -178,9 +189,11 @@ const TALK_BUTTON_LABEL: Record<string, string> = {
 function ConversationPanel({
   conversation,
   onCancel,
+  onDone,
 }: {
   conversation: ReturnType<typeof useConversationSession>;
   onCancel: () => void;
+  onDone: () => void;
 }) {
   const { state, turns, startTurn, stopTurn } = conversation;
   const scrollRef = useRef<ScrollView>(null);
@@ -210,7 +223,8 @@ function ConversationPanel({
       >
         {turns.length === 0 ? (
           <Text style={styles.idle}>
-            말씀하세요. 잠깐 멈추면 자동으로 전송되고 AI가 대답합니다. 다시 눌러서 직접 끝낼 수도 있어요.
+            말씀하세요. 잠깐 멈추면 AI가 대답하고, 이후엔 자동으로 계속 대화가 이어집니다. &quot;저장하고
+            끝내&quot;라고 말하거나 Cancel을 눌러 마칠 수 있어요.
           </Text>
         ) : (
           turns.map((turn, i) => (
@@ -235,12 +249,20 @@ function ConversationPanel({
           style={[styles.micButton, { backgroundColor: state === 'recording' ? colors.neutral900 : colors.accent }]}
           textStyle={{ fontSize: 16 }}
         />
+      </View>
+      <View style={[styles.controls, { marginTop: 8 }]}>
         <Button
           variant="secondary"
           label="Cancel"
           onPress={onCancel}
           disabled={state === 'thinking'}
-          style={styles.cancelButton}
+          style={{ flex: 1, minHeight: 52 }}
+        />
+        <Button
+          label="Save & end"
+          onPress={onDone}
+          disabled={state === 'thinking'}
+          style={{ flex: 1, minHeight: 52, backgroundColor: colors.accent }}
         />
       </View>
     </>

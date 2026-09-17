@@ -1,7 +1,9 @@
-// One turn of the live, turn-based conversation in Talk's "Conversation"
+// One turn of the live, continuous conversation in Talk's "Conversation"
 // mode: transcribes the audio segment the client just uploaded, replies
 // using the session's full message history for context, and synthesizes
-// the reply as speech.
+// the reply as speech. Also decides whether the user just told it, in
+// plain speech, to end and save the conversation right now (`shouldEnd`)
+// -- the client auto-relistens after every reply unless that's set.
 //
 // Invoked by the app via
 //   supabase.functions.invoke('converse', { body: { sessionId, storagePath } })
@@ -78,9 +80,13 @@ Deno.serve(async (req) => {
     const userText = (await transcribeAudio(file, storagePath)).trim();
 
     let assistantText: string;
+    let shouldEnd = false;
     if (!userText) {
       assistantText = NOTHING_HEARD_REPLY;
     } else {
+      // The user's own words are saved before asking GPT for anything --
+      // if the reply generation below fails or times out, this turn's
+      // speech is still on record rather than lost with the request.
       await insertMessage(db, sessionId, user.id, 'user', userText);
 
       const { data: history, error: historyError } = await db
@@ -90,13 +96,15 @@ Deno.serve(async (req) => {
         .order('position', { ascending: true });
       if (historyError) throw historyError;
 
-      assistantText = await generateReply(history ?? []);
+      const reply = await generateReply(history ?? []);
+      assistantText = reply.reply;
+      shouldEnd = reply.end;
       await insertMessage(db, sessionId, user.id, 'assistant', assistantText);
     }
 
     const audioBase64 = await synthesizeSpeech(assistantText);
 
-    return json({ userText, assistantText, audioBase64 });
+    return json({ userText, assistantText, shouldEnd, audioBase64 });
   } catch (e) {
     console.error('converse failed:', e);
     return json({ error: errorMessage(e) }, 500);
@@ -140,7 +148,7 @@ async function transcribeAudio(file: Blob, storagePath: string): Promise<string>
   return data.text ?? '';
 }
 
-const SYSTEM_PROMPT = `You are the voice on the other end of a live conversation inside Mind Record, a voice-journaling app. The user is thinking out loud, like talking to a supportive friend while journaling -- your job is to listen and respond BRIEFLY (1-2 short, natural spoken sentences) so the conversation keeps flowing without you taking over it. This is read aloud by text-to-speech, so never use markdown, bullet points, or a written-essay register -- write the way a person actually talks.
+const SYSTEM_PROMPT = `You are the voice on the other end of a live, continuous conversation inside Mind Record, a voice-journaling app. The conversation auto-listens again after every reply you give -- the user never has to tap anything between turns, it just flows. The user is thinking out loud, like talking to a supportive friend while journaling -- your job is to listen and respond BRIEFLY (1-2 short, natural spoken sentences) so the conversation keeps flowing without you taking over it. This is read aloud by text-to-speech, so never use markdown, bullet points, or a written-essay register -- write the way a person actually talks.
 
 Reply in the SAME language the user is speaking (Korean if they're speaking Korean, English if English).
 
@@ -150,11 +158,15 @@ If they ask you to recap what they've said so far (e.g. "요약해줘", "summari
 
 If they mention wanting something filed under a specific topic/folder (e.g. "이건 Business 토픽에 넣어줘"), just acknowledge it naturally -- that instruction is picked up automatically when the conversation is organized afterwards, you don't need to do anything else about it.
 
-If they say they're done or ask how to end, tell them briefly to tap End when ready -- everything gets organized into tasks and topics automatically after that.
+Ending the conversation: set "end" to true ONLY when the user is clearly telling you, right now, to stop and save -- e.g. "저장하고 끝내", "그만할게", "끝낼게", "여기까지 할게", "save and end", "that's all for now". Give a brief, warm closing line as "reply" when you do (e.g. "네, 여기까지 저장할게요."). Do NOT set "end" to true just because ending was mentioned as a topic of what they're thinking about (e.g. "오늘 하루를 어떻게 마무리할지 고민했다" is content, not a command) -- only an actual instruction to you, right now, counts. When in doubt, treat it as content and keep "end" false; the user can always tap Cancel/End on screen themselves.
 
-Never invent facts about the user. Never break character to explain that you're an AI language model.`;
+Never invent facts about the user. Never break character to explain that you're an AI language model.
 
-async function generateReply(history: { role: string; content: string }[]): Promise<string> {
+Respond with strict JSON: { "reply": string, "end": boolean }`;
+
+async function generateReply(
+  history: { role: string; content: string }[]
+): Promise<{ reply: string; end: boolean }> {
   const messages = [
     { role: 'system', content: SYSTEM_PROMPT },
     ...history
@@ -168,7 +180,7 @@ async function generateReply(history: { role: string; content: string }[]): Prom
       Authorization: `Bearer ${OPENAI_API_KEY}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ model: 'gpt-4o-mini', messages }),
+    body: JSON.stringify({ model: 'gpt-4o-mini', response_format: { type: 'json_object' }, messages }),
   });
   if (!res.ok) {
     throw new Error(`AI reply failed (${res.status}): ${await res.text()}`);
@@ -178,7 +190,10 @@ async function generateReply(history: { role: string; content: string }[]): Prom
   if (typeof content !== 'string' || !content.trim()) {
     throw new Error('AI reply returned no content.');
   }
-  return content.trim();
+  const parsed = JSON.parse(content);
+  const reply = typeof parsed.reply === 'string' ? parsed.reply.trim() : '';
+  if (!reply) throw new Error('AI reply returned no content.');
+  return { reply, end: parsed.end === true };
 }
 
 async function synthesizeSpeech(text: string): Promise<string> {

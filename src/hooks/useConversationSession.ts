@@ -1,21 +1,22 @@
 /**
- * Backs Talk's Conversation mode: a real turn-based voice chat, not a
- * single continuous recording (see useCaptureSession.ts for that). Each
- * turn is its own short recording -- start, speak, and then either a pause
- * in speech auto-ends the turn, or the user taps the button to end it
- * manually -- which gets uploaded and sent to the `converse` Edge Function
- * (transcribe -> GPT reply, using the session's full message history for
- * context -> TTS). The reply is written to a local file (expo-file-system)
- * so expo-audio's player can play it back, then the turn loop returns to
- * idle for the next one.
+ * Backs Talk's Conversation mode: a real, continuous turn-based voice chat
+ * (not a single continuous recording -- see useCaptureSession.ts for
+ * that). The user taps once to begin; after that it's hands-free: speak,
+ * a pause auto-ends the turn (or the user can still tap to force it), the
+ * turn is sent to the `converse` Edge Function (transcribe -> GPT reply
+ * using the session's full message history for context -> TTS), the
+ * reply plays, and listening restarts automatically -- no tap needed
+ * between turns. It keeps going until the user says something like
+ * "저장하고 끝내" (converse's GPT call recognizes this and sets
+ * `shouldEnd`) or taps Cancel/End on screen.
  *
- * The auto-stop is a simple silence timer over the recorder's metering
- * (dB) level, not real voice-activity detection -- it's a heuristic tuned
- * for "a normal pause after finishing a sentence," and may need
- * SILENCE_THRESHOLD_DB/SILENCE_DURATION_MS adjusted after real-device
- * testing (too eager: cuts off mid-thought; too lax: never fires in a
- * noisy room). Tapping the button always still ends the turn immediately
- * as a manual override either way.
+ * The auto-stop-per-turn is a simple silence timer over the recorder's
+ * metering (dB) level, not real voice-activity detection -- it's a
+ * heuristic tuned for "a normal pause after finishing a sentence," and
+ * may need SILENCE_THRESHOLD_DB/SILENCE_DURATION_MS adjusted after
+ * real-device testing (too eager: cuts off mid-thought; too lax: never
+ * fires in a noisy room). Tapping the button always still ends the turn
+ * immediately as a manual override either way.
  *
  * expo-file-system's config plugin only adds Android storage permissions
  * and iOS document-sharing flags that this hook doesn't need -- it only
@@ -50,25 +51,33 @@ export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 const SILENCE_THRESHOLD_DB = -35;
 const SILENCE_DURATION_MS = 1500;
 
-export function useConversationSession() {
+async function withOneRetry<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch {
+    return await fn();
+  }
+}
+
+/** @param onAutoEnded called when the AI itself detected a spoken "end and save" -- after the closing reply finishes playing and the session is already saved/queued for processing. */
+export function useConversationSession(onAutoEnded?: (sessionId: string | null) => void) {
   const { user } = useAuth();
   const [state, setState] = useState<ConversationState>('idle');
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
   const sessionIdRef = useRef<string | null>(null);
   const hasSpokenRef = useRef(false);
   const silenceStartRef = useRef<number | null>(null);
+  // Once true, the loop keeps re-listening after every reply on its own.
+  const activeRef = useRef(false);
+  // Set right before returning to idle, so the *next* idle commit knows to auto-restart.
+  const autoRestartRef = useRef(false);
+  // Set when converse's GPT call says the user just asked to end and save.
+  const pendingEndRef = useRef(false);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 200);
   const player = useAudioPlayer(null);
   const playerStatus = useAudioPlayerStatus(player);
-
-  // A reply finishing playback hands the turn back to the user.
-  useEffect(() => {
-    if (state === 'speaking' && playerStatus.didJustFinish) {
-      setState('idle');
-    }
-  }, [state, playerStatus.didJustFinish]);
 
   const ensureSession = useCallback(async (): Promise<string | null> => {
     if (sessionIdRef.current || !user) return sessionIdRef.current;
@@ -76,6 +85,58 @@ export function useConversationSession() {
     sessionIdRef.current = session.id;
     return session.id;
   }, [user]);
+
+  /** Stops any in-flight turn/playback, ends the session, and kicks off
+   *  process-session in the background (it reuses the transcript already
+   *  captured turn-by-turn instead of re-transcribing). Returns the
+   *  session id (or null if the conversation never really started). */
+  const endConversation = useCallback(async (): Promise<string | null> => {
+    activeRef.current = false;
+    if (recorderState.isRecording) {
+      await recorder.stop();
+    }
+    player.pause();
+
+    const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
+    if (sessionId) {
+      try {
+        await endSession(sessionId);
+      } catch (e) {
+        Alert.alert('Could not finish saving', e instanceof Error ? e.message : 'Please try again.');
+      }
+      processSession(sessionId).catch((e) => {
+        Alert.alert(
+          'Could not process this recording',
+          e instanceof Error ? e.message : 'Please try again.'
+        );
+      });
+    }
+    return sessionId;
+  }, [recorder, recorderState.isRecording, player]);
+
+  /** Stops any in-flight turn/playback and discards the whole
+   *  conversation -- no processing, the audio and any transcript captured
+   *  so far are deleted. This is Cancel, not a quiet version of ending;
+   *  use endConversation to actually keep what was said. */
+  const cancelConversation = useCallback(async (): Promise<void> => {
+    activeRef.current = false;
+    if (recorderState.isRecording) {
+      await recorder.stop();
+    }
+    player.pause();
+    const sessionId = sessionIdRef.current;
+    sessionIdRef.current = null;
+    setTurns([]);
+    setState('idle');
+    if (sessionId) {
+      try {
+        await deleteSession(sessionId);
+      } catch {
+        // Best-effort -- the user is already leaving the screen either way.
+      }
+    }
+  }, [recorder, recorderState.isRecording, player]);
 
   const startTurn = useCallback(async () => {
     if (state !== 'idle') return;
@@ -92,6 +153,7 @@ export function useConversationSession() {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync({ isMeteringEnabled: true });
       recorder.record();
+      activeRef.current = true;
       setState('recording');
     } catch (e) {
       Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
@@ -110,7 +172,10 @@ export function useConversationSession() {
       const uri = recorder.uri;
       if (!uri) throw new Error('No audio was captured for that turn.');
       const attachment = await uploadRecording(user.id, sessionId, uri);
-      const result = await converseTurn(sessionId, attachment.storage_path);
+      // The audio is already safely uploaded by this point -- retrying
+      // just the transcribe+reply call costs nothing extra on a transient
+      // network hiccup instead of losing the turn outright.
+      const result = await withOneRetry(() => converseTurn(sessionId, attachment.storage_path));
 
       setTurns((prev) => {
         const next = [...prev];
@@ -118,6 +183,7 @@ export function useConversationSession() {
         next.push({ role: 'assistant', content: result.assistantText });
         return next;
       });
+      pendingEndRef.current = result.shouldEnd;
 
       const replyFile = new File(Paths.cache, `mind-record-reply-${Date.now()}.mp3`);
       replyFile.write(result.audioBase64, { encoding: 'base64' });
@@ -125,7 +191,11 @@ export function useConversationSession() {
       player.play();
       setState('speaking');
     } catch (e) {
-      Alert.alert('Could not process that', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert(
+        'Could not process that',
+        (e instanceof Error ? e.message : 'Please try again.') +
+          ' 이 발언은 저장되지 않았을 수 있어요.'
+      );
       setState('idle');
     }
   }, [state, user, recorder, player]);
@@ -156,55 +226,27 @@ export function useConversationSession() {
     }
   }, [state, recorderState.metering, stopTurn]);
 
-  /** Stops any in-flight turn/playback, ends the session, and kicks off
-   *  process-session in the background (it reuses the transcript already
-   *  captured turn-by-turn instead of re-transcribing). Returns the
-   *  session id (or null if the conversation never really started). */
-  const endConversation = useCallback(async (): Promise<string | null> => {
-    if (recorderState.isRecording) {
-      await recorder.stop();
+  // A reply finishing playback either closes out the conversation (the
+  // user just asked to end) or hands the turn back for another listen.
+  useEffect(() => {
+    if (state !== 'speaking' || !playerStatus.didJustFinish) return;
+    if (pendingEndRef.current) {
+      pendingEndRef.current = false;
+      setState('idle');
+      endConversation().then((sessionId) => onAutoEnded?.(sessionId));
+    } else {
+      autoRestartRef.current = activeRef.current;
+      setState('idle');
     }
-    player.pause();
+  }, [state, playerStatus.didJustFinish, endConversation, onAutoEnded]);
 
-    const sessionId = sessionIdRef.current;
-    sessionIdRef.current = null;
-    if (sessionId) {
-      try {
-        await endSession(sessionId);
-      } catch (e) {
-        Alert.alert('Could not finish saving', e instanceof Error ? e.message : 'Please try again.');
-      }
-      processSession(sessionId).catch((e) => {
-        Alert.alert(
-          'Could not process this recording',
-          e instanceof Error ? e.message : 'Please try again.'
-        );
-      });
+  // Once idle actually commits (not just requested), auto-relisten if flagged.
+  useEffect(() => {
+    if (state === 'idle' && autoRestartRef.current) {
+      autoRestartRef.current = false;
+      startTurn();
     }
-    return sessionId;
-  }, [recorder, recorderState.isRecording, player]);
-
-  /** Stops any in-flight turn/playback and discards the whole
-   *  conversation -- no processing, the audio and any transcript captured
-   *  so far are deleted. This is Cancel, not a quiet version of ending;
-   *  use endConversation to actually keep what was said. */
-  const cancelConversation = useCallback(async (): Promise<void> => {
-    if (recorderState.isRecording) {
-      await recorder.stop();
-    }
-    player.pause();
-    const sessionId = sessionIdRef.current;
-    sessionIdRef.current = null;
-    setTurns([]);
-    setState('idle');
-    if (sessionId) {
-      try {
-        await deleteSession(sessionId);
-      } catch {
-        // Best-effort -- the user is already leaving the screen either way.
-      }
-    }
-  }, [recorder, recorderState.isRecording, player]);
+  }, [state, startTurn]);
 
   return {
     state,

@@ -5,6 +5,8 @@ export type ConverseResult = {
   /** What Whisper heard for this turn -- empty if nothing intelligible was captured. */
   userText: string;
   assistantText: string;
+  /** True when the user just told the AI, in plain speech, to end and save right now. */
+  shouldEnd: boolean;
   /** Base64-encoded mp3 of `assistantText`, spoken via OpenAI TTS. */
   audioBase64: string;
 };
