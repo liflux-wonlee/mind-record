@@ -110,6 +110,20 @@ export async function clearTaskTopic(taskId: string): Promise<Task> {
   return data;
 }
 
+/** Edits a task's own fields -- title/description text, or its due date (pass `dueDate: null` to clear it). */
+export async function updateTask(
+  taskId: string,
+  input: { title?: string; description?: string | null; dueDate?: string | null }
+): Promise<Task> {
+  const patch: Database['public']['Tables']['tasks']['Update'] = {};
+  if (input.title !== undefined) patch.title = input.title;
+  if (input.description !== undefined) patch.description = input.description;
+  if (input.dueDate !== undefined) patch.due_date = input.dueDate;
+  const { data, error } = await supabase.from('tasks').update(patch).eq('id', taskId).select().single();
+  if (error) throw error;
+  return data;
+}
+
 export async function deleteTask(taskId: string): Promise<void> {
   const { error } = await supabase.from('tasks').delete().eq('id', taskId);
   if (error) throw error;

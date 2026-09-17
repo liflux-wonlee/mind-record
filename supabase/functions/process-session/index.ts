@@ -102,6 +102,15 @@ Deno.serve(async (req) => {
     return json({ error: 'Session not found.' }, 404);
   }
 
+  // A session that already finished processing must not be extracted
+  // again -- a retried upload, a duplicate invoke, or anything else that
+  // calls this a second time for the same session would otherwise create
+  // a second copy of every task/idea it already filed. This is a no-op,
+  // not an error: the session was already handled.
+  if (session.processing_status === 'done') {
+    return json({ status: 'done', summary: session.summary ?? '', taskCount: null, memoryCount: null });
+  }
+
   try {
     await db.from('sessions').update({ processing_status: 'transcribing' }).eq('id', sessionId);
 

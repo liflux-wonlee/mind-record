@@ -2,15 +2,12 @@ import { useFocusEffect } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, View } from 'react-native';
 
-import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
-import { Button, Kicker, Row, RuleThick } from '@/components/ui';
-import { prefGroups } from '@/data';
+import { Button, Kicker } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
 import { signOut } from '@/services/auth';
 import { getProfile, type Profile } from '@/services/profiles';
 import { getAccountStats, type AccountStats } from '@/services/stats';
-import { useApp } from '@/store';
 import { colors, font, radius } from '@/theme';
 
 function initials(name: string): string {
@@ -21,7 +18,6 @@ function initials(name: string): string {
 
 export default function AccountScreen() {
   const { user } = useAuth();
-  const { prefs, togglePref } = useApp();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [stats, setStats] = useState<AccountStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -100,45 +96,6 @@ export default function AccountScreen() {
         ))}
       </View>
 
-      {prefGroups.map((group) => (
-        <View key={group.name}>
-          <Kicker style={{ color: colors.neutral600, marginTop: 18 }}>{group.name}</Kicker>
-          <RuleThick style={{ marginTop: 6 }} />
-          {group.rows.map((row) => {
-            const on = row.kind === 'toggle' ? (prefs[row.key] ?? row.default) : false;
-            return (
-              <Row
-                key={row.label}
-                onPress={
-                  row.kind === 'toggle' ? () => togglePref(row.key, on) : () => undefined
-                }
-                style={styles.prefRow}
-              >
-                <View style={styles.prefLabels}>
-                  <Text style={styles.prefLabel}>{row.label}</Text>
-                  <Text style={styles.prefSub}>{row.sub}</Text>
-                </View>
-                {row.kind === 'toggle' ? (
-                  <View
-                    style={[
-                      styles.track,
-                      { backgroundColor: on ? colors.accent : colors.neutral300 },
-                    ]}
-                  >
-                    <View style={[styles.knob, { left: on ? 21 : 3 }]} />
-                  </View>
-                ) : (
-                  <View style={styles.prefValue}>
-                    <Text style={styles.prefValueText}>{row.value}</Text>
-                    <ChevronRightIcon size={16} color={colors.neutral700} />
-                  </View>
-                )}
-              </Row>
-            );
-          })}
-        </View>
-      ))}
-
       <Button
         variant="secondary"
         label={signingOut ? 'Signing out…' : 'Sign out'}
@@ -146,13 +103,6 @@ export default function AccountScreen() {
         disabled={signingOut}
         onPress={handleSignOut}
         style={styles.signOut}
-      />
-      <Button
-        variant="ghost"
-        label="Delete all my data"
-        align="flex-start"
-        style={styles.deleteData}
-        textStyle={{ color: colors.accent700 }}
       />
     </Screen>
   );
@@ -212,62 +162,9 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.text,
   },
-  prefRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 12,
-    minHeight: 52,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  prefLabels: {
-    flex: 1,
-    minWidth: 0,
-  },
-  prefLabel: {
-    fontFamily: font.semibold,
-    fontSize: 14,
-    lineHeight: 20,
-    color: colors.text,
-  },
-  prefSub: {
-    fontFamily: font.regular,
-    fontSize: 11,
-    lineHeight: 16,
-    color: colors.neutral700,
-  },
-  track: {
-    width: 44,
-    height: 26,
-    borderRadius: 13,
-  },
-  knob: {
-    position: 'absolute',
-    top: 3,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#fff',
-  },
-  prefValue: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  prefValueText: {
-    fontFamily: font.regular,
-    fontSize: 12,
-    color: colors.neutral700,
-  },
   signOut: {
     minHeight: 48,
     marginTop: 20,
     paddingHorizontal: 16,
-  },
-  deleteData: {
-    minHeight: 44,
-    marginTop: 4,
   },
 });

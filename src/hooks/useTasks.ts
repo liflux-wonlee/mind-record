@@ -8,7 +8,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 
 import { useAuth } from '@/providers/AuthProvider';
-import { createTask, listTasks, setTaskStatus, type Task } from '@/services/tasks';
+import { createTask, deleteTask, listTasks, setTaskStatus, updateTask, type Task } from '@/services/tasks';
 
 type State =
   | { status: 'loading' }
@@ -37,9 +37,9 @@ export function useTasks() {
   );
 
   const add = useCallback(
-    async (title: string) => {
+    async (title: string, dueDate?: string | null) => {
       if (!user) return;
-      const created = await createTask(user.id, { title });
+      const created = await createTask(user.id, { title, dueDate });
       setState((prev) => (prev.status === 'ready' ? { status: 'ready', tasks: [created, ...prev.tasks] } : prev));
     },
     [user]
@@ -55,11 +55,32 @@ export function useTasks() {
     );
   }, []);
 
+  const update = useCallback(
+    async (task: Task, input: { title?: string; dueDate?: string | null }) => {
+      const updated = await updateTask(task.id, input);
+      setState((prev) =>
+        prev.status === 'ready'
+          ? { status: 'ready', tasks: prev.tasks.map((t) => (t.id === updated.id ? updated : t)) }
+          : prev
+      );
+    },
+    []
+  );
+
+  const remove = useCallback(async (task: Task) => {
+    await deleteTask(task.id);
+    setState((prev) =>
+      prev.status === 'ready' ? { status: 'ready', tasks: prev.tasks.filter((t) => t.id !== task.id) } : prev
+    );
+  }, []);
+
   return {
     ...state,
     refresh: load,
     add,
     toggle,
+    update,
+    remove,
     openCount: state.status === 'ready' ? state.tasks.filter((t) => t.status === 'open').length : 0,
   };
 }
