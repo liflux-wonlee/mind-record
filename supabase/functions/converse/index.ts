@@ -161,7 +161,16 @@ async function transcribeAudio(file: Blob, storagePath: string): Promise<string>
     body: form,
   });
   if (!res.ok) {
-    throw new Error(`Whisper transcription failed (${res.status}): ${await res.text()}`);
+    const bodyText = await res.text();
+    // A turn that got cut essentially right as it started reads to Whisper
+    // as an empty/invalid-format file rather than a real 400 -- the client
+    // pads every stop to a safe minimum length now, but treat this as
+    // "nothing heard" rather than a hard failure either way, since a raw
+    // Whisper error dumped into an alert isn't actionable for the user.
+    if (res.status === 400 && /invalid file format|could not be decoded/i.test(bodyText)) {
+      return '';
+    }
+    throw new Error(`Whisper transcription failed (${res.status}): ${bodyText}`);
   }
   const data = await res.json();
   return data.text ?? '';

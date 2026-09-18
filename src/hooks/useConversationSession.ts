@@ -16,7 +16,12 @@
  * may need SILENCE_THRESHOLD_DB/SILENCE_DURATION_MS adjusted after
  * real-device testing (too eager: cuts off mid-thought; too lax: never
  * fires in a noisy room). Tapping the button always still ends the turn
- * immediately as a manual override either way.
+ * immediately as a manual override either way. The check itself runs on
+ * its own setInterval rather than off a useEffect keyed on the metering
+ * value -- during a real silence the metering level tends to settle on
+ * one repeated dB reading, and a value-keyed effect simply never re-fires
+ * when its dependency stops changing, which silently stalled the whole
+ * auto-stop path.
  *
  * expo-file-system's config plugin only adds Android storage permissions
  * and iOS document-sharing flags that this hook doesn't need -- it only
@@ -50,6 +55,10 @@ export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 // noise/breathing sits well below -35dB on a phone mic.
 const SILENCE_THRESHOLD_DB = -35;
 const SILENCE_DURATION_MS = 1500;
+// Stopping the native recorder within roughly the first second of starting
+// it can throw and/or leave a corrupt, zero-duration file behind (a known
+// Android MediaRecorder quirk) -- always pad a stop out to at least this long.
+const MIN_RECORDING_MS = 800;
 
 async function withOneRetry<T>(fn: () => Promise<T>): Promise<T> {
   try {
@@ -67,6 +76,17 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   const sessionIdRef = useRef<string | null>(null);
   const hasSpokenRef = useRef(false);
   const silenceStartRef = useRef<number | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
+  // Guards stopTurn against overlapping calls -- the silence interval below
+  // ticks every 200ms independent of how far a previous stopTurn() call has
+  // gotten, and `state` itself doesn't update until well after that call
+  // starts, so the `state !== 'recording'` check alone can't tell "already
+  // stopping" from "not yet stopped".
+  const stoppingRef = useRef(false);
+  // Mirrors the latest metering reading every render so the silence-check
+  // interval below always sees a fresh value without needing to be torn
+  // down and recreated on every single poll tick.
+  const meteringRef = useRef<number | undefined>(undefined);
   // Once true, the loop keeps re-listening after every reply on its own.
   const activeRef = useRef(false);
   // Set right before returning to idle, so the *next* idle commit knows to auto-restart.
@@ -76,6 +96,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 200);
+  meteringRef.current = recorderState.metering;
   const player = useAudioPlayer(null);
   const playerStatus = useAudioPlayerStatus(player);
 
@@ -161,6 +182,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync({ isMeteringEnabled: true });
       recorder.record();
+      recordingStartedAtRef.current = Date.now();
       activeRef.current = true;
       setState('recording');
     } catch (e) {
@@ -169,21 +191,27 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   }, [state, recorder, ensureSession]);
 
   const stopTurn = useCallback(async () => {
-    if (state !== 'recording' || !user) return;
+    if (state !== 'recording' || !user || stoppingRef.current) return;
     const sessionId = sessionIdRef.current;
     if (!sessionId) return;
+    stoppingRef.current = true;
 
     try {
-      await recorder.stop();
-    } catch {
-      // The native recorder can throw on stop (e.g. it was already
-      // winding down on its own) -- press on and try to use whatever it
-      // captured rather than leaving the turn stuck on "Listening…"
-      // forever, which is what silently swallowing this used to do.
-    }
-    setState('thinking');
+      const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
+      if (elapsed < MIN_RECORDING_MS) {
+        await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
+      }
 
-    try {
+      try {
+        await recorder.stop();
+      } catch {
+        // The native recorder can throw on stop (e.g. it was already
+        // winding down on its own) -- press on and try to use whatever it
+        // captured rather than leaving the turn stuck on "Listening…"
+        // forever, which is what silently swallowing this used to do.
+      }
+      setState('thinking');
+
       const uri = recorder.uri;
       if (!uri) throw new Error('No audio was captured for that turn.');
       const attachment = await uploadRecording(user.id, sessionId, uri);
@@ -212,34 +240,41 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
           ' 이 발언은 저장되지 않았을 수 있어요.'
       );
       setState('idle');
+    } finally {
+      stoppingRef.current = false;
     }
   }, [state, user, recorder, player]);
 
   // Auto-ends the turn after a pause in speech, so the user doesn't have
-  // to tap the button every time -- see the file header for the caveats.
+  // to tap the button every time -- see the file header for the caveats,
+  // and for why this runs on its own interval instead of a
+  // metering-value-keyed effect.
   useEffect(() => {
     if (state !== 'recording') {
       hasSpokenRef.current = false;
       silenceStartRef.current = null;
       return;
     }
-    const level = recorderState.metering;
-    if (level === undefined) return;
+    const timer = setInterval(() => {
+      const level = meteringRef.current;
+      if (level === undefined) return;
 
-    if (level > SILENCE_THRESHOLD_DB) {
-      hasSpokenRef.current = true;
-      silenceStartRef.current = null;
-      return;
-    }
-    if (!hasSpokenRef.current) return; // hasn't started talking yet -- don't count this as a pause
-    if (silenceStartRef.current === null) {
-      silenceStartRef.current = Date.now();
-      return;
-    }
-    if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
-      stopTurn();
-    }
-  }, [state, recorderState.metering, stopTurn]);
+      if (level > SILENCE_THRESHOLD_DB) {
+        hasSpokenRef.current = true;
+        silenceStartRef.current = null;
+        return;
+      }
+      if (!hasSpokenRef.current) return; // hasn't started talking yet -- don't count this as a pause
+      if (silenceStartRef.current === null) {
+        silenceStartRef.current = Date.now();
+        return;
+      }
+      if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
+        stopTurn();
+      }
+    }, 200);
+    return () => clearInterval(timer);
+  }, [state, stopTurn]);
 
   // A reply finishing playback either closes out the conversation (the
   // user just asked to end) or hands the turn back for another listen.

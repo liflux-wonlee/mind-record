@@ -23,11 +23,17 @@ import { processSession } from '@/services/processing';
 import { uploadRecording } from '@/services/recordings';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
+// Stopping the native recorder within roughly the first second of starting
+// it can throw and/or leave a corrupt, zero-duration file behind (a known
+// Android MediaRecorder quirk) -- always pad a stop out to at least this long.
+const MIN_RECORDING_MS = 800;
+
 export function useCaptureSession() {
   const { user } = useAuth();
   const [saveOnly, setSaveOnly] = useState(false);
   const [everRecorded, setEverRecorded] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
+  const recordingStartedAtRef = useRef<number | null>(null);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 200);
@@ -42,6 +48,24 @@ export function useCaptureSession() {
     sessionIdRef.current = session.id;
     return session.id;
   }, [user]);
+
+  /** Pads out to MIN_RECORDING_MS if needed, then stops -- a stop attempted
+   *  too soon after starting can throw and/or leave a corrupt, zero-duration
+   *  file behind, so every stop site goes through this instead of calling
+   *  recorder.stop() directly. */
+  const stopRecorderSafely = useCallback(async () => {
+    const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
+    if (elapsed < MIN_RECORDING_MS) {
+      await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
+    }
+    try {
+      await recorder.stop();
+    } catch {
+      // The native recorder can throw on stop (e.g. it was already
+      // winding down on its own) -- treat it as stopped either way
+      // rather than leaving the UI stuck mid-recording.
+    }
+  }, [recorder]);
 
   const uploadCurrentSegment = useCallback(async () => {
     const uri = recorder.uri;
@@ -60,13 +84,7 @@ export function useCaptureSession() {
   /** Starts recording, or stops it. Returns true when this call stopped it. */
   const toggleRecording = useCallback(async (): Promise<boolean> => {
     if (recorder.isRecording) {
-      try {
-        await recorder.stop();
-      } catch {
-        // The native recorder can throw on stop (e.g. it was already
-        // winding down on its own) -- treat it as stopped either way
-        // rather than leaving the UI stuck mid-recording.
-      }
+      await stopRecorderSafely();
       await uploadCurrentSegment();
       return true;
     }
@@ -85,12 +103,13 @@ export function useCaptureSession() {
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
       await recorder.prepareToRecordAsync();
       recorder.record();
+      recordingStartedAtRef.current = Date.now();
       setEverRecorded(true);
     } catch (e) {
       Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
     }
     return false;
-  }, [recorder, ensureSession, uploadCurrentSegment]);
+  }, [recorder, ensureSession, uploadCurrentSegment, stopRecorderSafely]);
 
   /** Stops recording if active, uploads any final segment, marks the
    *  session ended, and kicks off transcription/AI analysis in the
@@ -101,11 +120,7 @@ export function useCaptureSession() {
    *  recorded), so the caller can pass it to Summary. */
   const endCapture = useCallback(async (): Promise<string | null> => {
     if (recorder.isRecording) {
-      try {
-        await recorder.stop();
-      } catch {
-        // Best-effort -- we still want to upload/save whatever was captured.
-      }
+      await stopRecorderSafely();
       await uploadCurrentSegment();
     }
     const sessionId = sessionIdRef.current;
@@ -127,7 +142,7 @@ export function useCaptureSession() {
       });
     }
     return sessionId;
-  }, [recorder, uploadCurrentSegment]);
+  }, [recorder, uploadCurrentSegment, stopRecorderSafely]);
 
   /** Stops recording if active and discards the whole session -- no
    *  transcription, no summary, the audio is deleted. This is Cancel, not
@@ -135,11 +150,7 @@ export function useCaptureSession() {
    *  was recorded. */
   const cancelCapture = useCallback(async (): Promise<void> => {
     if (recorder.isRecording) {
-      try {
-        await recorder.stop();
-      } catch {
-        // Best-effort -- discarding the session either way.
-      }
+      await stopRecorderSafely();
     }
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
@@ -151,7 +162,7 @@ export function useCaptureSession() {
         // Best-effort -- the user is already leaving the screen either way.
       }
     }
-  }, [recorder]);
+  }, [recorder, stopRecorderSafely]);
 
   return {
     recording,
