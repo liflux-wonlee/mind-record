@@ -76,11 +76,32 @@ export default function TalkScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
 
+  // Tapping the mic only pauses/resumes -- it used to also end the whole
+  // capture and jump to Summary the moment it stopped, with no visible
+  // "saving…" state in between. On a longer recording that upload+end
+  // round trip could take a few seconds, and a "Resume" label sitting
+  // there tappable the whole time invited exactly what it looks like: tap
+  // Resume, record more, tap stop, repeat -- fighting the still-in-flight
+  // first attempt and occasionally landing on Summary with nothing
+  // actually saved. Finishing is now its own explicit "Done" button.
+  const [captureBusy, setCaptureBusy] = useState(false);
+
   const onToggleRecording = async () => {
-    const stopped = await capture.toggleRecording();
-    if (stopped) {
+    if (captureBusy) return;
+    await capture.toggleRecording();
+  };
+
+  const onFinishCapture = async () => {
+    if (captureBusy) return;
+    setCaptureBusy(true);
+    try {
+      if (capture.recording) {
+        await capture.toggleRecording();
+      }
       const sessionId = await capture.endCapture();
       router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
+    } finally {
+      setCaptureBusy(false);
     }
   };
 
@@ -153,7 +174,13 @@ export default function TalkScreen() {
       ) : null}
 
       {mode === 'capture' ? (
-        <CapturePanel capture={capture} onToggleRecording={onToggleRecording} onCancel={onCancelCapture} />
+        <CapturePanel
+          capture={capture}
+          onToggleRecording={onToggleRecording}
+          onCancel={onCancelCapture}
+          onFinish={onFinishCapture}
+          busy={captureBusy}
+        />
       ) : (
         <ConversationPanel
           conversation={conversation}
@@ -170,17 +197,21 @@ function CapturePanel({
   capture,
   onToggleRecording,
   onCancel,
+  onFinish,
+  busy,
 }: {
   capture: ReturnType<typeof useCaptureSession>;
   onToggleRecording: () => void;
   onCancel: () => void;
+  onFinish: () => void;
+  busy: boolean;
 }) {
   const { recording, everRecorded, timer } = capture;
   return (
     <>
       <View style={styles.statusRow}>
         <Kicker style={{ color: recording ? colors.accent : colors.neutral600 }}>
-          {recording ? '● Listening' : everRecorded ? 'Paused' : 'Ready'}
+          {busy ? 'Saving…' : recording ? '● Listening' : everRecorded ? 'Paused' : 'Ready'}
         </Kicker>
         <Text style={styles.timer}>{timer}</Text>
       </View>
@@ -189,7 +220,9 @@ function CapturePanel({
         {!everRecorded ? (
           <Text style={styles.idle}>말씀하세요. 주제를 나눌 필요 없이 한 번에 이야기하셔도 됩니다.</Text>
         ) : (
-          <Text style={styles.idle}>듣고 있어요. 말씀을 마치시면 이해한 내용을 보여드릴게요.</Text>
+          <Text style={styles.idle}>
+            듣고 있어요. 잠깐 멈추려면 다시 눌러 일시정지하고, 다 마치셨으면 아래 Done을 눌러 끝내세요.
+          </Text>
         )}
       </ScrollView>
 
@@ -197,16 +230,27 @@ function CapturePanel({
 
       <View style={styles.controls}>
         <Button
-          label={recording ? 'Listening… tap to stop' : everRecorded ? 'Resume' : 'Start talking'}
+          label={busy ? 'Saving…' : recording ? 'Listening… tap to pause' : everRecorded ? 'Resume' : 'Start talking'}
           onPress={onToggleRecording}
+          disabled={busy}
           align="flex-start"
           style={[styles.micButton, { backgroundColor: recording ? colors.pastelPink : colors.pastelGreen }]}
           textStyle={[styles.pastelButtonText, { fontSize: 16 }]}
         />
+      </View>
+      <View style={[styles.controls, { marginTop: 8 }]}>
         <Button
           label="Cancel"
           onPress={onCancel}
-          style={[styles.cancelButton, { backgroundColor: colors.pastelLavender }]}
+          disabled={busy}
+          style={[styles.halfButton, { backgroundColor: colors.pastelLavender }]}
+          textStyle={styles.pastelButtonText}
+        />
+        <Button
+          label="Done"
+          onPress={onFinish}
+          disabled={busy || !everRecorded}
+          style={[styles.halfButton, { backgroundColor: colors.pastelBlue }]}
           textStyle={styles.pastelButtonText}
         />
       </View>
@@ -301,14 +345,14 @@ function ConversationPanel({
           label="Cancel"
           onPress={onCancel}
           disabled={state === 'thinking'}
-          style={{ flex: 1, minHeight: 52, borderRadius: radius.pastel, backgroundColor: colors.pastelLavender }}
+          style={[styles.halfButton, { backgroundColor: colors.pastelLavender }]}
           textStyle={styles.pastelButtonText}
         />
         <Button
           label="Save & end"
           onPress={onDone}
           disabled={state === 'thinking'}
-          style={{ flex: 1, minHeight: 52, borderRadius: radius.pastel, backgroundColor: colors.pastelBlue }}
+          style={[styles.halfButton, { backgroundColor: colors.pastelBlue }]}
           textStyle={styles.pastelButtonText}
         />
       </View>
@@ -430,9 +474,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: radius.pastel,
   },
-  cancelButton: {
-    minHeight: 64,
-    minWidth: 64,
+  halfButton: {
+    flex: 1,
+    minHeight: 52,
     borderRadius: radius.pastel,
   },
   pastelButtonText: {

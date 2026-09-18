@@ -34,6 +34,12 @@ export function useCaptureSession() {
   const [everRecorded, setEverRecorded] = useState(false);
   const sessionIdRef = useRef<string | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
+  // Guards toggleRecording against overlapping calls -- a stop is padded
+  // out to MIN_RECORDING_MS before it actually happens (see
+  // stopRecorderSafely), and recorder.isRecording stays true for that
+  // whole window, so a second tap during it would otherwise also read
+  // "recording" and race the first call's stop.
+  const toggleBusyRef = useRef(false);
 
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder, 200);
@@ -81,43 +87,50 @@ export function useCaptureSession() {
     }
   }, [recorder, user]);
 
-  /** Starts recording, or stops it. Returns true when this call stopped it. */
+  /** Starts recording, or pauses it -- this never ends the session or
+   *  navigates anywhere; see endCapture for that. Returns true when this
+   *  call paused it. */
   const toggleRecording = useCallback(async (): Promise<boolean> => {
-    if (recorder.isRecording) {
-      await stopRecorderSafely();
-      await uploadCurrentSegment();
-      return true;
-    }
-
-    const permission = await requestRecordingPermissionsAsync();
-    if (!permission.granted) {
-      Alert.alert(
-        'Microphone access needed',
-        'Mind Record needs microphone access to record. You can enable it in Settings.'
-      );
-      return false;
-    }
-
+    if (toggleBusyRef.current) return false;
+    toggleBusyRef.current = true;
     try {
-      await ensureSession();
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync();
-      recorder.record();
-      recordingStartedAtRef.current = Date.now();
-      setEverRecorded(true);
-    } catch (e) {
-      Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
+      if (recorder.isRecording) {
+        await stopRecorderSafely();
+        await uploadCurrentSegment();
+        return true;
+      }
+
+      const permission = await requestRecordingPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(
+          'Microphone access needed',
+          'Mind Record needs microphone access to record. You can enable it in Settings.'
+        );
+        return false;
+      }
+
+      try {
+        await ensureSession();
+        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+        await recorder.prepareToRecordAsync();
+        recorder.record();
+        recordingStartedAtRef.current = Date.now();
+        setEverRecorded(true);
+      } catch (e) {
+        Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
+      }
+      return false;
+    } finally {
+      toggleBusyRef.current = false;
     }
-    return false;
   }, [recorder, ensureSession, uploadCurrentSegment, stopRecorderSafely]);
 
   /** Stops recording if active, uploads any final segment, marks the
    *  session ended, and kicks off transcription/AI analysis in the
-   *  background. Call this at every point the capture flow is left
-   *  (End/Exit buttons, or after toggleRecording reports a stop that leads
-   *  straight to Summary) — never leave the recorder running unattended.
-   *  Returns the session id that was ended (or null if nothing was ever
-   *  recorded), so the caller can pass it to Summary. */
+   *  background. This is the only thing that actually ends a capture and
+   *  is safe to navigate to Summary after -- toggleRecording on its own
+   *  only pauses/resumes. Returns the session id that was ended (or null
+   *  if nothing was ever recorded), so the caller can pass it to Summary. */
   const endCapture = useCallback(async (): Promise<string | null> => {
     if (recorder.isRecording) {
       await stopRecorderSafely();
