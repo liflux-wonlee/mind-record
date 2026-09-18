@@ -27,6 +27,11 @@ export default function TalkScreen() {
     initialMode === 'conv' ? 'conv' : initialMode === 'capture' ? 'capture' : null
   );
   const [aiName, setAiName] = useState<string | null>(null);
+  // True only when `mode` arrived pre-set via the URL (a direct link, e.g.
+  // Home's "talk with X instead") rather than through the in-screen picker
+  // -- picking in the picker starts the mic itself (see pickMode), so this
+  // only needs to cover the direct-link case, once.
+  const needsAutoStartRef = useRef(initialMode === 'conv' || initialMode === 'capture');
 
   useEffect(() => {
     if (!user) return;
@@ -45,12 +50,31 @@ export default function TalkScreen() {
   const captureStarted = capture.everRecorded;
   const conversationStarted = conversation.turns.length > 0 || conversation.state !== 'idle';
 
+  // Picking a mode in the picker should start talking immediately, not
+  // just open that panel and wait for a second tap.
   const pickMode = (picked: ScreenMode) => {
     setMode(picked);
     if (picked === 'capture') {
       capture.toggleRecording();
+    } else {
+      conversation.startTurn();
     }
   };
+
+  // Covers arriving with a mode already picked via the URL (Home's "talk
+  // with X instead" ghost button) -- the picker path above handles itself.
+  useEffect(() => {
+    if (!needsAutoStartRef.current || mode === null) return;
+    needsAutoStartRef.current = false;
+    if (mode === 'capture') {
+      capture.toggleRecording();
+    } else {
+      conversation.startTurn();
+    }
+    // capture/conversation are recreated every render; this must only ever
+    // run once, gated by the ref above, so they're deliberately left out.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
 
   const onToggleRecording = async () => {
     const stopped = await capture.toggleRecording();
@@ -176,10 +200,15 @@ function CapturePanel({
           label={recording ? 'Listening… tap to stop' : everRecorded ? 'Resume' : 'Start talking'}
           onPress={onToggleRecording}
           align="flex-start"
-          style={[styles.micButton, { backgroundColor: recording ? colors.neutral900 : colors.accent }]}
-          textStyle={{ fontSize: 16 }}
+          style={[styles.micButton, { backgroundColor: recording ? colors.pastelPink : colors.pastelGreen }]}
+          textStyle={[styles.pastelButtonText, { fontSize: 16 }]}
         />
-        <Button variant="secondary" label="Cancel" onPress={onCancel} style={styles.cancelButton} />
+        <Button
+          label="Cancel"
+          onPress={onCancel}
+          style={[styles.cancelButton, { backgroundColor: colors.pastelLavender }]}
+          textStyle={styles.pastelButtonText}
+        />
       </View>
     </>
   );
@@ -222,6 +251,8 @@ function ConversationPanel({
     else if (state === 'recording') stopTurn();
   };
   const talkDisabled = state === 'thinking' || state === 'speaking';
+  const talkButtonColor =
+    state === 'recording' ? colors.pastelPink : state === 'idle' ? colors.pastelGreen : colors.pastelYellow;
 
   return (
     <>
@@ -261,23 +292,24 @@ function ConversationPanel({
           onPress={onPressTalk}
           disabled={talkDisabled}
           align="flex-start"
-          style={[styles.micButton, { backgroundColor: state === 'recording' ? colors.neutral900 : colors.accent }]}
-          textStyle={{ fontSize: 16 }}
+          style={[styles.micButton, { backgroundColor: talkButtonColor }]}
+          textStyle={[styles.pastelButtonText, { fontSize: 16 }]}
         />
       </View>
       <View style={[styles.controls, { marginTop: 8 }]}>
         <Button
-          variant="secondary"
           label="Cancel"
           onPress={onCancel}
           disabled={state === 'thinking'}
-          style={{ flex: 1, minHeight: 52 }}
+          style={{ flex: 1, minHeight: 52, borderRadius: radius.pastel, backgroundColor: colors.pastelLavender }}
+          textStyle={styles.pastelButtonText}
         />
         <Button
           label="Save & end"
           onPress={onDone}
           disabled={state === 'thinking'}
-          style={{ flex: 1, minHeight: 52, backgroundColor: colors.accent }}
+          style={{ flex: 1, minHeight: 52, borderRadius: radius.pastel, backgroundColor: colors.pastelBlue }}
+          textStyle={styles.pastelButtonText}
         />
       </View>
     </>
@@ -396,9 +428,14 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 64,
     paddingHorizontal: 16,
+    borderRadius: radius.pastel,
   },
   cancelButton: {
     minHeight: 64,
     minWidth: 64,
+    borderRadius: radius.pastel,
+  },
+  pastelButtonText: {
+    color: colors.text,
   },
 });
