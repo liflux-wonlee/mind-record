@@ -10,6 +10,7 @@ import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
 import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
 import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/services/memories';
+import { processSession } from '@/services/processing';
 import { getSession, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
 import { confirmTopicSuggestion, listTopics, type Topic } from '@/services/topics';
@@ -28,6 +29,10 @@ function renderInlineBold(text: string): React.ReactNode {
     )
   );
 }
+
+// Transcription of a long capture plus the GPT pass can take a couple of
+// minutes; past this the Edge Function has almost certainly been killed.
+const PROCESSING_TIMEOUT_MS = 4 * 60 * 1000;
 
 type EntryKind = 'task' | 'memory';
 type Entry = {
@@ -124,26 +129,46 @@ export default function SummaryScreen() {
     setTopics(tp);
   }, [sessionId, user]);
 
+  // Bumped by "Retry" to restart the poll (and re-kick processing).
+  const [pollRun, setPollRun] = useState(0);
+
   useEffect(() => {
     if (!sessionId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
+    let consecutiveFailures = 0;
+    const startedAt = Date.now();
+    setLoadError(null);
 
     const poll = async () => {
       try {
         const s = await getSession(sessionId);
         if (cancelled) return;
+        if (!s) throw new Error('This recording no longer exists.');
         setSession(s);
+        consecutiveFailures = 0;
 
-        if (s?.processing_status === 'done') {
+        if (s.processing_status === 'done') {
           await loadResults();
           return;
         }
-        if (s?.processing_status !== 'error') {
-          timer = setTimeout(poll, 1500);
+        if (s.processing_status === 'error') return;
+        // Nothing legitimately takes this long -- the Edge Function was
+        // most likely killed mid-way (it can't mark the row 'error' then),
+        // so stop spinning and offer a retry instead of polling forever.
+        if (Date.now() - startedAt > PROCESSING_TIMEOUT_MS) {
+          throw new Error('Processing is taking too long. Tap Retry to try again.');
         }
+        timer = setTimeout(poll, 1500);
       } catch (e) {
-        if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Could not load this session.');
+        if (cancelled) return;
+        // One flaky request shouldn't end the poll for good.
+        consecutiveFailures += 1;
+        if (consecutiveFailures < 3 && Date.now() - startedAt <= PROCESSING_TIMEOUT_MS) {
+          timer = setTimeout(poll, 2500);
+          return;
+        }
+        setLoadError(e instanceof Error ? e.message : 'Could not load this session.');
       }
     };
     poll();
@@ -153,7 +178,15 @@ export default function SummaryScreen() {
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, pollRun]);
+
+  const retryProcessing = () => {
+    if (!sessionId) return;
+    processSession(sessionId).catch(() => {
+      // The poll below surfaces whatever state the row ends up in.
+    });
+    setPollRun((n) => n + 1);
+  };
 
   const entries: Entry[] = [
     ...tasks.map((t) => ({
@@ -233,6 +266,12 @@ export default function SummaryScreen() {
         <View style={[styles.summaryCard, { backgroundColor: colors.pastelPink }]}>
           <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t load</Kicker>
           <Text style={styles.summaryText}>{loadError}</Text>
+          <Button
+            label="Retry"
+            onPress={retryProcessing}
+            style={[styles.retryButton, { backgroundColor: colors.pastelYellow }]}
+            textStyle={styles.pastelText}
+          />
         </View>
       ) : processing ? (
         <View style={[styles.summaryCard, styles.processing]}>
@@ -247,6 +286,12 @@ export default function SummaryScreen() {
         <View style={[styles.summaryCard, { backgroundColor: colors.pastelPink }]}>
           <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t process this recording</Kicker>
           <Text style={styles.summaryText}>{session.processing_error ?? 'Something went wrong.'}</Text>
+          <Button
+            label="Retry"
+            onPress={retryProcessing}
+            style={[styles.retryButton, { backgroundColor: colors.pastelYellow }]}
+            textStyle={styles.pastelText}
+          />
         </View>
       ) : tab === 'summary' ? (
         <View style={styles.summaryCard}>
@@ -392,6 +437,12 @@ const styles = StyleSheet.create({
     lineHeight: 26,
     color: colors.text,
     marginTop: 6,
+  },
+  retryButton: {
+    alignSelf: 'flex-start',
+    marginTop: 12,
+    minHeight: 40,
+    borderRadius: radius.pastel,
   },
   processing: {
     backgroundColor: colors.pastelBlue,

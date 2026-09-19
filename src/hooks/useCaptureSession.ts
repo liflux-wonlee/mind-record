@@ -15,7 +15,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import { useAuth } from '@/providers/AuthProvider';
@@ -27,6 +27,16 @@ import { createSession, deleteSession, endSession } from '@/services/sessions';
 // it can throw and/or leave a corrupt, zero-duration file behind (a known
 // Android MediaRecorder quirk) -- always pad a stop out to at least this long.
 const MIN_RECORDING_MS = 800;
+
+// Speech-only recording, sent to Whisper: mono 64 kbps AAC (~0.5 MB/min)
+// keeps even a ~45-minute unbroken segment under Whisper's 25 MB file
+// limit. The stock HIGH_QUALITY preset (stereo 128 kbps, ~1 MB/min) hit
+// that limit at ~25 minutes and the whole session then failed to process.
+export const SPEECH_RECORDING_OPTIONS = {
+  ...RecordingPresets.HIGH_QUALITY,
+  numberOfChannels: 1,
+  bitRate: 64000,
+};
 
 export function useCaptureSession() {
   const { user } = useAuth();
@@ -40,8 +50,12 @@ export function useCaptureSession() {
   // whole window, so a second tap during it would otherwise also read
   // "recording" and race the first call's stop.
   const toggleBusyRef = useRef(false);
+  // Mirrors toggleBusyRef for the UI, and lets endCapture wait for a
+  // pause's upload to finish instead of racing it.
+  const [toggleBusy, setToggleBusy] = useState(false);
+  const togglePromiseRef = useRef<Promise<boolean> | null>(null);
 
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorder = useAudioRecorder(SPEECH_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 200);
 
   const recording = recorderState.isRecording;
@@ -93,36 +107,45 @@ export function useCaptureSession() {
   const toggleRecording = useCallback(async (): Promise<boolean> => {
     if (toggleBusyRef.current) return false;
     toggleBusyRef.current = true;
-    try {
-      if (recorder.isRecording) {
-        await stopRecorderSafely();
-        await uploadCurrentSegment();
-        return true;
-      }
-
-      const permission = await requestRecordingPermissionsAsync();
-      if (!permission.granted) {
-        Alert.alert(
-          'Microphone access needed',
-          'Mind Record needs microphone access to record. You can enable it in Settings.'
-        );
-        return false;
-      }
-
+    setToggleBusy(true);
+    const run = async () => {
       try {
-        await ensureSession();
-        await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-        await recorder.prepareToRecordAsync();
-        recorder.record();
-        recordingStartedAtRef.current = Date.now();
-        setEverRecorded(true);
-      } catch (e) {
-        Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
+        if (recorder.isRecording) {
+          await stopRecorderSafely();
+          await uploadCurrentSegment();
+          return true;
+        }
+
+        const permission = await requestRecordingPermissionsAsync();
+        if (!permission.granted) {
+          Alert.alert(
+            'Microphone access needed',
+            'Mind Record needs microphone access to record. You can enable it in Settings.'
+          );
+          return false;
+        }
+
+        try {
+          await ensureSession();
+          await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+          await recorder.prepareToRecordAsync();
+          recorder.record();
+          recordingStartedAtRef.current = Date.now();
+          setEverRecorded(true);
+        } catch (e) {
+          Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
+        }
+        return false;
+      } finally {
+        toggleBusyRef.current = false;
+        setToggleBusy(false);
       }
-      return false;
-    } finally {
-      toggleBusyRef.current = false;
-    }
+    };
+    const promise = run();
+    togglePromiseRef.current = promise;
+    const result = await promise;
+    if (togglePromiseRef.current === promise) togglePromiseRef.current = null;
+    return result;
   }, [recorder, ensureSession, uploadCurrentSegment, stopRecorderSafely]);
 
   /** Stops recording if active, uploads any final segment, marks the
@@ -132,6 +155,12 @@ export function useCaptureSession() {
    *  only pauses/resumes. Returns the session id that was ended (or null
    *  if nothing was ever recorded), so the caller can pass it to Summary. */
   const endCapture = useCallback(async (): Promise<string | null> => {
+    // A pause tapped a moment ago may still be padding its stop or
+    // uploading its segment; ending on top of that would stop/upload the
+    // same file twice, or end the session before its last segment exists.
+    if (togglePromiseRef.current) {
+      await togglePromiseRef.current.catch(() => false);
+    }
     if (recorder.isRecording) {
       await stopRecorderSafely();
       await uploadCurrentSegment();
@@ -177,9 +206,25 @@ export function useCaptureSession() {
     }
   }, [recorder, stopRecorderSafely]);
 
+  // Leaving the screen mid-capture (Android back, swipe) without Done or
+  // Cancel would otherwise leave an un-ended session row in Home/Records.
+  useEffect(
+    () => () => {
+      const orphan = sessionIdRef.current;
+      sessionIdRef.current = null;
+      if (orphan) {
+        deleteSession(orphan).catch(() => {
+          // Best-effort cleanup on the way out.
+        });
+      }
+    },
+    []
+  );
+
   return {
     recording,
     everRecorded,
+    toggleBusy,
     saveOnly,
     toggleSaveOnly: () => setSaveOnly((s) => !s),
     toggleRecording,

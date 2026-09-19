@@ -4,7 +4,7 @@ import {
   Archivo_800ExtraBold,
   useFonts,
 } from '@expo-google-fonts/archivo';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
@@ -14,9 +14,6 @@ import { AuthProvider, useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
 
 SplashScreen.preventAutoHideAsync();
-
-/** Routes reachable without a session. */
-const AUTH_ROUTES = ['login', 'email-auth', 'auth'];
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
@@ -42,45 +39,39 @@ export default function RootLayout() {
 
 function RootNavigator() {
   const { session, loading } = useAuth();
-  const segments = useSegments();
-  const router = useRouter();
 
   useEffect(() => {
     if (loading) return;
     SplashScreen.hideAsync();
   }, [loading]);
 
-  // Reactive guard: catches sign-in/sign-out that happen *after* first
-  // render (e.g. Account's Sign out button) and redirects accordingly.
-  useEffect(() => {
-    if (loading) return;
-    const inAuthFlow = AUTH_ROUTES.includes(segments[0] as string);
-    if (!session && !inAuthFlow) {
-      router.replace('/login');
-    } else if (session && inAuthFlow) {
-      router.replace('/');
-    }
-  }, [session, loading, segments, router]);
-
   // Splash screen is still showing at this point (preventAutoHideAsync above).
   if (loading) return null;
 
+  // Stack.Protected does the routing: with no session only the auth
+  // screens exist (so a signed-out cold start can never mount Home first
+  // and fade to Login, which `initialRouteName` alone did not prevent --
+  // expo-router seeds its state from the launch URL, not that prop), and
+  // once a session appears/disappears it redirects to the first available
+  // screen on its own, replacing the old effect-based redirect.
+  const signedIn = !!session;
   return (
     <Stack
-      // Computed once, after we already know the session — the tabs and
-      // login group never both mount, so there's no flash of the wrong one.
-      initialRouteName={session ? '(tabs)' : 'login'}
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: colors.bg },
       }}
     >
-      <Stack.Screen name="login" options={{ animation: 'fade' }} />
-      <Stack.Screen name="email-auth" options={{ animation: 'slide_from_bottom' }} />
-      <Stack.Screen name="auth/callback" options={{ animation: 'fade' }} />
-      <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
-      <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom' }} />
-      <Stack.Screen name="summary" />
+      <Stack.Protected guard={!signedIn}>
+        <Stack.Screen name="login" options={{ animation: 'fade' }} />
+        <Stack.Screen name="email-auth" options={{ animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="auth/callback" options={{ animation: 'fade' }} />
+      </Stack.Protected>
+      <Stack.Protected guard={signedIn}>
+        <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
+        <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom' }} />
+        <Stack.Screen name="summary" />
+      </Stack.Protected>
     </Stack>
   );
 }

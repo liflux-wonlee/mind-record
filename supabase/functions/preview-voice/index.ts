@@ -8,7 +8,11 @@
 //
 // OPENAI_API_KEY is the same secret every other Edge Function here uses.
 
+import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
+
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
+const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -31,6 +35,19 @@ Deno.serve(async (req) => {
   }
   if (!OPENAI_API_KEY) {
     return json({ error: 'OPENAI_API_KEY is not configured on this project.' }, 500);
+  }
+
+  // Same check as converse/process-session: every TTS call costs money, so
+  // don't lean on gateway JWT verification alone.
+  const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
+  });
+  const {
+    data: { user },
+    error: authError,
+  } = await callerClient.auth.getUser();
+  if (authError || !user) {
+    return json({ error: 'Not authenticated.' }, 401);
   }
 
   let voice: string | undefined;

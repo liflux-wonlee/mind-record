@@ -1,7 +1,7 @@
 import { useFocusEffect } from 'expo-router';
 import { createAudioPlayer } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
@@ -14,13 +14,16 @@ import { previewVoice } from '@/services/voicePreview';
 import { colors, font, radius } from '@/theme';
 import type { AiVoice } from '@/types/database';
 
-type Locale = 'ko' | 'en';
-const LANGUAGE_OPTIONS: { locale: Locale; label: string }[] = [
-  { locale: 'ko', label: '한국어' },
-  { locale: 'en', label: 'English' },
+// What language the AI answers in. Speech is always understood in whatever
+// language is spoken -- this only steers the reply (and the voice preview).
+type Locale = 'auto' | 'ko' | 'en';
+const LANGUAGE_OPTIONS: { locale: Locale; label: string; color: string }[] = [
+  { locale: 'auto', label: 'Auto', color: colors.pastelYellow },
+  { locale: 'ko', label: '한국어', color: colors.pastelGreen },
+  { locale: 'en', label: 'English', color: colors.pastelBlue },
 ];
 function localeOf(profile: Profile): Locale {
-  return profile.locale === 'en' ? 'en' : 'ko';
+  return profile.locale === 'ko' || profile.locale === 'en' ? profile.locale : 'auto';
 }
 
 const VOICE_OPTIONS: { voice: AiVoice; label: string }[] = [
@@ -196,6 +199,15 @@ function AiSettings({
     }
   };
 
+  // One player at a time: createAudioPlayer() isn't hook-managed, so each
+  // preview used to leak a native player (and two taps overlapped).
+  const previewPlayerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const releasePreviewPlayer = () => {
+    previewPlayerRef.current?.remove();
+    previewPlayerRef.current = null;
+  };
+  useEffect(() => releasePreviewPlayer, []);
+
   const playPreview = async (voice: AiVoice) => {
     if (previewing) return;
     setPreviewing(voice);
@@ -203,11 +215,18 @@ function AiSettings({
       const audioBase64 = await previewVoice(voice, localeOf(profile));
       const file = new File(Paths.cache, `voice-preview-${voice}.mp3`);
       file.write(audioBase64, { encoding: 'base64' });
+      releasePreviewPlayer();
       const player = createAudioPlayer(file.uri);
+      previewPlayerRef.current = player;
+      player.addListener('playbackStatusUpdate', (status) => {
+        if (status.didJustFinish && previewPlayerRef.current === player) {
+          releasePreviewPlayer();
+          setPreviewing(null);
+        }
+      });
       player.play();
     } catch (e) {
       Alert.alert('Preview failed', e instanceof Error ? e.message : 'Please try again.');
-    } finally {
       setPreviewing(null);
     }
   };
@@ -217,9 +236,9 @@ function AiSettings({
       <Kicker style={{ color: colors.neutral600 }}>AI</Kicker>
       <RuleThick style={{ marginTop: 6, marginBottom: 10 }} />
 
-      <Text style={styles.fieldLabel}>Language (speech recognition · AI replies)</Text>
-      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
-        {LANGUAGE_OPTIONS.map(({ locale, label }) => {
+      <Text style={styles.fieldLabel}>AI replies in</Text>
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 4 }}>
+        {LANGUAGE_OPTIONS.map(({ locale, label, color }) => {
           const selected = localeOf(profile) === locale;
           return (
             <Button
@@ -227,16 +246,15 @@ function AiSettings({
               label={savingLocale === locale ? '...' : label}
               disabled={selected || savingLocale !== null}
               onPress={() => chooseLocale(locale)}
-              style={[
-                styles.localeButton,
-                { backgroundColor: locale === 'ko' ? colors.pastelGreen : colors.pastelBlue },
-                selected && styles.localeButtonSelected,
-              ]}
+              style={[styles.localeButton, { backgroundColor: color }, selected && styles.localeButtonSelected]}
               textStyle={{ color: colors.text }}
             />
           );
         })}
       </View>
+      <Text style={styles.fieldHint}>
+        You can always speak in any language — Auto answers in the language you just used.
+      </Text>
 
       <Text style={styles.fieldLabel}>AI name (what you call the AI)</Text>
       <TextInput
@@ -378,6 +396,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.divider,
     marginBottom: 10,
+  },
+  fieldHint: {
+    fontFamily: font.regular,
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.neutral600,
+    marginBottom: 14,
   },
   localeButton: {
     flex: 1,

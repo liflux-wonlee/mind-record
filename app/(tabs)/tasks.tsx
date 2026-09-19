@@ -11,16 +11,29 @@ import { colors, font, h2 } from '@/theme';
 
 type Filter = 'open' | 'completed';
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Parses a YYYY-MM-DD as a LOCAL calendar date. `new Date('2026-09-19')`
+ *  is UTC midnight, which in any zone west of UTC is still the 18th --
+ *  that made "today" read as Overdue and "tomorrow" as Due today. */
+function parseLocalDate(ymd: string): Date | null {
+  if (!DATE_RE.test(ymd)) return null;
+  const [y, m, d] = ymd.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.getFullYear() === y && date.getMonth() === m - 1 && date.getDate() === d ? date : null;
+}
+
 function formatDueDate(dueDate: string | null): string {
   if (!dueDate) return 'No date';
-  const due = new Date(dueDate);
+  const due = parseLocalDate(dueDate);
+  if (!due) return dueDate;
   const today = new Date();
   const diffDays = Math.round((due.setHours(0, 0, 0, 0) - today.setHours(0, 0, 0, 0)) / 86_400_000);
   if (diffDays === 0) return 'Due today';
   if (diffDays === 1) return 'Due tomorrow';
   if (diffDays > 1 && diffDays <= 7) return 'This week';
   if (diffDays < 0) return 'Overdue';
-  return new Date(dueDate).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  return due.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 /** YYYY-MM-DD for the given day, in local time (not UTC -- toISOString would shift near midnight). */
@@ -46,8 +59,8 @@ export default function TasksScreen() {
     try {
       await tasksState.add(title);
       setNewTitle('');
-    } catch {
-      // The list just won't include it — the user can see nothing changed and retry.
+    } catch (e) {
+      Alert.alert('Could not add task', e instanceof Error ? e.message : 'Please try again.');
     } finally {
       setAdding(false);
     }
@@ -58,7 +71,7 @@ export default function TasksScreen() {
 
   return (
     <Screen>
-      <View style={styles.head}>
+      <View style={[styles.head, { paddingRight: 44 }]}>
         <Kicker style={{ color: colors.neutral600 }}>Tasks</Kicker>
         <Text style={styles.openCount}>{tasksState.openCount} open</Text>
       </View>
@@ -107,7 +120,16 @@ export default function TasksScreen() {
         </View>
       ) : (
         visibleTasks.map((task) => (
-          <TaskRow key={task.id} task={task} onToggle={() => tasksState.toggle(task)} onPress={() => setEditing(task)} />
+          <TaskRow
+            key={task.id}
+            task={task}
+            onToggle={() =>
+              tasksState
+                .toggle(task)
+                .catch((e) => Alert.alert('Could not update', e instanceof Error ? e.message : 'Please try again.'))
+            }
+            onPress={() => setEditing(task)}
+          />
         ))
       )}
 
@@ -212,6 +234,10 @@ function TaskEditSheet({
 
   const save = async () => {
     if (!title.trim() || saving) return;
+    if (dueDate && !parseLocalDate(dueDate)) {
+      Alert.alert('Check the date', 'Use the format YYYY-MM-DD, e.g. 2026-09-19.');
+      return;
+    }
     setSaving(true);
     try {
       await onSave({ title: title.trim(), dueDate });

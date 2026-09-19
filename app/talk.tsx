@@ -179,7 +179,7 @@ export default function TalkScreen() {
           onToggleRecording={onToggleRecording}
           onCancel={onCancelCapture}
           onFinish={onFinishCapture}
-          busy={captureBusy}
+          busy={captureBusy || capture.toggleBusy}
         />
       ) : (
         <ConversationPanel
@@ -283,7 +283,7 @@ function ConversationPanel({
   onDone: () => void;
   aiName: string | null;
 }) {
-  const { state, turns, startTurn, stopTurn } = conversation;
+  const { state, turns, turnBusy, startTurn, stopTurn } = conversation;
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -294,7 +294,8 @@ function ConversationPanel({
     if (state === 'idle') startTurn();
     else if (state === 'recording') stopTurn();
   };
-  const talkDisabled = state === 'thinking' || state === 'speaking';
+  const talkDisabled = state === 'thinking' || state === 'speaking' || turnBusy;
+  const endDisabled = state === 'thinking' || turnBusy;
   const talkButtonColor =
     state === 'recording' ? colors.pastelPink : state === 'idle' ? colors.pastelGreen : colors.pastelYellow;
 
@@ -344,14 +345,14 @@ function ConversationPanel({
         <Button
           label="Cancel"
           onPress={onCancel}
-          disabled={state === 'thinking'}
+          disabled={endDisabled}
           style={[styles.halfButton, { backgroundColor: colors.pastelLavender }]}
           textStyle={styles.pastelButtonText}
         />
         <Button
           label="Save & end"
           onPress={onDone}
-          disabled={state === 'thinking'}
+          disabled={endDisabled}
           style={[styles.halfButton, { backgroundColor: colors.pastelBlue }]}
           textStyle={styles.pastelButtonText}
         />

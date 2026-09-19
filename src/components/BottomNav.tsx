@@ -50,7 +50,6 @@ function activeTab(pathname: string): TabKey | null {
       return 'records';
     case '/memory':
     case '/topic':
-    case '/thread':
     case '/inbox':
       return 'topics';
     case '/tasks':

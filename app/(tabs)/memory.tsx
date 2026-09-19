@@ -58,6 +58,7 @@ export default function MemoryScreen() {
   const reload = useCallback(() => {
     if (!user) return;
     setLoading(true);
+    setLoadError(null);
     listTopics(user.id)
       .then(setTopics)
       .catch((e) => setLoadError(e instanceof Error ? e.message : 'Could not load topics.'))
@@ -91,7 +92,7 @@ export default function MemoryScreen() {
   return (
     <Screen>
       <Kicker style={{ color: colors.neutral600 }}>Topics</Kicker>
-      <View style={styles.titleRow}>
+      <View style={[styles.titleRow, { paddingRight: 44 }]}>
         <Text style={styles.title}>Topics</Text>
         <Button
           variant="ghost"
@@ -234,6 +235,11 @@ export default function MemoryScreen() {
             ) : null}
             {topics
               .filter((t) => t.id !== sheet.topic.id)
+              // Topics nest one level deep and the list only renders that
+              // deep, so only top-level topics are valid targets; a target
+              // inside the source would also make the source its own
+              // ancestor (merge re-parents the source's children).
+              .filter((t) => !t.parent_topic_id && !wouldCreateCycle(topics, sheet.topic.id, t.id))
               .map((t) => (
                 <Button
                   key={t.id}
@@ -243,10 +249,6 @@ export default function MemoryScreen() {
                   disabled={busy}
                   onPress={() => {
                     if (sheet.kind === 'move') {
-                      if (wouldCreateCycle(topics, sheet.topic.id, t.id)) {
-                        Alert.alert('Can’t do that', 'A topic can’t move under its own sub-topic.');
-                        return;
-                      }
                       runAction(() => moveTopic(sheet.topic.id, t.id).then(() => undefined));
                     } else {
                       runAction(() => mergeTopics(sheet.topic.id, t.id));

@@ -1,6 +1,15 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 
 import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
@@ -110,7 +119,8 @@ export default function SearchScreen() {
         )}
       </ScrollView>
 
-      <View style={styles.askRow}>
+      {/* The input is pinned at the bottom; iOS never resizes for the keyboard on its own. */}
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.askRow}>
         <TextInput
           style={styles.input}
           value={query}
@@ -124,7 +134,7 @@ export default function SearchScreen() {
           icon={<MicIcon size={22} color={colors.bg} />}
           style={styles.voiceButton}
         />
-      </View>
+      </KeyboardAvoidingView>
     </Screen>
   );
 }

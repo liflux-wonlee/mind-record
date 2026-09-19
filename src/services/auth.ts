@@ -31,11 +31,20 @@ export async function signUpWithEmail(
     email,
     password,
     options: {
-      emailRedirectTo: Linking.createURL('/'),
+      // Must be listed verbatim under Supabase -> Auth -> URL Configuration
+      // -> Redirect URLs (mindrecord://auth/callback), or the confirmation
+      // link falls back to the dashboard's Site URL and never reaches the app.
+      emailRedirectTo: Linking.createURL('auth/callback'),
       data: trimmedName ? { display_name: trimmedName } : undefined,
     },
   });
   if (error) throw error;
+  // With email confirmation on, signing up an address that already has an
+  // account returns a stub user with no identities and sends NO email --
+  // reporting "check your email" there strands the user.
+  if (!data.session && data.user && (data.user.identities?.length ?? 0) === 0) {
+    throw new Error('An account with this email already exists. Sign in instead.');
+  }
   return data.session ? { status: 'signed-in' } : { status: 'check-email' };
 }
 

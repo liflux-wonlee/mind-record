@@ -156,16 +156,13 @@ Deno.serve(async (req) => {
         return json({ error: 'No audio to process.' }, 400);
       }
 
-      const { data: profile } = await db.from('profiles').select('locale').eq('id', user.id).maybeSingle();
-      const language = whisperLanguage(profile?.locale);
-
       const transcriptParts: string[] = [];
       for (const attachment of attachments) {
         const { data: file, error: downloadError } = await db.storage
           .from('recordings')
           .download(attachment.storage_path);
         if (downloadError) throw downloadError;
-        const text = await transcribeAudio(file, attachment.file_name, language);
+        const text = await transcribeAudio(file, attachment.file_name);
         if (text.trim()) transcriptParts.push(text.trim());
       }
       transcript = transcriptParts.join('\n\n');
@@ -223,11 +220,18 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Every write below used to ignore its `error`, so one bad row (e.g. a
+    // priority the check constraint rejects) silently dropped the entire
+    // batch and the session was still marked done -- with no tasks/ideas
+    // and no way to reprocess. Now a failure surfaces as processing_status
+    // 'error' via the catch below.
     if (resolvedTasks.length > 0) {
-      await db.from('tasks').insert(resolvedTasks);
+      const { error } = await db.from('tasks').insert(resolvedTasks);
+      if (error) throw error;
     }
     if (resolvedMemories.length > 0) {
-      await db.from('memories').insert(resolvedMemories);
+      const { error } = await db.from('memories').insert(resolvedMemories);
+      if (error) throw error;
     }
 
     // session_topics is a rollup of every topic actually assigned above --
@@ -243,7 +247,7 @@ Deno.serve(async (req) => {
       if (confidence !== null && confidence > prev) confidenceByTopic.set(row.topic_id, confidence);
     });
     if (confidenceByTopic.size > 0) {
-      await db.from('session_topics').upsert(
+      const { error } = await db.from('session_topics').upsert(
         Array.from(confidenceByTopic.entries()).map(([topic_id, confidence]) => ({
           session_id: sessionId,
           topic_id,
@@ -251,9 +255,10 @@ Deno.serve(async (req) => {
         })),
         { onConflict: 'session_id,topic_id' }
       );
+      if (error) throw error;
     }
 
-    await db
+    const { error: doneError } = await db
       .from('sessions')
       .update({
         summary: extraction.summary,
@@ -262,6 +267,7 @@ Deno.serve(async (req) => {
         processing_status: 'done',
       })
       .eq('id', sessionId);
+    if (doneError) throw doneError;
 
     return json({
       status: 'done',
@@ -362,18 +368,19 @@ async function findOrCreateTopic(
   return topic;
 }
 
-// profiles.locale -> Whisper's ISO-639-1 `language` hint (skips
-// auto-detection, which mis-fires most on short clips).
-function whisperLanguage(locale: string | null | undefined): string | undefined {
-  if (locale === 'ko' || locale === 'en') return locale;
-  return undefined;
-}
+// Deliberately no `language` hint: recordings may be in any language (or a
+// mix), whatever the app's settings say, so Whisper auto-detects.
+const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
 
-async function transcribeAudio(file: Blob, fileName: string, language?: string): Promise<string> {
+async function transcribeAudio(file: Blob, fileName: string): Promise<string> {
+  if (file.size > WHISPER_MAX_BYTES) {
+    throw new Error(
+      `One recording segment is too large to transcribe (${Math.round(file.size / 1024 / 1024)} MB; the limit is 25 MB). Pause and resume every ~40 minutes to split long recordings.`
+    );
+  }
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');
-  if (language) form.append('language', language);
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -495,14 +502,50 @@ The transcript may be in Korean, English, or a mix -- write "title"/"content"/"s
   return {
     summary: typeof parsed.summary === 'string' ? parsed.summary : '',
     outline,
-    tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
-    memories: Array.isArray(parsed.memories) ? parsed.memories : [],
+    tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map(sanitizeTask).filter(Boolean) : [],
+    memories: Array.isArray(parsed.memories) ? parsed.memories.map(sanitizeMemory).filter(Boolean) : [],
     requested_topics: Array.isArray(parsed.requested_topics)
       ? parsed.requested_topics.filter(
           (t: unknown): t is RequestedTopic =>
             !!t && typeof t === 'object' && typeof (t as RequestedTopic).name === 'string'
         )
       : [],
+  };
+}
+
+// GPT output is untrusted: a `priority: "medium"` or a missing title used
+// to violate a check/not-null constraint and take the whole insert down.
+const PRIORITIES = new Set(['low', 'normal', 'high']);
+function clampConfidence(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : undefined;
+}
+function optionalString(v: unknown): string | null {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+function sanitizeTask(raw: unknown): ExtractedTask | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const t = raw as Record<string, unknown>;
+  const title = optionalString(t.title);
+  if (!title) return null;
+  return {
+    title,
+    priority: PRIORITIES.has(t.priority as string) ? (t.priority as ExtractedTask['priority']) : 'normal',
+    topic_name: optionalString(t.topic_name),
+    topic_parent_name: optionalString(t.topic_parent_name),
+    topic_confidence: clampConfidence(t.topic_confidence),
+  };
+}
+function sanitizeMemory(raw: unknown): ExtractedMemory | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const m = raw as Record<string, unknown>;
+  const content = optionalString(m.content);
+  if (!content) return null;
+  return {
+    content,
+    category: optionalString(m.category),
+    topic_name: optionalString(m.topic_name),
+    topic_parent_name: optionalString(m.topic_parent_name),
+    topic_confidence: clampConfidence(m.topic_confidence),
   };
 }
 

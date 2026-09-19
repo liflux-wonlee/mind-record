@@ -1,4 +1,12 @@
-import { FunctionsHttpError } from '@supabase/supabase-js';
+import { FunctionsFetchError, FunctionsHttpError } from '@supabase/supabase-js';
+
+/** Name given to errors that never reached the function (offline, DNS,
+ *  timeout) -- the only kind worth retrying blindly. */
+export const NETWORK_ERROR_NAME = 'NetworkError';
+
+export function isNetworkError(e: unknown): boolean {
+  return e instanceof Error && e.name === NETWORK_ERROR_NAME;
+}
 
 /**
  * supabase-js's FunctionsHttpError.message is just the generic "Edge
@@ -8,6 +16,11 @@ import { FunctionsHttpError } from '@supabase/supabase-js';
  * service that invokes an Edge Function (process-session, converse, ...).
  */
 export async function describeFunctionError(error: unknown, fallback: string): Promise<Error> {
+  if (error instanceof FunctionsFetchError) {
+    const e = new Error('No connection. Check your network and try again.');
+    e.name = NETWORK_ERROR_NAME;
+    return e;
+  }
   if (error instanceof FunctionsHttpError) {
     const status = error.context.status;
     try {

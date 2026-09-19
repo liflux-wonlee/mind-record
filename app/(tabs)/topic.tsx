@@ -167,7 +167,13 @@ export default function TopicDetailScreen() {
   const taskMenu = (task: Task) => {
     const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [];
     if (!isUnclassified) {
-      options.push({ text: 'Remove from this topic', onPress: () => clearTaskTopic(task.id).then(load) });
+      options.push({
+        text: 'Remove from this topic',
+        onPress: () =>
+          clearTaskTopic(task.id)
+            .then(load)
+            .catch((e) => Alert.alert('Could not update', e instanceof Error ? e.message : 'Please try again.')),
+      });
     }
     options.push({
       text: 'Delete task',
@@ -184,7 +190,13 @@ export default function TopicDetailScreen() {
   const memoryMenu = (memory: Memory) => {
     const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [];
     if (!isUnclassified) {
-      options.push({ text: 'Remove from this topic', onPress: () => clearMemoryTopic(memory.id).then(load) });
+      options.push({
+        text: 'Remove from this topic',
+        onPress: () =>
+          clearMemoryTopic(memory.id)
+            .then(load)
+            .catch((e) => Alert.alert('Could not update', e instanceof Error ? e.message : 'Please try again.')),
+      });
     }
     options.push({
       text: 'Delete idea',
@@ -376,6 +388,10 @@ export default function TopicDetailScreen() {
             ) : null}
             {allTopics
               .filter((t) => t.id !== topic.id)
+              // Only top-level targets: topics nest one level deep, and a
+              // target inside the source would make the source its own
+              // ancestor (merge re-parents the source's children too).
+              .filter((t) => !t.parent_topic_id && !wouldCreateCycle(allTopics, topic.id, t.id))
               .map((t) => (
                 <Button
                   key={t.id}
@@ -385,10 +401,6 @@ export default function TopicDetailScreen() {
                   disabled={busy}
                   onPress={() => {
                     if (sheet.kind === 'move') {
-                      if (wouldCreateCycle(allTopics, topic.id, t.id)) {
-                        Alert.alert('Can’t do that', 'A topic can’t move under its own sub-topic.');
-                        return;
-                      }
                       runAction(() => moveTopic(topic.id, t.id).then(() => undefined));
                     } else {
                       runAction(() => mergeTopics(topic.id, t.id), () => router.push(`/topic?id=${t.id}`));

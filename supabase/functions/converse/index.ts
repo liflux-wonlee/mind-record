@@ -85,6 +85,11 @@ Deno.serve(async (req) => {
   if (!session || session.user_id !== user.id) {
     return json({ error: 'Session not found.' }, 404);
   }
+  // The audio is downloaded with the service role below (bypassing Storage
+  // RLS), so the path itself must be pinned to this user's own session.
+  if (!storagePath.startsWith(`${user.id}/${sessionId}/`)) {
+    return json({ error: 'Recording not found.' }, 404);
+  }
 
   try {
     const { data: profile, error: profileError } = await db
@@ -99,7 +104,7 @@ Deno.serve(async (req) => {
 
     const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath);
     if (downloadError) throw downloadError;
-    const userText = (await transcribeAudio(file, storagePath, whisperLanguage(profile?.locale))).trim();
+    const userText = (await transcribeAudio(file, storagePath)).trim();
 
     let assistantText: string;
     let shouldEnd = false;
@@ -152,20 +157,13 @@ async function insertMessage(
   if (error) throw error;
 }
 
-// profiles.locale -> Whisper's ISO-639-1 `language` hint. Given explicitly,
-// Whisper skips language auto-detection, which is where short Korean turns
-// most often went wrong (mis-detected and transcribed as gibberish).
-function whisperLanguage(locale: string | null | undefined): string | undefined {
-  if (locale === 'ko' || locale === 'en') return locale;
-  return undefined;
-}
-
-async function transcribeAudio(file: Blob, storagePath: string, language?: string): Promise<string> {
+// Deliberately no `language` hint: the user may speak any language (or mix
+// them) regardless of the app's settings, so Whisper auto-detects per turn.
+async function transcribeAudio(file: Blob, storagePath: string): Promise<string> {
   const fileName = storagePath.split('/').pop() ?? 'segment.m4a';
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');
-  if (language) form.append('language', language);
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -188,10 +186,18 @@ async function transcribeAudio(file: Blob, storagePath: string, language?: strin
   return data.text ?? '';
 }
 
-function buildSystemPrompt(aiName: string | null, userHonorific: string | null): string {
+// profiles.locale: 'auto' (default -- answer in whatever language the user
+// just spoke), or 'ko' / 'en' to always answer in that language.
+function replyLanguageRule(locale: string | null | undefined): string {
+  if (locale === 'ko') return 'Always reply in Korean, whatever language the user speaks.';
+  if (locale === 'en') return 'Always reply in English, whatever language the user speaks.';
+  return 'Reply in the SAME language the user is speaking in this turn (Korean if they spoke Korean, English if English, and so on).';
+}
+
+function buildSystemPrompt(aiName: string | null, userHonorific: string | null, locale: string | null | undefined): string {
   let prompt = `You are the voice on the other end of a live, continuous conversation inside Mind Record, a voice-journaling app. The conversation auto-listens again after every reply you give -- the user never has to tap anything between turns, it just flows. The user is thinking out loud, like talking to a supportive friend while journaling -- your job is to listen and respond BRIEFLY (1-2 short, natural spoken sentences) so the conversation keeps flowing without you taking over it. This is read aloud by text-to-speech, so never use markdown, bullet points, or a written-essay register -- write the way a person actually talks.
 
-Reply in the SAME language the user is speaking (Korean if they're speaking Korean, English if English).
+${replyLanguageRule(locale)}
 
 Most turns: just react naturally and briefly -- a short acknowledgment, a light follow-up question, or simply encouraging them to keep going. Don't summarize or repeat back everything they just said.
 
@@ -220,7 +226,7 @@ async function generateReply(
   userHonorific: string | null
 ): Promise<{ reply: string; end: boolean }> {
   const messages = [
-    { role: 'system', content: buildSystemPrompt(aiName, userHonorific) },
+    { role: 'system', content: buildSystemPrompt(aiName, userHonorific, locale) },
     ...history
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({ role: m.role, content: m.content })),

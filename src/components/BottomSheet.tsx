@@ -6,9 +6,14 @@
  * extend under both system bars (Android renders it that way regardless
  * on 15+), and the sheet pads its bottom by the navigation-bar inset so the
  * last row is never drawn underneath the gesture/3-button bar.
+ *
+ * A Modal never gets resized by the keyboard (iOS never does; Android's
+ * adjustResize is defeated by statusBarTranslucent), so the sheet sits in
+ * a KeyboardAvoidingView -- without it the text inputs in the rename /
+ * new-topic / task-edit sheets were hidden behind the keyboard.
  */
 import React from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, font } from '@/theme';
@@ -39,22 +44,27 @@ export function BottomSheet({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable
-          style={[styles.sheet, { maxHeight, paddingBottom: 24 + insets.bottom }]}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <Text style={styles.title} numberOfLines={titleLines}>
-            {title}
-          </Text>
-          <View>{children}</View>
+      <KeyboardAvoidingView behavior="padding" style={styles.flex}>
+        <Pressable style={styles.backdrop} onPress={onClose}>
+          <Pressable
+            style={[styles.sheet, { maxHeight, paddingBottom: 24 + insets.bottom }]}
+            onPress={(e) => e.stopPropagation()}
+          >
+            <Text style={styles.title} numberOfLines={titleLines}>
+              {title}
+            </Text>
+            <View>{children}</View>
+          </Pressable>
         </Pressable>
-      </Pressable>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: {
+    flex: 1,
+  },
   backdrop: {
     flex: 1,
     backgroundColor: 'rgba(32,30,29,0.5)',

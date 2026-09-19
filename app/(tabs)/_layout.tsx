@@ -28,7 +28,6 @@ export default function TabsLayout() {
       <Tabs.Screen name="account" options={{ href: null }} />
       <Tabs.Screen name="inbox" options={{ href: null }} />
       <Tabs.Screen name="topic" options={{ href: null }} />
-      <Tabs.Screen name="thread" options={{ href: null }} />
       <Tabs.Screen name="journal" options={{ href: null }} />
     </Tabs>
   );

@@ -33,15 +33,15 @@ import {
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioPlayer,
-  useAudioPlayerStatus,
   useAudioRecorder,
   useAudioRecorderState,
-  RecordingPresets,
 } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
+import { SPEECH_RECORDING_OPTIONS } from '@/hooks/useCaptureSession';
+import { isNetworkError } from '@/lib/functionsError';
 import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn } from '@/services/conversation';
 import { processSession } from '@/services/processing';
@@ -78,11 +78,22 @@ const FLOOR_MIN_DB = -70;
 // Android MediaRecorder quirk) -- always pad a stop out to at least this long.
 const MIN_RECORDING_MS = 800;
 
+// Only a request that never reached the function is retried: a 4xx/5xx
+// that did reach it may already have inserted this turn's messages, and
+// re-sending would duplicate them in the transcript.
 async function withOneRetry<T>(fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
-  } catch {
+  } catch (e) {
+    if (!isNetworkError(e)) throw e;
     return await fn();
+  }
+}
+
+class TurnAbortedError extends Error {
+  constructor() {
+    super('turn aborted');
+    this.name = 'TurnAbortedError';
   }
 }
 
@@ -91,6 +102,12 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   const { user } = useAuth();
   const [state, setState] = useState<ConversationState>('idle');
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
+  // True from the moment a stop is requested until the turn's reply is
+  // playing (or it failed) -- covers the window where `state` still says
+  // 'recording' but the recorder is already being padded/stopped/uploaded.
+  const [turnBusy, setTurnBusy] = useState(false);
+  const stateRef = useRef<ConversationState>('idle');
+  stateRef.current = state;
   const sessionIdRef = useRef<string | null>(null);
   const hasSpokenRef = useRef(false);
   const silenceStartRef = useRef<number | null>(null);
@@ -102,6 +119,11 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   // starts, so the `state !== 'recording'` check alone can't tell "already
   // stopping" from "not yet stopped".
   const stoppingRef = useRef(false);
+  // The in-flight stopTurn() promise, so ending the conversation can wait
+  // for the last turn's transcript to land in `messages` before
+  // process-session reads them -- and cancelling can abort it instead.
+  const turnPromiseRef = useRef<Promise<void> | null>(null);
+  const abortedRef = useRef(false);
   // Mirrors the latest metering reading every render so the silence-check
   // interval below always sees a fresh value without needing to be torn
   // down and recreated on every single poll tick.
@@ -121,11 +143,10 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   // recorder then wrote an unencoded, zero-duration file (Whisper: "Invalid
   // file format", duration 0) and never reported a metering level, which is
   // why the silence auto-stop never fired either.
-  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
+  const recorder = useAudioRecorder({ ...SPEECH_RECORDING_OPTIONS, isMeteringEnabled: true });
   const recorderState = useAudioRecorderState(recorder, 200);
   meteringRef.current = recorderState.metering;
   const player = useAudioPlayer(null);
-  const playerStatus = useAudioPlayerStatus(player);
 
   const ensureSession = useCallback(async (): Promise<string | null> => {
     if (sessionIdRef.current || !user) return sessionIdRef.current;
@@ -140,6 +161,13 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
    *  session id (or null if the conversation never really started). */
   const endConversation = useCallback(async (): Promise<string | null> => {
     activeRef.current = false;
+    // A turn that is mid-upload/transcription is the user's LAST words --
+    // let it finish writing to `messages` first, or process-session's
+    // transcript (built from those rows) silently drops it.
+    if (turnPromiseRef.current) {
+      await turnPromiseRef.current.catch(() => undefined);
+    }
+    abortedRef.current = true;
     if (recorderState.isRecording) {
       try {
         await recorder.stop();
@@ -173,6 +201,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
    *  use endConversation to actually keep what was said. */
   const cancelConversation = useCallback(async (): Promise<void> => {
     activeRef.current = false;
+    abortedRef.current = true; // an in-flight turn bails at its next await instead of playing a reply into a dead screen
     if (recorderState.isRecording) {
       try {
         await recorder.stop();
@@ -211,6 +240,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       recorder.record();
       recordingStartedAtRef.current = Date.now();
       activeRef.current = true;
+      abortedRef.current = false;
       setState('recording');
     } catch (e) {
       Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
@@ -222,54 +252,69 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     const sessionId = sessionIdRef.current;
     if (!sessionId) return;
     stoppingRef.current = true;
+    setTurnBusy(true);
+    const throwIfAborted = () => {
+      if (abortedRef.current) throw new TurnAbortedError();
+    };
 
-    try {
-      const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
-      if (elapsed < MIN_RECORDING_MS) {
-        await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
-      }
-
+    const run = async () => {
       try {
-        await recorder.stop();
-      } catch {
-        // The native recorder can throw on stop (e.g. it was already
-        // winding down on its own) -- press on and try to use whatever it
-        // captured rather than leaving the turn stuck on "Listening…"
-        // forever, which is what silently swallowing this used to do.
+        const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
+        if (elapsed < MIN_RECORDING_MS) {
+          await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
+        }
+
+        try {
+          await recorder.stop();
+        } catch {
+          // The native recorder can throw on stop (e.g. it was already
+          // winding down on its own) -- press on and try to use whatever it
+          // captured rather than leaving the turn stuck on "Listening…"
+          // forever, which is what silently swallowing this used to do.
+        }
+        throwIfAborted();
+        setState('thinking');
+
+        const uri = recorder.uri;
+        if (!uri) throw new Error('No audio was captured for that turn.');
+        const attachment = await uploadRecording(user.id, sessionId, uri);
+        throwIfAborted();
+        // The audio is already safely uploaded by this point -- retrying
+        // just the transcribe+reply call costs nothing extra on a transient
+        // network hiccup instead of losing the turn outright.
+        const result = await withOneRetry(() => converseTurn(sessionId, attachment.storage_path));
+        throwIfAborted();
+
+        setTurns((prev) => {
+          const next = [...prev];
+          if (result.userText) next.push({ role: 'user', content: result.userText });
+          next.push({ role: 'assistant', content: result.assistantText });
+          return next;
+        });
+        pendingEndRef.current = result.shouldEnd;
+
+        const replyFile = new File(Paths.cache, `mind-record-reply-${Date.now()}.mp3`);
+        replyFile.write(result.audioBase64, { encoding: 'base64' });
+        player.replace(replyFile.uri);
+        player.play();
+        setState('speaking');
+      } catch (e) {
+        if (e instanceof TurnAbortedError) return;
+        Alert.alert(
+          'Could not process that',
+          (e instanceof Error ? e.message : 'Please try again.') +
+            ' What you just said may not have been saved.'
+        );
+        setState('idle');
+      } finally {
+        stoppingRef.current = false;
+        setTurnBusy(false);
       }
-      setState('thinking');
-
-      const uri = recorder.uri;
-      if (!uri) throw new Error('No audio was captured for that turn.');
-      const attachment = await uploadRecording(user.id, sessionId, uri);
-      // The audio is already safely uploaded by this point -- retrying
-      // just the transcribe+reply call costs nothing extra on a transient
-      // network hiccup instead of losing the turn outright.
-      const result = await withOneRetry(() => converseTurn(sessionId, attachment.storage_path));
-
-      setTurns((prev) => {
-        const next = [...prev];
-        if (result.userText) next.push({ role: 'user', content: result.userText });
-        next.push({ role: 'assistant', content: result.assistantText });
-        return next;
-      });
-      pendingEndRef.current = result.shouldEnd;
-
-      const replyFile = new File(Paths.cache, `mind-record-reply-${Date.now()}.mp3`);
-      replyFile.write(result.audioBase64, { encoding: 'base64' });
-      player.replace(replyFile.uri);
-      player.play();
-      setState('speaking');
-    } catch (e) {
-      Alert.alert(
-        'Could not process that',
-        (e instanceof Error ? e.message : 'Please try again.') +
-          ' What you just said may not have been saved.'
-      );
-      setState('idle');
-    } finally {
-      stoppingRef.current = false;
-    }
+    };
+    const promise = run();
+    turnPromiseRef.current = promise;
+    await promise;
+    if (turnPromiseRef.current === promise) turnPromiseRef.current = null;
   }, [state, user, recorder, player]);
 
   // Auto-ends the turn after a pause in speech, so the user doesn't have
@@ -280,7 +325,10 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     if (state !== 'recording') {
       hasSpokenRef.current = false;
       silenceStartRef.current = null;
-      noiseFloorRef.current = null;
+      // noiseFloorRef is deliberately kept across turns: the room doesn't
+      // change between one reply and the next, and re-seeding it from the
+      // first reading of a turn the user is already talking into would put
+      // the "floor" at speech level and miss that whole utterance.
       return;
     }
     const timer = setInterval(() => {
@@ -322,8 +370,18 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
 
   // A reply finishing playback either closes out the conversation (the
   // user just asked to end) or hands the turn back for another listen.
-  useEffect(() => {
-    if (state !== 'speaking' || !playerStatus.didJustFinish) return;
+  //
+  // This listens to the player's native status events directly rather than
+  // reading useAudioPlayerStatus().didJustFinish: that hook just retains
+  // the last event, and the native side sends didJustFinish:true exactly
+  // once and then nothing more (no status updates while stopped), so the
+  // retained value stayed `true` through the whole next turn. The next
+  // reply's play() then looked "already finished" the instant `state`
+  // became 'speaking' -- the loop re-opened the mic over the AI's own
+  // voice, or cut the closing reply short when ending.
+  const onReplyFinishedRef = useRef<() => void>(() => {});
+  onReplyFinishedRef.current = () => {
+    if (stateRef.current !== 'speaking') return;
     if (pendingEndRef.current) {
       pendingEndRef.current = false;
       setState('idle');
@@ -332,7 +390,30 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       autoRestartRef.current = activeRef.current;
       setState('idle');
     }
-  }, [state, playerStatus.didJustFinish, endConversation, onAutoEnded]);
+  };
+  useEffect(() => {
+    const subscription = player.addListener('playbackStatusUpdate', (status) => {
+      if (status.didJustFinish) onReplyFinishedRef.current();
+    });
+    return () => subscription.remove();
+  }, [player]);
+
+  // Leaving the screen mid-conversation (Android back, swipe) without
+  // ending or cancelling would otherwise leave an un-ended, unprocessed
+  // session row showing up in Home/Records forever.
+  useEffect(
+    () => () => {
+      abortedRef.current = true;
+      const orphan = sessionIdRef.current;
+      sessionIdRef.current = null;
+      if (orphan) {
+        deleteSession(orphan).catch(() => {
+          // Best-effort cleanup on the way out.
+        });
+      }
+    },
+    []
+  );
 
   // Once idle actually commits (not just requested), auto-relisten if flagged.
   useEffect(() => {
@@ -345,6 +426,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   return {
     state,
     turns,
+    turnBusy,
     startTurn,
     stopTurn,
     endConversation,

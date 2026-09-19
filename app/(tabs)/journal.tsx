@@ -113,9 +113,9 @@ export default function JournalScreen() {
     <Screen>
       <Button
         variant="ghost"
-        label="Journal"
+        label="Back"
         icon={<ChevronLeftIcon size={18} color={colors.accent} />}
-        onPress={() => router.push('/memory')}
+        onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
         style={styles.back}
         textStyle={{ fontSize: 12 }}
       />
