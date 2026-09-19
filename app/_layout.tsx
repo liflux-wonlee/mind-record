@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { useOnboardingDone } from '@/lib/onboarding';
 import { AuthProvider, useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
 
@@ -38,7 +39,9 @@ export default function RootLayout() {
 }
 
 function RootNavigator() {
-  const { session, loading } = useAuth();
+  const { session, loading: authLoading } = useAuth();
+  const onboardingDone = useOnboardingDone();
+  const loading = authLoading || onboardingDone === null;
 
   useEffect(() => {
     if (loading) return;
@@ -67,7 +70,16 @@ function RootNavigator() {
         <Stack.Screen name="email-auth" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="auth/callback" options={{ animation: 'fade' }} />
       </Stack.Protected>
-      <Stack.Protected guard={signedIn}>
+      {/* The intro and the app proper are mutually exclusive: on a fresh
+          install only the intro exists, and finishing it flips
+          `onboardingDone` (in-process, not just on next launch) so the
+          intro disappears and Protected redirects into the tabs. Account's
+          "Show the intro again" resets the flag and the same thing
+          happens in reverse. */}
+      <Stack.Protected guard={signedIn && !onboardingDone}>
+        <Stack.Screen name="onboarding" options={{ animation: 'fade' }} />
+      </Stack.Protected>
+      <Stack.Protected guard={signedIn && onboardingDone === true}>
         <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
         <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom' }} />
         <Stack.Screen name="summary" />

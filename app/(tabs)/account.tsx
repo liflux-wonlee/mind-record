@@ -7,6 +7,7 @@ import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'rea
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
+import { resetOnboarding } from '@/lib/onboarding';
 import { signOut } from '@/services/auth';
 import { getProfile, updateProfile, type Profile } from '@/services/profiles';
 import { getAccountStats, type AccountStats } from '@/services/stats';
@@ -130,6 +131,16 @@ export default function AccountScreen() {
         disabled={signingOut}
         onPress={handleSignOut}
         style={styles.signOut}
+      />
+      <Button
+        variant="ghost"
+        label="Show the intro again"
+        align="flex-start"
+        onPress={() => {
+          resetOnboarding();
+        }}
+        style={{ marginTop: 8, paddingHorizontal: 0 }}
+        textStyle={{ fontSize: 12, color: colors.neutral600 }}
       />
     </Screen>
   );

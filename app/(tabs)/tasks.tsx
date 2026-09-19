@@ -195,7 +195,9 @@ function TaskRow({ task, onToggle, onPress }: { task: Task; onToggle: () => void
         </Text>
         <View style={styles.metaRow}>
           <Text style={[styles.meta, { color: !done && task.due_date ? colors.accent : colors.neutral700 }]}>
-            {formatDueDate(task.due_date)}
+            {task.due_date
+              ? formatDueDate(task.due_date)
+              : `Added ${new Date(task.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
           </Text>
         </View>
         {task.description ? (
