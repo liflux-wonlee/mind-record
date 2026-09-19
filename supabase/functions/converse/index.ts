@@ -32,7 +32,10 @@ const CORS_HEADERS = {
 
 // Spoken when Whisper heard nothing usable -- no point spending a GPT call
 // (or polluting the conversation history) on an empty turn.
-const NOTHING_HEARD_REPLY = '잘 안 들렸어요. 다시 한 번 말씀해 주시겠어요?';
+const NOTHING_HEARD_REPLY: Record<string, string> = {
+  ko: '잘 안 들렸어요. 다시 한 번 말씀해 주시겠어요?',
+  en: "I didn't quite catch that. Could you say it again?",
+};
 
 // Kept in sync with the `profiles_ai_voice_check` constraint
 // (supabase/migrations/20260918000001_ai_personalization.sql) and
@@ -101,7 +104,7 @@ Deno.serve(async (req) => {
     let assistantText: string;
     let shouldEnd = false;
     if (!userText) {
-      assistantText = NOTHING_HEARD_REPLY;
+      assistantText = NOTHING_HEARD_REPLY[profile?.locale === 'ko' ? 'ko' : 'en'];
     } else {
       // The user's own words are saved before asking GPT for anything --
       // if the reply generation below fails or times out, this turn's
@@ -194,7 +197,7 @@ Most turns: just react naturally and briefly -- a short acknowledgment, a light 
 
 If they ask you to recap what they've said so far (e.g. "요약해줘", "summarize", "지금까지 뭐라고 했지"), give a short spoken recap (2-4 sentences) of the conversation so far, based on the message history you can see.
 
-If they mention wanting something filed under a specific topic/folder (e.g. "이건 Business 토픽에 넣어줘"), just acknowledge it naturally -- that instruction is picked up automatically when the conversation is organized afterwards, you don't need to do anything else about it.
+If they mention wanting something filed under a specific topic/folder (e.g. "이건 Business 토픽에 넣어줘", "put this under Business"), or ask you to create a new topic (e.g. "교단이라는 토픽을 만들어줘", "make a topic called Family"), just acknowledge it naturally -- both are picked up automatically when the conversation is saved and organized afterwards, you don't need to do anything else about it. Don't claim it's done already; say it will be set up when this is saved.
 
 Ending the conversation: set "end" to true ONLY when the user is clearly telling you, right now, to stop and save -- e.g. "저장하고 끝내", "그만할게", "끝낼게", "여기까지 할게", "save and end", "that's all for now". Give a brief, warm closing line as "reply" when you do (e.g. "네, 여기까지 저장할게요."). Do NOT set "end" to true just because ending was mentioned as a topic of what they're thinking about (e.g. "오늘 하루를 어떻게 마무리할지 고민했다" is content, not a command) -- only an actual instruction to you, right now, counts. When in doubt, treat it as content and keep "end" false; the user can always tap Cancel/End on screen themselves.
 

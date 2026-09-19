@@ -264,7 +264,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       Alert.alert(
         'Could not process that',
         (e instanceof Error ? e.message : 'Please try again.') +
-          ' 이 발언은 저장되지 않았을 수 있어요.'
+          ' What you just said may not have been saved.'
       );
       setState('idle');
     } finally {

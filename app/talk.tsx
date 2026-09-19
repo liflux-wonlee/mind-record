@@ -218,10 +218,10 @@ function CapturePanel({
 
       <ScrollView style={styles.transcript} contentContainerStyle={styles.transcriptContent}>
         {!everRecorded ? (
-          <Text style={styles.idle}>말씀하세요. 주제를 나눌 필요 없이 한 번에 이야기하셔도 됩니다.</Text>
+          <Text style={styles.idle}>Go ahead and talk. No need to organize it — say everything in one go.</Text>
         ) : (
           <Text style={styles.idle}>
-            듣고 있어요. 잠깐 멈추려면 다시 눌러 일시정지하고, 다 마치셨으면 아래 Done을 눌러 끝내세요.
+            Listening. Tap the button again to pause, and tap Done below when you&apos;re finished.
           </Text>
         )}
       </ScrollView>
@@ -266,7 +266,7 @@ const STATE_LABEL: Record<string, string> = {
 };
 
 const TALK_BUTTON_LABEL: Record<string, string> = {
-  idle: '말하기',
+  idle: 'Talk',
   recording: 'Listening… tap to stop',
   thinking: 'Thinking…',
   speaking: 'Speaking…',
@@ -313,8 +313,8 @@ function ConversationPanel({
       >
         {turns.length === 0 ? (
           <Text style={styles.idle}>
-            말씀하세요. 잠깐 멈추면 AI가 대답하고, 이후엔 자동으로 계속 대화가 이어집니다. &quot;저장하고
-            끝내&quot;라고 말하거나 Cancel을 눌러 마칠 수 있어요.
+            Go ahead and talk. When you pause, the AI replies, and the conversation keeps going on its own. Say
+            &quot;save and end&quot; or tap Save &amp; end to finish.
           </Text>
         ) : (
           turns.map((turn, i) => (
@@ -369,14 +369,14 @@ function ModePicker({
 }) {
   return (
     <View style={styles.pickerWrap}>
-      <Text style={styles.pickerTitle}>어떻게 이야기할까요?</Text>
+      <Text style={styles.pickerTitle}>How do you want to talk?</Text>
       <Pressable
         accessibilityRole="button"
         onPress={() => onPick('conv')}
         style={({ pressed }) => [styles.pickerCard, { backgroundColor: colors.pastelBlue }, pressed && styles.pickerCardPressed]}
       >
         <Text style={styles.pickerCardTitle}>Conversation</Text>
-        <Text style={styles.pickerCardDesc}>한 마디씩 주고받아요. 말을 멈추면 AI가 바로 답해요.</Text>
+        <Text style={styles.pickerCardDesc}>Back and forth, one turn at a time. Pause and the AI answers.</Text>
       </Pressable>
       <Pressable
         accessibilityRole="button"
@@ -384,7 +384,7 @@ function ModePicker({
         style={({ pressed }) => [styles.pickerCard, { backgroundColor: colors.pastelGreen }, pressed && styles.pickerCardPressed]}
       >
         <Text style={styles.pickerCardTitle}>Capture</Text>
-        <Text style={styles.pickerCardDesc}>끊기지 않고 하고 싶은 말을 쭉 녹음해요.</Text>
+        <Text style={styles.pickerCardDesc}>One uninterrupted recording of everything on your mind.</Text>
       </Pressable>
       <Button variant="ghost" label="Cancel" align="flex-start" onPress={onCancel} style={{ marginTop: 8 }} />
     </View>

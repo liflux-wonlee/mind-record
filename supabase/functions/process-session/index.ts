@@ -49,11 +49,15 @@ type ExtractedMemory = {
   topic_confidence?: number;
 };
 type OutlineSection = { heading: string; bullets: string[] };
+type RequestedTopic = { name: string; parent_name?: string | null };
+
 type Extraction = {
   summary: string;
   outline: OutlineSection[];
   tasks: ExtractedTask[];
   memories: ExtractedMemory[];
+  /** Topics the speaker explicitly asked to have created, even with nothing to file under them yet. */
+  requested_topics: RequestedTopic[];
 };
 
 Deno.serve(async (req) => {
@@ -181,6 +185,15 @@ Deno.serve(async (req) => {
 
     const extraction = await analyzeTranscript(transcript, topics);
 
+    // "Make a topic called X" is an instruction, not content -- honour it
+    // even when nothing in the recording gets filed under X yet. Before
+    // this, such a request only produced a topic if some task/idea happened
+    // to be assigned to it, so a bare "create this topic" was silently lost.
+    for (const requested of extraction.requested_topics) {
+      const name = requested.name?.trim();
+      if (name) await findOrCreateTopic(db, user.id, topics, name, requested.parent_name?.trim() || null);
+    }
+
     // Resolve each item's topic (find-or-create) before inserting, so the
     // insert already carries the right topic_id -- or, below the
     // confidence threshold, no topic_id and a topic_suggestion instead.
@@ -302,9 +315,20 @@ async function resolveTopic(
   if (!name || (item.topic_confidence ?? 0) < TOPIC_CONFIDENCE_THRESHOLD) {
     return { topicId: null, suggestion: name ?? null };
   }
+  const topic = await findOrCreateTopic(db, userId, topics, name, item.topic_parent_name?.trim() || null);
+  return { topicId: topic.id, suggestion: null };
+}
 
+/** Case-insensitive find-or-create of `name` (under `parentName`, itself
+ *  found-or-created as a TOP-LEVEL topic, when given). Mutates `topics`. */
+async function findOrCreateTopic(
+  db: SupabaseClient,
+  userId: string,
+  topics: TopicRow[],
+  name: string,
+  parentName: string | null
+): Promise<TopicRow> {
   let parentId: string | null = null;
-  const parentName = item.topic_parent_name?.trim();
   if (parentName) {
     let parent = topics.find(
       (t) => t.parent_topic_id === null && t.name.toLowerCase() === parentName.toLowerCase()
@@ -335,7 +359,7 @@ async function resolveTopic(
     topic = data;
     topics.push(topic);
   }
-  return { topicId: topic.id, suggestion: null };
+  return topic;
 }
 
 // profiles.locale -> Whisper's ISO-639-1 `language` hint (skips
@@ -378,7 +402,13 @@ function formatTopicTree(topics: TopicRow[]): string {
 
 async function analyzeTranscript(transcript: string, topics: TopicRow[]): Promise<Extraction> {
   if (!transcript.trim()) {
-    return { summary: 'No speech was detected in this recording.', outline: [], tasks: [], memories: [] };
+    return {
+      summary: 'No speech was detected in this recording.',
+      outline: [],
+      tasks: [],
+      memories: [],
+      requested_topics: [],
+    };
   }
 
   const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.
@@ -419,8 +449,11 @@ Respond with strict JSON matching this shape:
     "topic_name": string or null,
     "topic_parent_name": string or null,
     "topic_confidence": number between 0 and 1
-  }]
+  }],
+  "requested_topics": [{ "name": string, "parent_name": string or null }]
 }
+
+"requested_topics" is ONLY for explicit instructions to create a topic/folder/category -- e.g. "교단이라는 토픽을 만들어줘", "make a new topic called Family", "add a Health folder" -- including ones with nothing to file under them yet. Use the exact name the speaker gave. Do not put topics here just because they are mentioned or would be a sensible place to file things; that is what topic_name on tasks/memories is for. Empty array when there is no such instruction.
 
 If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic something belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough.
 
@@ -464,6 +497,12 @@ The transcript may be in Korean, English, or a mix -- write "title"/"content"/"s
     outline,
     tasks: Array.isArray(parsed.tasks) ? parsed.tasks : [],
     memories: Array.isArray(parsed.memories) ? parsed.memories : [],
+    requested_topics: Array.isArray(parsed.requested_topics)
+      ? parsed.requested_topics.filter(
+          (t: unknown): t is RequestedTopic =>
+            !!t && typeof t === 'object' && typeof (t as RequestedTopic).name === 'string'
+        )
+      : [],
   };
 }
 

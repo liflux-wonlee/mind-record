@@ -88,9 +88,9 @@ export default function LoginScreen() {
       </View>
 
       <Text style={styles.legal}>
-        음성과 기록은 서버에 안전하게 저장됩니다. 계속하면{' '}
-        <Text style={styles.legalLink}>Terms</Text> 및{' '}
-        <Text style={styles.legalLink}>Privacy</Text>에 동의합니다.
+        Your voice and records are stored securely. By continuing you agree to the{' '}
+        <Text style={styles.legalLink}>Terms</Text> and{' '}
+        <Text style={styles.legalLink}>Privacy Policy</Text>.
       </Text>
     </Screen>
   );

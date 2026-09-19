@@ -229,10 +229,10 @@ export default function TopicDetailScreen() {
       </View>
 
       {isUnclassified ? (
-        <Text style={styles.hint}>토픽이 아직 없는 기록·할 일·아이디어입니다.</Text>
+        <Text style={styles.hint}>Recordings, tasks and ideas that don&apos;t have a topic yet.</Text>
       ) : hasChildren ? (
         <View style={styles.subtopicToggle}>
-          <Text style={styles.subtopicLabel}>하위 토픽 포함</Text>
+          <Text style={styles.subtopicLabel}>Include sub-topics</Text>
           <Switch value={includeSubtopics} onValueChange={setIncludeSubtopics} />
         </View>
       ) : null}
@@ -248,7 +248,7 @@ export default function TopicDetailScreen() {
       ) : !isUnclassified && !topic ? (
         <Text style={styles.empty}>Topic not found.</Text>
       ) : sessions.length === 0 && tasks.length === 0 && memories.length === 0 ? (
-        <Text style={styles.empty}>여기엔 아직 아무것도 없습니다.</Text>
+        <Text style={styles.empty}>Nothing here yet.</Text>
       ) : (
         <>
           {sessions.length > 0 ? (

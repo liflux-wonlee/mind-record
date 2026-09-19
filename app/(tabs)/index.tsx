@@ -130,7 +130,7 @@ export default function HomeScreen() {
           style={({ pressed }) => [styles.todayRow, pressed && { opacity: 0.6 }]}
         >
           <Text style={styles.todayText}>
-            오늘 기록 {todayCount}개 →
+            {todayCount} {todayCount === 1 ? 'record' : 'records'} today →
           </Text>
         </Pressable>
       ) : null}
@@ -139,7 +139,7 @@ export default function HomeScreen() {
         <Kicker style={{ color: colors.neutral700 }}>Recent conversations</Kicker>
         <Pressable onPress={() => router.push('/calendar')} style={{ marginTop: 6 }}>
           <Text style={styles.footerLink}>
-            이전 기록은 기록 메뉴에서 날짜별로 확인할 수 있습니다. 전체 기록 보기 →
+            Older recordings are in Records, by date. See all records →
           </Text>
         </Pressable>
 

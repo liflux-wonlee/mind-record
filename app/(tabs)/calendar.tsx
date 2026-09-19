@@ -185,10 +185,10 @@ export default function RecordsScreen() {
         textStyle={{ fontSize: 12 }}
       />
       <View style={styles.headRow}>
-        <Kicker style={{ color: colors.neutral600 }}>전체 기록</Kicker>
+        <Kicker style={{ color: colors.neutral600 }}>All records</Kicker>
         <View style={styles.modeSeg}>
-          <ModeOption label="달력" selected={mode === 'calendar'} onPress={() => setMode('calendar')} />
-          <ModeOption label="목록" selected={mode === 'list'} onPress={() => setMode('list')} divided />
+          <ModeOption label="Calendar" selected={mode === 'calendar'} onPress={() => setMode('calendar')} />
+          <ModeOption label="List" selected={mode === 'list'} onPress={() => setMode('list')} divided />
         </View>
       </View>
 
@@ -291,7 +291,7 @@ export default function RecordsScreen() {
                   </View>
                 </Row>
               ))}
-              {dayConversations.length === 0 ? <Text style={styles.empty}>이 날은 대화가 없습니다.</Text> : null}
+              {dayConversations.length === 0 ? <Text style={styles.empty}>No conversations on this day.</Text> : null}
             </>
           )}
         </>
@@ -304,7 +304,7 @@ export default function RecordsScreen() {
           ) : listError ? (
             <Text style={styles.empty}>Couldn&apos;t load your records.</Text>
           ) : listSessions.length === 0 ? (
-            <Text style={styles.empty}>아직 기록이 없습니다.</Text>
+            <Text style={styles.empty}>No records yet.</Text>
           ) : (
             <>
               <RuleThick style={{ marginTop: 10 }} />
@@ -334,7 +334,7 @@ export default function RecordsScreen() {
                   style={{ marginTop: 14, minHeight: 48 }}
                 />
               ) : (
-                <Text style={styles.empty}>더 이상 기록이 없습니다.</Text>
+                <Text style={styles.empty}>No more records.</Text>
               )}
             </>
           )}

@@ -8,14 +8,14 @@ import { Button, CardKicker, RuleThick } from '@/components/ui';
 import { colors, font, h2 } from '@/theme';
 
 const STEPS = [
-  { date: 'Jun 4', title: 'Initial idea', note: '서비스 계약을 subscription으로 만들자.' },
-  { date: 'Jun 18', title: 'Pricing discussion', note: '조직 수 기준 vs 사용자 수 기준' },
-  { date: 'Jul 12', title: 'Customer onboarding idea', note: '기존 데이터 이전 마법사와 연결' },
-  { date: 'Aug 5', title: 'Billing model revised', note: '월 단위 청구, 연 결제 할인' },
+  { date: 'Jun 4', title: 'Initial idea', note: 'Turn service contracts into a subscription.' },
+  { date: 'Jun 18', title: 'Pricing discussion', note: 'Per-organization vs. per-user pricing' },
+  { date: 'Jul 12', title: 'Customer onboarding idea', note: 'Connect to the data-migration wizard' },
+  { date: 'Aug 5', title: 'Billing model revised', note: 'Monthly billing, discount for annual' },
   {
     date: 'Sep 11',
     title: 'Final direction',
-    note: '서비스 계약 월 구독 모델로 확장',
+    note: 'Expand service contracts to a monthly subscription model',
     source: 'Source: Sep 11 conversation →',
     current: true,
   },

@@ -24,10 +24,10 @@ function localeOf(profile: Profile): Locale {
 }
 
 const VOICE_OPTIONS: { voice: AiVoice; label: string }[] = [
-  { voice: 'echo', label: '남성 계열 1' },
-  { voice: 'onyx', label: '남성 계열 2' },
-  { voice: 'nova', label: '여성 계열 1' },
-  { voice: 'shimmer', label: '여성 계열 2' },
+  { voice: 'echo', label: 'Male voice 1' },
+  { voice: 'onyx', label: 'Male voice 2' },
+  { voice: 'nova', label: 'Female voice 1' },
+  { voice: 'shimmer', label: 'Female voice 2' },
 ];
 
 function initials(name: string): string {
@@ -155,7 +155,7 @@ function AiSettings({
       const updated = await updateProfile(userId, { locale });
       onSaved(updated);
     } catch (e) {
-      Alert.alert('저장하지 못했습니다', e instanceof Error ? e.message : '다시 시도해 주세요.');
+      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
     } finally {
       setSavingLocale(null);
     }
@@ -166,7 +166,7 @@ function AiSettings({
   const saveNames = async () => {
     if (savingNames) return;
     if (aiName.length > 40 || honorific.length > 40) {
-      Alert.alert('너무 깁니다', '40자 이하로 입력해 주세요.');
+      Alert.alert('Too long', 'Please keep it to 40 characters or fewer.');
       return;
     }
     setSavingNames(true);
@@ -177,7 +177,7 @@ function AiSettings({
       });
       onSaved(updated);
     } catch (e) {
-      Alert.alert('저장하지 못했습니다', e instanceof Error ? e.message : '다시 시도해 주세요.');
+      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
     } finally {
       setSavingNames(false);
     }
@@ -190,7 +190,7 @@ function AiSettings({
       const updated = await updateProfile(userId, { ai_voice: voice });
       onSaved(updated);
     } catch (e) {
-      Alert.alert('저장하지 못했습니다', e instanceof Error ? e.message : '다시 시도해 주세요.');
+      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
     } finally {
       setSavingVoice(null);
     }
@@ -206,7 +206,7 @@ function AiSettings({
       const player = createAudioPlayer(file.uri);
       player.play();
     } catch (e) {
-      Alert.alert('미리듣기 실패', e instanceof Error ? e.message : '다시 시도해 주세요.');
+      Alert.alert('Preview failed', e instanceof Error ? e.message : 'Please try again.');
     } finally {
       setPreviewing(null);
     }
@@ -217,7 +217,7 @@ function AiSettings({
       <Kicker style={{ color: colors.neutral600 }}>AI</Kicker>
       <RuleThick style={{ marginTop: 6, marginBottom: 10 }} />
 
-      <Text style={styles.fieldLabel}>언어 (음성 인식 · AI 응답)</Text>
+      <Text style={styles.fieldLabel}>Language (speech recognition · AI replies)</Text>
       <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
         {LANGUAGE_OPTIONS.map(({ locale, label }) => {
           const selected = localeOf(profile) === locale;
@@ -238,22 +238,22 @@ function AiSettings({
         })}
       </View>
 
-      <Text style={styles.fieldLabel}>AI 이름 (사장님이 AI를 부를 이름)</Text>
+      <Text style={styles.fieldLabel}>AI name (what you call the AI)</Text>
       <TextInput
         style={styles.input}
         value={aiName}
         onChangeText={setAiName}
-        placeholder="예: Lina (비워두면 그냥 AI)"
+        placeholder="e.g. Lina (leave blank for just AI)"
         placeholderTextColor={colors.neutral600}
         maxLength={40}
       />
 
-      <Text style={styles.fieldLabel}>나를 부르는 이름</Text>
+      <Text style={styles.fieldLabel}>What the AI calls you</Text>
       <TextInput
         style={styles.input}
         value={honorific}
         onChangeText={setHonorific}
-        placeholder="예: Won님 (비워두면 호칭 없음)"
+        placeholder="e.g. Won (leave blank for none)"
         placeholderTextColor={colors.neutral600}
         maxLength={40}
       />
@@ -270,7 +270,7 @@ function AiSettings({
         <View style={{ marginBottom: 14 }} />
       )}
 
-      <Text style={styles.fieldLabel}>AI 목소리</Text>
+      <Text style={styles.fieldLabel}>AI voice</Text>
       <View style={{ gap: 8 }}>
         {VOICE_OPTIONS.map(({ voice, label }) => {
           const selected = profile.ai_voice === voice;
@@ -283,7 +283,7 @@ function AiSettings({
               <View style={{ flexDirection: 'row', gap: 8 }}>
                 <Button
                   variant="ghost"
-                  label={previewing === voice ? '재생 중…' : '미리듣기'}
+                  label={previewing === voice ? 'Playing…' : 'Preview'}
                   disabled={previewing !== null}
                   onPress={() => playPreview(voice)}
                   style={{ minHeight: 36, paddingHorizontal: 8 }}
@@ -291,7 +291,7 @@ function AiSettings({
                 />
                 <Button
                   variant={selected ? 'primary' : 'secondary'}
-                  label={savingVoice === voice ? '...' : selected ? '선택됨' : '선택'}
+                  label={savingVoice === voice ? '...' : selected ? 'Selected' : 'Select'}
                   disabled={selected || savingVoice !== null}
                   onPress={() => chooseVoice(voice)}
                   style={{ minHeight: 36, paddingHorizontal: 10 }}
