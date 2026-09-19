@@ -143,12 +143,23 @@ Deno.serve(async (req) => {
   }
 });
 
+// What the user sees in an alert. The raw error (with the upstream HTTP
+// body) is already in the function logs via console.error above; showing
+// it in the app just dumps JSON on the user.
 function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string') {
-    return (e as { message: string }).message;
+  const raw =
+    e instanceof Error
+      ? e.message
+      : e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string'
+        ? (e as { message: string }).message
+        : '';
+  if (/^Whisper transcription failed/.test(raw)) return "Couldn't understand the audio right now. Please try again.";
+  if (/^AI reply failed/.test(raw) || /returned no content/.test(raw)) {
+    return "The AI couldn't reply just now. Please try again.";
   }
-  return 'Unknown error while talking to the AI.';
+  if (/^Speech synthesis failed/.test(raw)) return "Couldn't generate the voice reply. Please try again.";
+  if (/fetch failed|network|ECONNRESET|timed? ?out/i.test(raw)) return 'Connection problem. Please try again.';
+  return raw || 'Something went wrong while talking to the AI.';
 }
 
 async function discardAudio(db: SupabaseClient, storagePath: string): Promise<void> {

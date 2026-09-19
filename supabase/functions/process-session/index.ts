@@ -300,12 +300,24 @@ Deno.serve(async (req) => {
  * and every real failure reason was being discarded before it ever
  * reached `sessions.processing_error` or the client.
  */
+// What ends up in sessions.processing_error and on the Summary screen. The
+// raw error (with the upstream HTTP body) is in the function logs via
+// console.error; the user only needs to know what to do about it.
 function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string') {
-    return (e as { message: string }).message;
+  const raw =
+    e instanceof Error
+      ? e.message
+      : e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string'
+        ? (e as { message: string }).message
+        : '';
+  if (/too large to transcribe/.test(raw)) return raw; // already user-facing
+  if (/^Whisper transcription failed/.test(raw)) return "Couldn't transcribe this recording right now. Tap Retry.";
+  if (/^AI analysis failed/.test(raw) || /returned no content/.test(raw)) {
+    return "Couldn't summarize this recording right now. Tap Retry.";
   }
-  return 'Unknown error while processing this session.';
+  if (/fetch failed|network|ECONNRESET|timed? ?out/i.test(raw)) return 'Connection problem while processing. Tap Retry.';
+  if (/violates|constraint|duplicate key|null value/i.test(raw)) return "Couldn't save the results. Tap Retry.";
+  return raw || 'Something went wrong while processing this recording. Tap Retry.';
 }
 
 /**

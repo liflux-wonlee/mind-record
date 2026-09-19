@@ -251,6 +251,18 @@ export type Database = {
         Args: { source_id: string; target_id: string };
         Returns: void;
       };
+      search_everything: {
+        Args: { q: string; max_results?: number };
+        Returns: {
+          kind: string;
+          id: string;
+          title: string;
+          snippet: string | null;
+          happened_at: string;
+          session_id: string | null;
+          topic_id: string | null;
+        }[];
+      };
     };
   };
 };

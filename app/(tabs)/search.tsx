@@ -1,5 +1,5 @@
-import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import { useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -14,58 +14,68 @@ import {
 import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
-import { useAuth } from '@/providers/AuthProvider';
-import { listRecentMemories, type Memory } from '@/services/memories';
-import { listRecentSessions, type Session } from '@/services/sessions';
-import { listTasks, type Task } from '@/services/tasks';
+import { searchEverything, type SearchHit } from '@/services/search';
 import { colors, font, h2 } from '@/theme';
+
+const KIND_LABEL: Record<SearchHit['kind'], string> = {
+  session: 'Recording',
+  task: 'Task',
+  memory: 'Idea',
+};
 
 export default function SearchScreen() {
   const router = useRouter();
-  const { user } = useAuth();
   const [query, setQuery] = useState('');
-
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [memories, setMemories] = useState<Memory[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!user) return;
-      let cancelled = false;
-      setLoading(true);
+  // Debounced server search: every keystroke would otherwise be a round
+  // trip, and results for an older query could land after a newer one.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setHits([]);
+      setSearching(false);
       setError(null);
-
-      Promise.all([listTasks(user.id), listRecentMemories(user.id, 100), listRecentSessions(user.id, 100)])
-        .then(([t, m, s]) => {
-          if (cancelled) return;
-          setTasks(t);
-          setMemories(m);
-          setSessions(s);
+      return;
+    }
+    let stale = false;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      searchEverything(q)
+        .then((results) => {
+          if (stale) return;
+          setHits(results);
+          setError(null);
         })
         .catch((e) => {
-          if (cancelled) return;
-          setError(e instanceof Error ? e.message : 'Could not load your data.');
+          if (stale) return;
+          setError(e instanceof Error ? e.message : 'Search failed.');
         })
         .finally(() => {
-          if (!cancelled) setLoading(false);
+          if (!stale) setSearching(false);
         });
+    }, 300);
+    return () => {
+      stale = true;
+      clearTimeout(timer);
+    };
+  }, [query]);
 
-      return () => {
-        cancelled = true;
-      };
-    }, [user])
-  );
+  const open = (hit: SearchHit) => {
+    if (hit.kind === 'task') {
+      router.push({ pathname: '/tasks', params: { edit: hit.id } });
+    } else if (hit.session_id) {
+      router.push({ pathname: '/summary', params: { sessionId: hit.session_id } });
+    } else if (hit.topic_id) {
+      router.push(`/topic?id=${hit.topic_id}`);
+    } else {
+      router.push('/topic?unclassified=1');
+    }
+  };
 
-  const needle = query.trim().toLowerCase();
-  const taskMatches = needle ? tasks.filter((t) => t.title.toLowerCase().includes(needle)) : [];
-  const memoryMatches = needle ? memories.filter((m) => m.content.toLowerCase().includes(needle)) : [];
-  const sessionMatches = needle
-    ? sessions.filter((s) => (s.title ?? s.summary ?? '').toLowerCase().includes(needle))
-    : [];
-  const totalMatches = taskMatches.length + memoryMatches.length + sessionMatches.length;
+  const needle = query.trim();
 
   return (
     <Screen scroll={false}>
@@ -75,47 +85,37 @@ export default function SearchScreen() {
       <RuleThick />
 
       <ScrollView style={styles.results} keyboardShouldPersistTaps="handled">
-        {loading ? (
+        {!needle ? (
+          <Text style={styles.emptyText}>
+            Search everything you&apos;ve said — recordings, their full transcripts, tasks and ideas.
+          </Text>
+        ) : error ? (
+          <Text style={styles.emptyText}>{error}</Text>
+        ) : searching && hits.length === 0 ? (
           <View style={styles.centerBlock}>
             <ActivityIndicator color={colors.accent} />
           </View>
-        ) : error ? (
-          <Text style={styles.emptyText}>{error}</Text>
-        ) : !needle ? (
-          <Text style={styles.emptyText}>Type to search your tasks, ideas, and recordings.</Text>
-        ) : totalMatches === 0 ? (
-          <Text style={styles.emptyText}>No matches.</Text>
+        ) : hits.length === 0 ? (
+          <Text style={styles.emptyText}>No matches for &quot;{needle}&quot;.</Text>
         ) : (
-          <>
-            {taskMatches.map((task) => (
-              <Row key={`task-${task.id}`} onPress={() => router.push('/tasks')} style={styles.resultRow}>
-                <CardKicker>Task</CardKicker>
-                <Text style={styles.resultText} numberOfLines={2}>
-                  {task.title}
+          hits.map((hit) => (
+            <Row key={`${hit.kind}-${hit.id}`} onPress={() => open(hit)} style={styles.resultRow}>
+              <View style={styles.resultHead}>
+                <CardKicker>{KIND_LABEL[hit.kind]}</CardKicker>
+                <Text style={styles.resultDate}>
+                  {new Date(hit.happened_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                 </Text>
-              </Row>
-            ))}
-            {memoryMatches.map((memory) => (
-              <Row key={`memory-${memory.id}`} onPress={() => router.push('/memory')} style={styles.resultRow}>
-                <CardKicker>Idea</CardKicker>
-                <Text style={styles.resultText} numberOfLines={2}>
-                  {memory.content}
+              </View>
+              <Text style={styles.resultText} numberOfLines={2}>
+                {hit.title}
+              </Text>
+              {hit.snippet && hit.snippet !== hit.title ? (
+                <Text style={styles.snippet} numberOfLines={3}>
+                  {hit.snippet}
                 </Text>
-              </Row>
-            ))}
-            {sessionMatches.map((session) => (
-              <Row
-                key={`session-${session.id}`}
-                onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
-                style={styles.resultRow}
-              >
-                <CardKicker>Recording</CardKicker>
-                <Text style={styles.resultText} numberOfLines={2}>
-                  {session.title ?? session.summary ?? 'Untitled session'}
-                </Text>
-              </Row>
-            ))}
-          </>
+              ) : null}
+            </Row>
+          ))
         )}
       </ScrollView>
 
@@ -125,8 +125,10 @@ export default function SearchScreen() {
           style={styles.input}
           value={query}
           onChangeText={setQuery}
-          placeholder="Ask anything about your memory"
+          placeholder="Search your memory"
           placeholderTextColor={colors.neutral600}
+          returnKeyType="search"
+          autoCorrect={false}
         />
         <Button
           accessibilityLabel="voice"
@@ -164,12 +166,29 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
   },
+  resultHead: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  resultDate: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.neutral600,
+  },
   resultText: {
     fontFamily: font.semibold,
     fontSize: 14,
     lineHeight: 21,
     color: colors.text,
     marginTop: 3,
+  },
+  snippet: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.neutral700,
+    marginTop: 2,
   },
   askRow: {
     flexDirection: 'row',

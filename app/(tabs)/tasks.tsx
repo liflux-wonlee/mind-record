@@ -1,5 +1,5 @@
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
@@ -51,6 +51,19 @@ export default function TasksScreen() {
   const [adding, setAdding] = useState(false);
   const [filter, setFilter] = useState<Filter>('open');
   const [editing, setEditing] = useState<Task | null>(null);
+
+  // Search deep-links to a task with ?edit=<id>: open its sheet once the
+  // list has loaded, and switch the filter so it's visible behind it.
+  const { edit } = useLocalSearchParams<{ edit?: string }>();
+  const [consumedEdit, setConsumedEdit] = useState<string | null>(null);
+  useEffect(() => {
+    if (!edit || edit === consumedEdit || tasksState.status !== 'ready') return;
+    const target = tasksState.tasks.find((t) => t.id === edit);
+    if (!target) return;
+    setConsumedEdit(edit);
+    setFilter(target.status === 'completed' ? 'completed' : 'open');
+    setEditing(target);
+  }, [edit, consumedEdit, tasksState]);
 
   const submitNewTask = async () => {
     const title = newTitle.trim();
