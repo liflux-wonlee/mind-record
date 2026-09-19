@@ -1,11 +1,29 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { AppleIcon, MailIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { signInWithOAuth } from '@/lib/oauth';
 import { AppleSignInUnavailableError, signInWithApple, signInWithGoogle } from '@/services/auth';
 import { colors, font, radius } from '@/theme';
+
+/**
+ * Apple only ships a native "Sign in with Apple" SDK for iOS -- Android has
+ * no equivalent, so "Continue with Apple" there goes through Supabase's
+ * hosted OAuth (browser) flow instead (see src/lib/oauth.ts, which already
+ * implemented this path but was never actually wired up here -- every
+ * Android tap of this button silently called the iOS-only function and
+ * failed with "iOS only" instead of using the working flow that already
+ * existed for it).
+ */
+async function signInWithAppleAnyPlatform(): Promise<void> {
+  if (Platform.OS === 'ios') {
+    await signInWithApple();
+    return;
+  }
+  await signInWithOAuth('apple');
+}
 
 /** The pastel header blocks — colour and top offset, left to right. */
 const BLOCKS = [
@@ -67,7 +85,7 @@ export default function LoginScreen() {
           color={colors.bg}
           icon={<AppleIcon size={20} color={colors.bg} />}
           disabled={busy !== null}
-          onPress={withBusy('apple', signInWithApple)}
+          onPress={withBusy('apple', signInWithAppleAnyPlatform)}
         />
         <ProviderButton
           label={busy === 'google' ? 'Please wait…' : 'Continue with Google'}

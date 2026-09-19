@@ -8,6 +8,7 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
 
+import { clearBiometricLockState } from '@/lib/biometricLock';
 import { OAuthCancelledError } from '@/lib/oauth';
 import { supabase } from '@/lib/supabase';
 
@@ -141,6 +142,12 @@ export async function signInWithApple(): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
+  // Read before signing out -- getUser() has nothing to return once the
+  // session is gone, and a new account signing in on this device next must
+  // never inherit this one's biometric-lock state (see clearBiometricLockState).
+  const { data } = await supabase.auth.getUser();
+  const userId = data.user?.id;
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
+  if (userId) await clearBiometricLockState(userId).catch(() => {});
 }

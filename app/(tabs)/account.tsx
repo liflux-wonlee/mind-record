@@ -7,6 +7,14 @@ import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'rea
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
+import {
+  biometricLabel,
+  disableBiometricLock,
+  enableBiometricLock,
+  getBiometricSupport,
+  isBiometricLockEnabled,
+  type BiometricKind,
+} from '@/lib/biometricLock';
 import { resetOnboarding } from '@/lib/onboarding';
 import { signOut } from '@/services/auth';
 import { getProfile, updateProfile, type Profile } from '@/services/profiles';
@@ -123,6 +131,8 @@ export default function AccountScreen() {
       {user && profile ? (
         <AiSettings userId={user.id} profile={profile} onSaved={setProfile} />
       ) : null}
+
+      {user ? <BiometricSettings userId={user.id} /> : null}
 
       <Button
         variant="secondary"
@@ -330,6 +340,84 @@ function AiSettings({
             </View>
           );
         })}
+      </View>
+    </View>
+  );
+}
+
+/**
+ * Off by default; only shown at all when the device actually has a
+ * biometric enrolled (rule: "only show what the hardware actually
+ * supports"). Turning it on or off both require a real OS auth first --
+ * see src/lib/biometricLock.ts -- so this component never flips `enabled`
+ * from the toggle press alone, only from what enable/disableBiometricLock
+ * actually confirmed.
+ */
+function BiometricSettings({ userId }: { userId: string }) {
+  const [support, setSupport] = useState<{ available: boolean; kind: BiometricKind | null } | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getBiometricSupport(), isBiometricLockEnabled(userId)]).then(([s, e]) => {
+      if (cancelled) return;
+      setSupport(s);
+      setEnabled(e);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
+
+  if (!support?.available) return null;
+  const label = biometricLabel(support.kind);
+
+  const toggle = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      if (enabled) {
+        const ok = await disableBiometricLock(userId);
+        if (ok) setEnabled(false);
+        // A cancelled/failed confirmation leaves it on -- disabling must
+        // never happen just because the user backed out of the prompt.
+      } else {
+        const ok = await enableBiometricLock(userId);
+        if (ok) {
+          setEnabled(true);
+        } else {
+          Alert.alert('Could not turn on', `${label} did not confirm it was you.`);
+        }
+      }
+    } catch (e) {
+      Alert.alert('Something went wrong', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <View style={{ marginTop: 18 }}>
+      <Kicker style={{ color: colors.neutral600 }}>Privacy</Kicker>
+      <RuleThick style={{ marginTop: 6, marginBottom: 10 }} />
+      <View style={styles.voiceRow}>
+        <View style={{ flex: 1, paddingRight: 10 }}>
+          <Text style={styles.voiceLabel}>{label}</Text>
+          <Text style={[styles.fieldHint, { marginBottom: 0, marginTop: 2 }]}>
+            {enabled
+              ? `Your records are locked behind ${label} whenever you open or return to the app.`
+              : `Require ${label} to view your records.`}
+          </Text>
+        </View>
+        <Button
+          variant={enabled ? 'primary' : 'secondary'}
+          label={busy ? '...' : enabled ? 'On' : 'Off'}
+          disabled={busy}
+          onPress={toggle}
+          style={{ minHeight: 36, paddingHorizontal: 14 }}
+          textStyle={{ fontSize: 12 }}
+        />
       </View>
     </View>
   );

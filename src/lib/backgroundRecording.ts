@@ -12,17 +12,24 @@
  */
 import { PermissionsAndroid, Platform } from 'react-native';
 
+import { withSystemDialog } from '@/lib/systemDialogGuard';
+
 export async function ensureBackgroundRecordingAllowed(): Promise<boolean> {
   if (Platform.OS !== 'android') return true;
   if (Platform.Version < 33) return true;
   try {
-    const result = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS, {
-      title: 'Keep recording with the screen off',
-      message:
-        'Mind Record shows a small "Recording" notification so Android lets it keep listening while the screen is off or you switch apps. Without it, recording pauses whenever you leave the app.',
-      buttonPositive: 'Allow',
-      buttonNegative: 'Not now',
-    });
+    // The permission dialog itself can briefly flick AppState through
+    // 'background' -- withSystemDialog keeps the biometric lock gate from
+    // reading that as a real app-leave and re-locking right on top of it.
+    const result = await withSystemDialog(() =>
+      PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS, {
+        title: 'Keep recording with the screen off',
+        message:
+          'Mind Record shows a small "Recording" notification so Android lets it keep listening while the screen is off or you switch apps. Without it, recording pauses whenever you leave the app.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Not now',
+      })
+    );
     return result === PermissionsAndroid.RESULTS.GRANTED;
   } catch {
     return false;

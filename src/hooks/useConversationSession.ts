@@ -43,6 +43,7 @@ import { Alert } from 'react-native';
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { SPEECH_RECORDING_OPTIONS } from '@/hooks/useCaptureSession';
 import { isNetworkError } from '@/lib/functionsError';
+import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn } from '@/services/conversation';
 import { processSession } from '@/services/processing';
@@ -236,7 +237,9 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
 
   const startTurn = useCallback(async () => {
     if (state !== 'idle') return;
-    const permission = await requestRecordingPermissionsAsync();
+    // Wrapped so the OS permission dialog's own brief AppState blip doesn't
+    // get read by the biometric lock gate as a real app-leave.
+    const permission = await withSystemDialog(() => requestRecordingPermissionsAsync());
     if (!permission.granted) {
       Alert.alert(
         'Microphone access needed',

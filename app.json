@@ -47,6 +47,18 @@
           "enableBackgroundPlayback": false,
           "enableBackgroundRecording": true
         }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Mind Record uses Face ID to unlock your records after you turn this on in Settings."
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": "Mind Record uses Face ID to unlock your records after you turn this on in Settings."
+        }
       ]
     ],
     "experiments": {

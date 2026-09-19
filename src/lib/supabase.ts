@@ -1,18 +1,20 @@
 /**
  * Supabase client — the one place this app talks to its backend.
  *
- * Session persistence uses AsyncStorage so a signed-in user stays signed in
- * across app restarts (see `src/providers/AuthProvider.tsx`, which reads the
- * session this client restores on launch).
+ * Session persistence uses a SecureStore-backed adapter (see
+ * src/lib/secureStorage.ts) so a signed-in user stays signed in across app
+ * restarts (see `src/providers/AuthProvider.tsx`, which reads the session
+ * this client restores on launch) while the token itself sits in the OS
+ * Keychain/Keystore instead of plain-text AsyncStorage.
  *
  * `EXPO_PUBLIC_*` vars are inlined into the JS bundle at build time, so only
  * ever put the publishable key here — never the service_role key or the
  * database password. See `.env.example`.
  */
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
 import 'react-native-url-polyfill/auto';
 
+import { secureAuthStorage } from '@/lib/secureStorage';
 import type { Database } from '@/types/database';
 
 const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
@@ -28,7 +30,7 @@ if (!supabaseUrl || !supabaseKey) {
 
 export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
   auth: {
-    storage: AsyncStorage,
+    storage: secureAuthStorage,
     autoRefreshToken: true,
     persistSession: true,
     // This app has no web build that needs to read tokens out of the URL bar;
