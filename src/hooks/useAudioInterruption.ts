@@ -5,10 +5,10 @@
  *
  * Two signals are wired up:
  *  - the app leaving the foreground (screen lock, app switch, an answered
- *    phone call on Android, a call/Siri on iOS). Neither platform records
- *    reliably for a backgrounded app without a foreground service, and on
- *    iOS expo-audio has already paused the recorder natively by the time
- *    we hear about it.
+ *    phone call on Android, a call/Siri on iOS). Without a foreground
+ *    service neither platform records reliably for a backgrounded app;
+ *    Capture ignores this signal once it has one (see
+ *    src/lib/backgroundRecording.ts), Conversation always stops on it.
  *  - the native recorder reporting an error mid-recording (Android's
  *    MediaRecorder does this when the mic is taken away).
  *

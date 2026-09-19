@@ -239,7 +239,11 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     }
     try {
       await ensureSession();
-      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      // Explicitly off: the audio mode is app-global and Capture may have
+      // turned it on earlier in this run. A conversation can't usefully
+      // continue in the background (the reply has to be heard), so it
+      // stops on backgrounding instead -- see useAudioInterruption below.
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
       await recorder.prepareToRecordAsync();
       recorder.record();
       recordingStartedAtRef.current = Date.now();

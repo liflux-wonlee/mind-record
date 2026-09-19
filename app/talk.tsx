@@ -265,7 +265,8 @@ function CapturePanel({
 }
 
 const INTERRUPTION_TEXT: Record<InterruptionReason, string> = {
-  background: 'Recording paused because the app went to the background (a call, the screen locking, or switching apps).',
+  background:
+    'Recording paused because the app went to the background (a call, the screen locking, or switching apps). Allow the "Recording" notification when asked and it will keep going next time.',
   'recorder-error': 'Recording stopped because the microphone became unavailable.',
 };
 

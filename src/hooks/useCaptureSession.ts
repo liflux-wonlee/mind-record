@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
+import { ensureBackgroundRecordingAllowed } from '@/lib/backgroundRecording';
 import { useAuth } from '@/providers/AuthProvider';
 import { processSession } from '@/services/processing';
 import { uploadRecording } from '@/services/recordings';
@@ -58,6 +59,10 @@ export function useCaptureSession() {
   // Why the recording is paused when it wasn't the user who paused it --
   // cleared the next time recording starts.
   const [interruption, setInterruption] = useState<InterruptionReason | null>(null);
+  // True once the OS has agreed to let this recording continue in the
+  // background (foreground service + notification on Android). Decides
+  // whether leaving the app pauses the recording or not.
+  const backgroundAllowedRef = useRef(false);
 
   const recorder = useAudioRecorder(SPEECH_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 200);
@@ -131,7 +136,15 @@ export function useCaptureSession() {
 
         try {
           await ensureSession();
-          await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+          // Asked once per run, on the first start; Android remembers the
+          // answer so later starts don't prompt again.
+          const backgroundAllowed = backgroundAllowedRef.current || (await ensureBackgroundRecordingAllowed());
+          backgroundAllowedRef.current = backgroundAllowed;
+          await setAudioModeAsync({
+            allowsRecording: true,
+            playsInSilentMode: true,
+            allowsBackgroundRecording: backgroundAllowed,
+          });
           await recorder.prepareToRecordAsync();
           recorder.record();
           recordingStartedAtRef.current = Date.now();
@@ -217,6 +230,9 @@ export function useCaptureSession() {
   // interruption is lost, and the screen explains why it stopped.
   useAudioInterruption(recorder, (reason) => {
     if (!recorder.isRecording || toggleBusyRef.current) return;
+    // With the foreground service running, backgrounding is not an
+    // interruption at all -- the whole point is to keep recording.
+    if (reason === 'background' && backgroundAllowedRef.current) return;
     setInterruption(reason);
     toggleRecording().catch(() => {
       // toggleRecording reports its own failures.
