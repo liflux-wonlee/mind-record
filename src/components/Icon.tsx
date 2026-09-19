@@ -151,6 +151,16 @@ export function CopyIcon(props: IconProps) {
   );
 }
 
+export function ShareIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
+      <Polyline points="16 6 12 2 8 6" />
+      <Line x1="12" x2="12" y1="2" y2="15" />
+    </Stroke>
+  );
+}
+
 export function AppleIcon({ size = 20, color = colors.bg }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>

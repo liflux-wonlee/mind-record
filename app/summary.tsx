@@ -1,11 +1,11 @@
-import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
-import { CopyIcon } from '@/components/Icon';
+import { ShareIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
 import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
@@ -116,13 +116,55 @@ export default function SummaryScreen() {
   const [picking, setPicking] = useState<Entry | { kind: 'session'; id: string } | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [tab, setTab] = useState<'summary' | 'transcript'>('summary');
-  const [copied, setCopied] = useState(false);
+  const [shareContent, setShareContent] = useState<ShareContent | null>(null);
 
-  const copyTranscript = async () => {
-    if (!session?.raw_transcript) return;
-    await Clipboard.setStringAsync(session.raw_transcript);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+  const recordingHeader = (s: Session): string => {
+    const title = s.title || 'Untitled recording';
+    const date = new Date(s.started_at).toLocaleDateString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+    });
+    return `${title}\n${date}`;
+  };
+
+  // Bold markers are a display-only affordance (renderInlineBold above) --
+  // shared/copied text is plain, not markdown.
+  const stripBold = (text: string) => text.replace(/\*\*/g, '');
+
+  // Shares whichever tab is currently showing -- the recording's title/date
+  // plus either its summary+outline or its full transcript, matching the
+  // spec's "recording share = title/date/chosen summary-or-transcript"
+  // (the tab toggle already above this screen IS that choice).
+  const shareCurrentView = () => {
+    if (!session) return;
+    const header = recordingHeader(session);
+    if (tab === 'transcript') {
+      if (!session.raw_transcript) return;
+      setShareContent({
+        kicker: 'Recording · Transcript',
+        title: session.title || 'Recording',
+        body: `${header}\n\n${session.raw_transcript}`,
+      });
+      return;
+    }
+    const outlineText = (session.outline ?? [])
+      .map((s) => `${s.heading}\n${s.bullets.map((b) => `• ${stripBold(b)}`).join('\n')}`)
+      .join('\n\n');
+    const body = [header, session.summary, outlineText].filter(Boolean).join('\n\n');
+    setShareContent({ kicker: 'Recording · Summary', title: session.title || 'Recording', body });
+  };
+
+  const shareOutlineSection = (section: { heading: string; bullets: string[] }) => {
+    setShareContent({
+      kicker: 'Outline',
+      title: section.heading,
+      body: `${section.heading}\n\n${section.bullets.map((b) => `• ${stripBold(b)}`).join('\n')}`,
+    });
+  };
+
+  const shareEntry = (entry: Entry) => {
+    setShareContent({ kicker: entry.kicker, title: entry.kicker, body: entry.title });
   };
 
   const loadResults = useCallback(async () => {
@@ -286,18 +328,29 @@ export default function SummaryScreen() {
     <Screen safeBottom>
       {done ? (
         <View style={styles.tabRow}>
-          <TabOption
-            label="Summary"
-            color={colors.pastelPeach}
-            selected={tab === 'summary'}
-            onPress={() => setTab('summary')}
-          />
-          <TabOption
-            label="Transcript"
-            color={colors.pastelBlue}
-            selected={tab === 'transcript'}
-            onPress={() => setTab('transcript')}
-          />
+          <View style={styles.tabGroup}>
+            <TabOption
+              label="Summary"
+              color={colors.pastelPeach}
+              selected={tab === 'summary'}
+              onPress={() => setTab('summary')}
+            />
+            <TabOption
+              label="Transcript"
+              color={colors.pastelBlue}
+              selected={tab === 'transcript'}
+              onPress={() => setTab('transcript')}
+            />
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Share this recording"
+            onPress={shareCurrentView}
+            style={styles.shareTabButton}
+            hitSlop={8}
+          >
+            <ShareIcon size={18} color={colors.neutral700} />
+          </Pressable>
         </View>
       ) : null}
 
@@ -407,7 +460,13 @@ export default function SummaryScreen() {
       {!done ? null : tab === 'summary' ? (
         <>
           {(session?.outline ?? []).map((section, i) => (
-            <View key={i} style={styles.outlineSection}>
+            <Pressable
+              key={i}
+              style={styles.outlineSection}
+              onLongPress={() => shareOutlineSection(section)}
+              accessibilityRole="button"
+              accessibilityLabel={`Share section: ${section.heading}`}
+            >
               <Text style={styles.outlineHeading}>{section.heading}</Text>
               {section.bullets.map((bullet, j) => (
                 <Text key={j} style={styles.outlineBullet}>
@@ -415,7 +474,7 @@ export default function SummaryScreen() {
                   {renderInlineBold(bullet)}
                 </Text>
               ))}
-            </View>
+            </Pressable>
           ))}
 
           {entries.length > 0 ? (
@@ -426,7 +485,13 @@ export default function SummaryScreen() {
               {entries.map((e) => {
                 const topic = e.topicId ? topics.find((t) => t.id === e.topicId) : undefined;
                 return (
-                  <View key={`${e.kind}-${e.id}`} style={styles.entry}>
+                  <Pressable
+                    key={`${e.kind}-${e.id}`}
+                    style={styles.entry}
+                    onLongPress={() => shareEntry(e)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Share ${e.kicker.toLowerCase()}: ${e.title}`}
+                  >
                     <View style={styles.entryHead}>
                       <CardKicker>{e.kicker}</CardKicker>
                       {topic ? <Tag variant="neutral">{topicDisplayName(topic, topics)}</Tag> : null}
@@ -455,7 +520,7 @@ export default function SummaryScreen() {
                         </View>
                       </View>
                     ) : null}
-                  </View>
+                  </Pressable>
                 );
               })}
             </>
@@ -466,19 +531,7 @@ export default function SummaryScreen() {
           ) : null}
         </>
       ) : session?.raw_transcript ? (
-        <>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Copy transcript"
-            onPress={copyTranscript}
-            style={styles.copyButton}
-            hitSlop={8}
-          >
-            <CopyIcon size={16} color={colors.neutral700} />
-            <Text style={styles.copyButtonText}>{copied ? 'Copied' : 'Copy'}</Text>
-          </Pressable>
-          <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
-        </>
+        <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
       ) : (
         <Text style={styles.footnote}>No speech was detected in this recording.</Text>
       )}
@@ -519,6 +572,8 @@ export default function SummaryScreen() {
             )}
             <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setPicking(null)} />
       </BottomSheet>
+
+      <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
     </Screen>
   );
 }
@@ -647,27 +702,23 @@ const styles = StyleSheet.create({
     fontFamily: font.semibold,
     color: colors.text,
   },
-  copyButton: {
-    flexDirection: 'row',
-    alignSelf: 'flex-end',
-    alignItems: 'center',
-    gap: 5,
-    minHeight: 32,
-    paddingHorizontal: 12,
-    marginTop: 8,
-    marginBottom: 4,
-    borderRadius: radius.pastel,
-    backgroundColor: colors.pastelLavender,
-  },
-  copyButtonText: {
-    fontFamily: font.semibold,
-    fontSize: 12,
-    color: colors.neutral700,
-  },
   tabRow: {
     flexDirection: 'row',
-    alignSelf: 'flex-start',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: 8,
+  },
+  tabGroup: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  shareTabButton: {
+    minHeight: 40,
+    minWidth: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.pastel,
+    backgroundColor: colors.surface,
   },
   tabOpt: {
     minHeight: 40,

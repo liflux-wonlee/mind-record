@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInpu
 import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronLeftIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
 import {
@@ -70,6 +71,7 @@ export default function TopicDetailScreen() {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [shareContent, setShareContent] = useState<ShareContent | null>(null);
 
   const topic = id ? allTopics.find((t) => t.id === id) ?? null : null;
   const parent = topic?.parent_topic_id ? allTopics.find((t) => t.id === topic.parent_topic_id) ?? null : null;
@@ -164,8 +166,36 @@ export default function TopicDetailScreen() {
     );
   };
 
+  const sessionMenu = (session: Session) => {
+    Alert.alert(session.title ?? capitalize(session.mode), undefined, [
+      {
+        text: 'Share',
+        onPress: () =>
+          setShareContent({
+            kicker: capitalize(session.mode),
+            title: session.title ?? 'Recording',
+            body: [
+              session.title ?? 'Untitled recording',
+              new Date(session.started_at).toLocaleDateString(undefined, {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+              }),
+              session.summary,
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+          }),
+      },
+      { text: 'Delete', style: 'destructive', onPress: () => confirmDeleteSession(session) },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   const taskMenu = (task: Task) => {
-    const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [];
+    const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [
+      { text: 'Share', onPress: () => setShareContent({ kicker: 'Task', title: task.title, body: task.title }) },
+    ];
     if (!isUnclassified) {
       options.push({
         text: 'Remove from this topic',
@@ -188,7 +218,12 @@ export default function TopicDetailScreen() {
   };
 
   const memoryMenu = (memory: Memory) => {
-    const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [];
+    const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [
+      {
+        text: 'Share',
+        onPress: () => setShareContent({ kicker: 'Idea', title: truncate(memory.content, 60), body: memory.content }),
+      },
+    ];
     if (!isUnclassified) {
       options.push({
         text: 'Remove from this topic',
@@ -208,6 +243,23 @@ export default function TopicDetailScreen() {
     });
     options.push({ text: 'Cancel', style: 'cancel' });
     Alert.alert(truncate(memory.content, 60), undefined, options);
+  };
+
+  // Topic-level share: a digest of what's filed here, not a fixed set of
+  // "user-selected records" (there's no multi-select UI on this screen) --
+  // it lists everything currently in view, so the user can trim it down
+  // themselves in the native share sheet's own compose step if they want less.
+  const shareTopic = () => {
+    if (!topic) return;
+    const lines = [
+      topic.name,
+      `${sessions.length} recording${sessions.length === 1 ? '' : 's'}, ${tasks.length} task${tasks.length === 1 ? '' : 's'}, ${memories.length} idea${memories.length === 1 ? '' : 's'}`,
+      '',
+      ...sessions.map((s) => `• ${s.title ?? s.summary ?? 'Untitled recording'}`),
+      ...tasks.map((t) => `• ${t.title}`),
+      ...memories.map((m) => `• ${truncate(m.content, 90)}`),
+    ];
+    setShareContent({ kicker: 'Topic', title: topic.name, body: lines.join('\n') });
   };
 
   const title = isUnclassified ? 'Unclassified' : topic?.name ?? '';
@@ -272,7 +324,7 @@ export default function TopicDetailScreen() {
                 <Row
                   key={session.id}
                   onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
-                  onLongPress={() => confirmDeleteSession(session)}
+                  onLongPress={() => sessionMenu(session)}
                   style={styles.entryRow}
                 >
                   <CardKicker>{capitalize(session.mode)}</CardKicker>
@@ -342,6 +394,15 @@ export default function TopicDetailScreen() {
       {/* Topic management menu */}
       <ActionModal visible={sheet?.kind === 'menu'} onClose={closeSheet} title={topic?.name ?? ''}>
         <View style={{ gap: 10 }}>
+          <Button
+            label="Share"
+            align="flex-start"
+            variant="secondary"
+            onPress={() => {
+              closeSheet();
+              shareTopic();
+            }}
+          />
           <Button label="Rename" align="flex-start" variant="secondary" onPress={() => setSheet({ kind: 'rename' })} />
           {topic && !topic.parent_topic_id ? (
             <Button label="Add sub-topic here" align="flex-start" variant="secondary" onPress={() => setSheet({ kind: 'createChild' })} />
@@ -411,6 +472,8 @@ export default function TopicDetailScreen() {
           </View>
         ) : null}
       </ActionModal>
+
+      <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
     </Screen>
   );
 }

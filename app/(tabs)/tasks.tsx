@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View 
 
 import { BottomSheet } from '@/components/BottomSheet';
 import { Screen } from '@/components/Screen';
+import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, Kicker, RuleThick } from '@/components/ui';
 import { useTasks } from '@/hooks/useTasks';
 import type { Task } from '@/services/tasks';
@@ -51,6 +52,7 @@ export default function TasksScreen() {
   const [adding, setAdding] = useState(false);
   const [filter, setFilter] = useState<Filter>('open');
   const [editing, setEditing] = useState<Task | null>(null);
+  const [shareContent, setShareContent] = useState<ShareContent | null>(null);
 
   // Search deep-links to a task with ?edit=<id>: open its sheet once the
   // list has loaded, and switch the filter so it's visible behind it.
@@ -142,6 +144,15 @@ export default function TasksScreen() {
                 .catch((e) => Alert.alert('Could not update', e instanceof Error ? e.message : 'Please try again.'))
             }
             onPress={() => setEditing(task)}
+            onShare={() =>
+              setShareContent({
+                kicker: 'Task',
+                title: task.title,
+                body: [task.title, task.due_date ? formatDueDate(task.due_date) : null, task.description]
+                  .filter(Boolean)
+                  .join('\n\n'),
+              })
+            }
           />
         ))
       )}
@@ -164,6 +175,8 @@ export default function TasksScreen() {
           setEditing(null);
         }}
       />
+
+      <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
     </Screen>
   );
 }
@@ -191,7 +204,17 @@ function FilterOption({
   );
 }
 
-function TaskRow({ task, onToggle, onPress }: { task: Task; onToggle: () => void; onPress: () => void }) {
+function TaskRow({
+  task,
+  onToggle,
+  onPress,
+  onShare,
+}: {
+  task: Task;
+  onToggle: () => void;
+  onPress: () => void;
+  onShare: () => void;
+}) {
   const done = task.status === 'completed';
   return (
     <View style={styles.task}>
@@ -202,7 +225,7 @@ function TaskRow({ task, onToggle, onPress }: { task: Task; onToggle: () => void
         onPress={onToggle}
         style={[styles.checkbox, done && { backgroundColor: colors.text }]}
       />
-      <Pressable style={styles.taskBody} onPress={onPress}>
+      <Pressable style={styles.taskBody} onPress={onPress} onLongPress={onShare}>
         <Text style={[styles.taskTitle, done && { textDecorationLine: 'line-through', color: colors.neutral500 }]}>
           {task.title}
         </Text>
