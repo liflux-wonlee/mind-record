@@ -1,15 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-  useWindowDimensions,
-} from 'react-native';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { CopyIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
@@ -56,24 +48,35 @@ function TabOption({
   label,
   selected,
   onPress,
-  divided,
+  color,
 }: {
   label: string;
   selected: boolean;
   onPress: () => void;
-  divided?: boolean;
+  color: string;
 }) {
   return (
     <Pressable
       accessibilityRole="radio"
       accessibilityState={{ selected }}
       onPress={onPress}
-      style={[styles.tabOpt, divided && styles.tabDivider, selected && { backgroundColor: colors.accent }]}
+      style={[styles.tabOpt, { backgroundColor: color }, selected ? styles.tabOptSelected : { opacity: 0.55 }]}
     >
-      <Text style={[styles.tabText, selected && { color: colors.bg }]}>{label}</Text>
+      <Text style={[styles.tabText, selected && styles.tabTextSelected]}>{label}</Text>
     </Pressable>
   );
 }
+
+// Rotates through the pastel set so no two neighbouring topic buttons in
+// the picker share a color.
+const PICKER_COLORS = [
+  colors.pastelGreen,
+  colors.pastelBlue,
+  colors.pastelPeach,
+  colors.pastelLavender,
+  colors.pastelYellow,
+  colors.pastelPink,
+];
 
 /**
  * The transcribe-then-analyze pipeline (supabase/functions/process-session)
@@ -90,11 +93,6 @@ export default function SummaryScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { sessionId } = useLocalSearchParams<{ sessionId?: string }>();
-  // Everything used to start flush against the top edge (and under the
-  // floating Account button). Start it around the upper-middle instead --
-  // the outline/tasks below just scroll.
-  const { height: windowHeight } = useWindowDimensions();
-  const topOffset = Math.round(windowHeight * 0.22);
 
   const [session, setSession] = useState<Session | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -208,16 +206,19 @@ export default function SummaryScreen() {
 
   return (
     <Screen safeBottom>
-      <View style={{ height: topOffset }} />
-
       {done ? (
         <View style={styles.tabRow}>
-          <TabOption label="Summary" selected={tab === 'summary'} onPress={() => setTab('summary')} />
+          <TabOption
+            label="Summary"
+            color={colors.pastelPeach}
+            selected={tab === 'summary'}
+            onPress={() => setTab('summary')}
+          />
           <TabOption
             label="Transcript"
+            color={colors.pastelBlue}
             selected={tab === 'transcript'}
             onPress={() => setTab('transcript')}
-            divided
           />
         </View>
       ) : null}
@@ -295,16 +296,15 @@ export default function SummaryScreen() {
                             label={busyEntryId === e.id ? 'Saving…' : `Use "${e.topicSuggestion}"`}
                             disabled={busyEntryId === e.id}
                             onPress={() => useSuggestion(e)}
-                            style={styles.suggestButton}
-                            textStyle={{ fontSize: 12 }}
+                            style={[styles.suggestButton, { backgroundColor: colors.pastelGreen }]}
+                            textStyle={styles.pastelSmallText}
                           />
                           <Button
-                            variant="secondary"
                             label="Pick topic"
                             disabled={busyEntryId === e.id}
                             onPress={() => setPicking(e)}
-                            style={styles.suggestButton}
-                            textStyle={{ fontSize: 12 }}
+                            style={[styles.suggestButton, { backgroundColor: colors.pastelLavender }]}
+                            textStyle={styles.pastelSmallText}
                           />
                         </View>
                       </View>
@@ -340,15 +340,15 @@ export default function SummaryScreen() {
       <View style={styles.actions}>
         <Button
           label="Done"
-          align="flex-start"
           onPress={dismissToTabs}
-          style={styles.doneButton}
+          style={[styles.actionButton, { backgroundColor: colors.pastelGreen }]}
+          textStyle={styles.pastelText}
         />
         <Button
-          variant="secondary"
           label="Keep talking"
           onPress={() => router.replace('/talk')}
-          style={{ minHeight: 52 }}
+          style={[styles.actionButton, { backgroundColor: colors.pastelLavender }]}
+          textStyle={styles.pastelText}
         />
       </View>
 
@@ -365,14 +365,18 @@ export default function SummaryScreen() {
             {topics.length === 0 ? (
               <Text style={styles.footnote}>No topics yet.</Text>
             ) : (
-              topics.map((t) => (
+              topics.map((t, i) => (
                 <Button
                   key={t.id}
                   label={topicDisplayName(t, topics)}
                   align="flex-start"
-                  variant="secondary"
                   onPress={() => picking && assignEntryTopic(picking, t.id)}
-                  style={{ marginBottom: 8 }}
+                  style={{
+                    marginBottom: 8,
+                    borderRadius: radius.pastel,
+                    backgroundColor: PICKER_COLORS[i % PICKER_COLORS.length],
+                  }}
+                  textStyle={styles.pastelText}
                 />
               ))
             )}
@@ -389,7 +393,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pastel,
     padding: 16,
     backgroundColor: colors.pastelYellow,
-    marginTop: 12,
+    marginTop: 16,
     marginBottom: 14,
   },
   summaryText: {
@@ -429,7 +433,8 @@ const styles = StyleSheet.create({
   },
   suggestRow: {
     marginTop: 8,
-    backgroundColor: colors.accent100,
+    backgroundColor: colors.pastelPeach,
+    borderRadius: radius.pastel,
     padding: 10,
   },
   suggestText: {
@@ -446,6 +451,14 @@ const styles = StyleSheet.create({
   suggestButton: {
     minHeight: 36,
     paddingHorizontal: 12,
+    borderRadius: radius.pastel,
+  },
+  pastelText: {
+    color: colors.text,
+  },
+  pastelSmallText: {
+    color: colors.text,
+    fontSize: 12,
   },
   footnote: {
     fontFamily: font.regular,
@@ -483,8 +496,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     minHeight: 32,
-    paddingHorizontal: 4,
+    paddingHorizontal: 12,
+    marginTop: 8,
     marginBottom: 4,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.pastelLavender,
   },
   copyButtonText: {
     fontFamily: font.semibold,
@@ -494,24 +510,26 @@ const styles = StyleSheet.create({
   tabRow: {
     flexDirection: 'row',
     alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: colors.divider,
-    overflow: 'hidden',
-    marginBottom: 4,
+    gap: 8,
   },
   tabOpt: {
     minHeight: 40,
     justifyContent: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
+    borderRadius: radius.pastel,
+    borderWidth: 2,
+    borderColor: 'transparent',
   },
-  tabDivider: {
-    borderLeftWidth: 1,
-    borderLeftColor: colors.divider,
+  tabOptSelected: {
+    borderColor: colors.accent800,
   },
   tabText: {
     fontFamily: font.regular,
     fontSize: 13,
     color: colors.text,
+  },
+  tabTextSelected: {
+    fontFamily: font.extrabold,
   },
   transcriptText: {
     fontFamily: font.regular,
@@ -520,15 +538,19 @@ const styles = StyleSheet.create({
     color: colors.neutral700,
     paddingVertical: 12,
   },
+  // marginTop: 'auto' inside Screen's flexGrow:1 scroll content pins this
+  // row to the bottom of the viewport when the content is short, and lets
+  // it trail the content normally once there's enough to scroll.
   actions: {
     flexDirection: 'row',
     gap: 10,
-    marginTop: 18,
+    marginTop: 'auto',
+    paddingTop: 24,
   },
-  doneButton: {
+  actionButton: {
     flex: 1,
     minHeight: 52,
-    paddingHorizontal: 16,
+    borderRadius: radius.pastel,
   },
   backdrop: {
     flex: 1,

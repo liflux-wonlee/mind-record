@@ -13,7 +13,7 @@
  * The auto-stop-per-turn is a simple silence timer over the recorder's
  * metering (dB) level, not real voice-activity detection -- it's a
  * heuristic tuned for "a normal pause after finishing a sentence," and
- * may need SILENCE_THRESHOLD_DB/SILENCE_DURATION_MS adjusted after
+ * may need the *_MARGIN_DB/SILENCE_DURATION_MS constants adjusted after
  * real-device testing (too eager: cuts off mid-thought; too lax: never
  * fires in a noisy room). Tapping the button always still ends the turn
  * immediately as a manual override either way. The check itself runs on
@@ -51,10 +51,28 @@ import { createSession, deleteSession, endSession } from '@/services/sessions';
 export type ConversationTurn = { role: 'user' | 'assistant'; content: string };
 export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 
-// Metering is in dBFS (0 = loudest, more negative = quieter); typical room
-// noise/breathing sits well below -35dB on a phone mic.
-const SILENCE_THRESHOLD_DB = -35;
+// Metering is in dBFS (0 = loudest, more negative = quieter). On Android
+// expo-audio derives it from MediaRecorder.getMaxAmplitude() -- the PEAK
+// over the last poll window, not an average -- so ordinary room noise
+// routinely peaks well above a fixed -35dB line and a fixed threshold never
+// sees "silence" at all. The detector is therefore relative: it tracks the
+// quietest level it has seen as a noise floor and looks for a drop back
+// toward that floor after speech, rather than for an absolute level.
 const SILENCE_DURATION_MS = 1500;
+// Louder than this is always speech, whatever the floor says.
+const ABSOLUTE_SPEECH_DB = -20;
+// Above floor + this = speech; below floor + SILENCE_MARGIN_DB = quiet;
+// in between = ambiguous (neither resets nor advances the pause timer).
+const SPEECH_MARGIN_DB = 12;
+const SILENCE_MARGIN_DB = 6;
+// The floor drifts upward this much per 200ms tick so it can recover if the
+// room gets louder, but snaps down instantly to any quieter reading.
+const FLOOR_RISE_DB_PER_TICK = 0.25;
+// Android reports -160 when the recorder has no samples yet (amplitude 0);
+// treat anything this low as "no signal": it counts as quiet but must not
+// become the floor, or every later reading would look like speech.
+const NO_SIGNAL_DB = -100;
+const FLOOR_MIN_DB = -70;
 // Stopping the native recorder within roughly the first second of starting
 // it can throw and/or leave a corrupt, zero-duration file behind (a known
 // Android MediaRecorder quirk) -- always pad a stop out to at least this long.
@@ -76,6 +94,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   const sessionIdRef = useRef<string | null>(null);
   const hasSpokenRef = useRef(false);
   const silenceStartRef = useRef<number | null>(null);
+  const noiseFloorRef = useRef<number | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
   // Guards stopTurn against overlapping calls -- the silence interval below
   // ticks every 200ms independent of how far a previous stopTurn() call has
@@ -261,18 +280,35 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     if (state !== 'recording') {
       hasSpokenRef.current = false;
       silenceStartRef.current = null;
+      noiseFloorRef.current = null;
       return;
     }
     const timer = setInterval(() => {
       const level = meteringRef.current;
       if (level === undefined) return;
 
-      if (level > SILENCE_THRESHOLD_DB) {
+      let quiet: boolean;
+      let speech = false;
+      if (level <= NO_SIGNAL_DB) {
+        quiet = true;
+      } else {
+        const prev = noiseFloorRef.current;
+        const floor = Math.max(
+          FLOOR_MIN_DB,
+          prev === null ? level : Math.min(level, prev + FLOOR_RISE_DB_PER_TICK)
+        );
+        noiseFloorRef.current = floor;
+        speech = level > ABSOLUTE_SPEECH_DB || level > floor + SPEECH_MARGIN_DB;
+        quiet = level < floor + SILENCE_MARGIN_DB;
+      }
+
+      if (speech) {
         hasSpokenRef.current = true;
         silenceStartRef.current = null;
         return;
       }
       if (!hasSpokenRef.current) return; // hasn't started talking yet -- don't count this as a pause
+      if (!quiet) return; // ambiguous band -- leave the pause timer where it is
       if (silenceStartRef.current === null) {
         silenceStartRef.current = Date.now();
         return;
