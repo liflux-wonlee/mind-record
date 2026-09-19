@@ -3,7 +3,6 @@ import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Modal,
   Pressable,
   StyleSheet,
   Text,
@@ -11,6 +10,7 @@ import {
   View,
 } from 'react-native';
 
+import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
@@ -273,21 +273,10 @@ function ActionModal({
   children: React.ReactNode;
 }) {
   return (
-    <Modal
-      visible={visible}
-      transparent
-      statusBarTranslucent
-      animationType="fade"
-      onRequestClose={onClose}
-    >
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-          <Text style={styles.sheetTitle}>{title}</Text>
-          {children}
-          <Button label="Cancel" variant="ghost" align="flex-start" onPress={onClose} style={{ marginTop: 12 }} />
-        </Pressable>
-      </Pressable>
-    </Modal>
+    <BottomSheet visible={visible} onClose={onClose} title={title}>
+      {children}
+      <Button label="Cancel" variant="ghost" align="flex-start" onPress={onClose} style={{ marginTop: 12 }} />
+    </BottomSheet>
   );
 }
 
@@ -312,35 +301,24 @@ function NameModal({
   }, [visible, initialValue]);
 
   return (
-    <Modal
-      visible={visible}
-      transparent
-      statusBarTranslucent
-      animationType="fade"
-      onRequestClose={onCancel}
-    >
-      <Pressable style={styles.backdrop} onPress={onCancel}>
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-          <Text style={styles.sheetTitle}>{title}</Text>
-          <TextInput
-            style={styles.input}
-            value={value}
-            onChangeText={setValue}
-            placeholder="Topic name"
-            placeholderTextColor={colors.neutral600}
-            autoFocus
-          />
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-            <Button label="Cancel" variant="ghost" onPress={onCancel} />
-            <Button
-              label={busy ? 'Saving…' : 'Save'}
-              disabled={busy || !value.trim()}
-              onPress={() => onSubmit(value.trim())}
-            />
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
+    <BottomSheet visible={visible} onClose={onCancel} title={title}>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={setValue}
+        placeholder="Topic name"
+        placeholderTextColor={colors.neutral600}
+        autoFocus
+      />
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+        <Button label="Cancel" variant="ghost" onPress={onCancel} />
+        <Button
+          label={busy ? 'Saving…' : 'Save'}
+          disabled={busy || !value.trim()}
+          onPress={() => onSubmit(value.trim())}
+        />
+      </View>
+    </BottomSheet>
   );
 }
 
@@ -395,25 +373,6 @@ const styles = StyleSheet.create({
     fontFamily: font.semibold,
     fontSize: 14,
     color: colors.neutral800,
-  },
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(32,30,29,0.5)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: colors.bg,
-    padding: 20,
-    paddingBottom: 32,
-    borderTopWidth: 2,
-    borderTopColor: colors.divider,
-    maxHeight: '80%',
-  },
-  sheetTitle: {
-    fontFamily: font.extrabold,
-    fontSize: 18,
-    color: colors.text,
-    marginBottom: 14,
   },
   input: {
     minHeight: 48,

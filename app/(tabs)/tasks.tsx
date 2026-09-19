@@ -1,7 +1,8 @@
 import { useRouter } from 'expo-router';
 import React, { useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { BottomSheet } from '@/components/BottomSheet';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, RuleThick } from '@/components/ui';
 import { useTasks } from '@/hooks/useTasks';
@@ -238,10 +239,7 @@ function TaskEditSheet({
   const nextWeek = isoDate(new Date(Date.now() + 7 * 86_400_000));
 
   return (
-    <Modal visible={task !== null} transparent statusBarTranslucent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-          <Text style={styles.sheetTitle}>Edit task</Text>
+    <BottomSheet visible={task !== null} onClose={onClose} title="Edit task" maxHeight="85%">
           <TextInput
             style={styles.input}
             value={title}
@@ -287,9 +285,7 @@ function TaskEditSheet({
             onPress={confirmDelete}
             style={{ marginTop: 10 }}
           />
-        </Pressable>
-      </Pressable>
-    </Modal>
+    </BottomSheet>
   );
 }
 
@@ -428,25 +424,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     color: colors.neutral700,
-  },
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(32,30,29,0.5)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: colors.bg,
-    padding: 20,
-    paddingBottom: 32,
-    borderTopWidth: 2,
-    borderTopColor: colors.divider,
-    maxHeight: '85%',
-  },
-  sheetTitle: {
-    fontFamily: font.extrabold,
-    fontSize: 18,
-    color: colors.text,
-    marginBottom: 14,
   },
   input: {
     minHeight: 48,

@@ -86,7 +86,7 @@ Deno.serve(async (req) => {
   try {
     const { data: profile, error: profileError } = await db
       .from('profiles')
-      .select('ai_name, user_honorific, ai_voice')
+      .select('ai_name, user_honorific, ai_voice, locale')
       .eq('id', user.id)
       .maybeSingle();
     if (profileError) throw profileError;
@@ -96,7 +96,7 @@ Deno.serve(async (req) => {
 
     const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath);
     if (downloadError) throw downloadError;
-    const userText = (await transcribeAudio(file, storagePath)).trim();
+    const userText = (await transcribeAudio(file, storagePath, whisperLanguage(profile?.locale))).trim();
 
     let assistantText: string;
     let shouldEnd = false;
@@ -149,11 +149,20 @@ async function insertMessage(
   if (error) throw error;
 }
 
-async function transcribeAudio(file: Blob, storagePath: string): Promise<string> {
+// profiles.locale -> Whisper's ISO-639-1 `language` hint. Given explicitly,
+// Whisper skips language auto-detection, which is where short Korean turns
+// most often went wrong (mis-detected and transcribed as gibberish).
+function whisperLanguage(locale: string | null | undefined): string | undefined {
+  if (locale === 'ko' || locale === 'en') return locale;
+  return undefined;
+}
+
+async function transcribeAudio(file: Blob, storagePath: string, language?: string): Promise<string> {
   const fileName = storagePath.split('/').pop() ?? 'segment.m4a';
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');
+  if (language) form.append('language', language);
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',

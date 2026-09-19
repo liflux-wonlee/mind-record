@@ -1,7 +1,8 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { BottomSheet } from '@/components/BottomSheet';
 import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
@@ -170,42 +171,34 @@ export default function HomeScreen() {
         )}
       </View>
 
-      <Modal
+      <BottomSheet
         visible={menuSession !== null}
-        transparent
-        statusBarTranslucent
-        animationType="fade"
-        onRequestClose={() => setMenuSession(null)}
+        onClose={() => setMenuSession(null)}
+        title={menuSession?.title ?? menuSession?.mode ?? ''}
+        titleLines={1}
       >
-        <Pressable style={styles.backdrop} onPress={() => setMenuSession(null)}>
-          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.sheetTitle} numberOfLines={1}>
-              {menuSession?.title ?? menuSession?.mode}
-            </Text>
-            <View style={{ gap: 10 }}>
-              <Button
-                label="Open"
-                align="flex-start"
-                variant="secondary"
-                onPress={() => {
-                  if (!menuSession) return;
-                  const id = menuSession.id;
-                  setMenuSession(null);
-                  router.push({ pathname: '/summary', params: { sessionId: id } });
-                }}
-              />
-              <Button
-                label="Delete"
-                align="flex-start"
-                variant="secondary"
-                textStyle={{ color: colors.accent700 }}
-                onPress={() => menuSession && confirmDeleteSession(menuSession)}
-              />
-            </View>
-            <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setMenuSession(null)} style={{ marginTop: 12 }} />
-          </Pressable>
-        </Pressable>
-      </Modal>
+        <View style={{ gap: 10 }}>
+          <Button
+            label="Open"
+            align="flex-start"
+            variant="secondary"
+            onPress={() => {
+              if (!menuSession) return;
+              const id = menuSession.id;
+              setMenuSession(null);
+              router.push({ pathname: '/summary', params: { sessionId: id } });
+            }}
+          />
+          <Button
+            label="Delete"
+            align="flex-start"
+            variant="secondary"
+            textStyle={{ color: colors.accent700 }}
+            onPress={() => menuSession && confirmDeleteSession(menuSession)}
+          />
+        </View>
+        <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setMenuSession(null)} style={{ marginTop: 12 }} />
+      </BottomSheet>
     </Screen>
   );
 }
@@ -292,24 +285,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 18,
     color: colors.neutral600,
-  },
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(32,30,29,0.5)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: colors.bg,
-    padding: 20,
-    paddingBottom: 32,
-    borderTopWidth: 2,
-    borderTopColor: colors.divider,
-    maxHeight: '80%',
-  },
-  sheetTitle: {
-    fontFamily: font.extrabold,
-    fontSize: 16,
-    color: colors.text,
-    marginBottom: 14,
   },
 });

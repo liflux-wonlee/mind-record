@@ -14,6 +14,15 @@ import { previewVoice } from '@/services/voicePreview';
 import { colors, font, radius } from '@/theme';
 import type { AiVoice } from '@/types/database';
 
+type Locale = 'ko' | 'en';
+const LANGUAGE_OPTIONS: { locale: Locale; label: string }[] = [
+  { locale: 'ko', label: '한국어' },
+  { locale: 'en', label: 'English' },
+];
+function localeOf(profile: Profile): Locale {
+  return profile.locale === 'en' ? 'en' : 'ko';
+}
+
 const VOICE_OPTIONS: { voice: AiVoice; label: string }[] = [
   { voice: 'echo', label: '남성 계열 1' },
   { voice: 'onyx', label: '남성 계열 2' },
@@ -136,7 +145,21 @@ function AiSettings({
   const [honorific, setHonorific] = useState(profile.user_honorific ?? '');
   const [savingNames, setSavingNames] = useState(false);
   const [savingVoice, setSavingVoice] = useState<AiVoice | null>(null);
+  const [savingLocale, setSavingLocale] = useState<Locale | null>(null);
   const [previewing, setPreviewing] = useState<AiVoice | null>(null);
+
+  const chooseLocale = async (locale: Locale) => {
+    if (savingLocale) return;
+    setSavingLocale(locale);
+    try {
+      const updated = await updateProfile(userId, { locale });
+      onSaved(updated);
+    } catch (e) {
+      Alert.alert('저장하지 못했습니다', e instanceof Error ? e.message : '다시 시도해 주세요.');
+    } finally {
+      setSavingLocale(null);
+    }
+  };
 
   const namesDirty = aiName !== (profile.ai_name ?? '') || honorific !== (profile.user_honorific ?? '');
 
@@ -177,7 +200,7 @@ function AiSettings({
     if (previewing) return;
     setPreviewing(voice);
     try {
-      const audioBase64 = await previewVoice(voice, 'ko');
+      const audioBase64 = await previewVoice(voice, localeOf(profile));
       const file = new File(Paths.cache, `voice-preview-${voice}.mp3`);
       file.write(audioBase64, { encoding: 'base64' });
       const player = createAudioPlayer(file.uri);
@@ -193,6 +216,27 @@ function AiSettings({
     <View style={{ marginTop: 18 }}>
       <Kicker style={{ color: colors.neutral600 }}>AI</Kicker>
       <RuleThick style={{ marginTop: 6, marginBottom: 10 }} />
+
+      <Text style={styles.fieldLabel}>언어 (음성 인식 · AI 응답)</Text>
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
+        {LANGUAGE_OPTIONS.map(({ locale, label }) => {
+          const selected = localeOf(profile) === locale;
+          return (
+            <Button
+              key={locale}
+              label={savingLocale === locale ? '...' : label}
+              disabled={selected || savingLocale !== null}
+              onPress={() => chooseLocale(locale)}
+              style={[
+                styles.localeButton,
+                { backgroundColor: locale === 'ko' ? colors.pastelGreen : colors.pastelBlue },
+                selected && styles.localeButtonSelected,
+              ]}
+              textStyle={{ color: colors.text }}
+            />
+          );
+        })}
+      </View>
 
       <Text style={styles.fieldLabel}>AI 이름 (사장님이 AI를 부를 이름)</Text>
       <TextInput
@@ -334,6 +378,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.divider,
     marginBottom: 10,
+  },
+  localeButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: radius.pastel,
+    justifyContent: 'center',
+  },
+  localeButtonSelected: {
+    borderWidth: 2,
+    borderColor: colors.accent800,
+    opacity: 1,
   },
   voiceRow: {
     flexDirection: 'row',

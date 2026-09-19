@@ -152,13 +152,16 @@ Deno.serve(async (req) => {
         return json({ error: 'No audio to process.' }, 400);
       }
 
+      const { data: profile } = await db.from('profiles').select('locale').eq('id', user.id).maybeSingle();
+      const language = whisperLanguage(profile?.locale);
+
       const transcriptParts: string[] = [];
       for (const attachment of attachments) {
         const { data: file, error: downloadError } = await db.storage
           .from('recordings')
           .download(attachment.storage_path);
         if (downloadError) throw downloadError;
-        const text = await transcribeAudio(file, attachment.file_name);
+        const text = await transcribeAudio(file, attachment.file_name, language);
         if (text.trim()) transcriptParts.push(text.trim());
       }
       transcript = transcriptParts.join('\n\n');
@@ -335,10 +338,18 @@ async function resolveTopic(
   return { topicId: topic.id, suggestion: null };
 }
 
-async function transcribeAudio(file: Blob, fileName: string): Promise<string> {
+// profiles.locale -> Whisper's ISO-639-1 `language` hint (skips
+// auto-detection, which mis-fires most on short clips).
+function whisperLanguage(locale: string | null | undefined): string | undefined {
+  if (locale === 'ko' || locale === 'en') return locale;
+  return undefined;
+}
+
+async function transcribeAudio(file: Blob, fileName: string, language?: string): Promise<string> {
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');
+  if (language) form.append('language', language);
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',

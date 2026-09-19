@@ -1,8 +1,9 @@
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { BottomSheet } from '@/components/BottomSheet';
 import { CopyIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
@@ -352,16 +353,7 @@ export default function SummaryScreen() {
         />
       </View>
 
-      <Modal
-        visible={picking !== null}
-        transparent
-        statusBarTranslucent
-        animationType="fade"
-        onRequestClose={() => setPicking(null)}
-      >
-        <Pressable style={styles.backdrop} onPress={() => setPicking(null)}>
-          <Pressable style={styles.sheet} onPress={(ev) => ev.stopPropagation()}>
-            <Text style={styles.sheetTitle}>Pick a topic</Text>
+      <BottomSheet visible={picking !== null} onClose={() => setPicking(null)} title="Pick a topic">
             {topics.length === 0 ? (
               <Text style={styles.footnote}>No topics yet.</Text>
             ) : (
@@ -381,9 +373,7 @@ export default function SummaryScreen() {
               ))
             )}
             <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setPicking(null)} />
-          </Pressable>
-        </Pressable>
-      </Modal>
+      </BottomSheet>
     </Screen>
   );
 }
@@ -551,24 +541,5 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 52,
     borderRadius: radius.pastel,
-  },
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(32,30,29,0.5)',
-    justifyContent: 'flex-end',
-  },
-  sheet: {
-    backgroundColor: colors.bg,
-    padding: 20,
-    paddingBottom: 32,
-    borderTopWidth: 2,
-    borderTopColor: colors.divider,
-    maxHeight: '80%',
-  },
-  sheetTitle: {
-    fontFamily: font.extrabold,
-    fontSize: 18,
-    color: colors.text,
-    marginBottom: 14,
   },
 });
