@@ -106,6 +106,11 @@ Deno.serve(async (req) => {
     if (downloadError) throw downloadError;
     const userText = (await transcribeAudio(file, storagePath)).trim();
 
+    // The turn is now text; nothing in the app ever plays the audio back,
+    // so keeping it only costs storage. Best-effort -- a failure here must
+    // not fail the turn.
+    await discardAudio(db, storagePath);
+
     let assistantText: string;
     let shouldEnd = false;
     if (!userText) {
@@ -144,6 +149,15 @@ function errorMessage(e: unknown): string {
     return (e as { message: string }).message;
   }
   return 'Unknown error while talking to the AI.';
+}
+
+async function discardAudio(db: SupabaseClient, storagePath: string): Promise<void> {
+  try {
+    await db.storage.from('recordings').remove([storagePath]);
+    await db.from('attachments').delete().eq('storage_path', storagePath);
+  } catch (e) {
+    console.warn('could not discard turn audio', storagePath, e);
+  }
 }
 
 async function insertMessage(

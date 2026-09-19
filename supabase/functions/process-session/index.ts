@@ -269,6 +269,12 @@ Deno.serve(async (req) => {
       .eq('id', sessionId);
     if (doneError) throw doneError;
 
+    // Everything useful is now text (transcript, summary, outline, tasks,
+    // ideas) and nothing in the app plays audio back, so the recordings
+    // are pure storage cost from here. They are kept on any failure above
+    // so Retry can reprocess; only a fully successful run discards them.
+    await discardSessionAudio(db, sessionId);
+
     return json({
       status: 'done',
       summary: extraction.summary,
@@ -511,6 +517,31 @@ The transcript may be in Korean, English, or a mix -- write "title"/"content"/"s
         )
       : [],
   };
+}
+
+async function discardSessionAudio(db: SupabaseClient, sessionId: string): Promise<void> {
+  try {
+    const { data: attachments } = await db
+      .from('attachments')
+      .select('id, storage_path')
+      .eq('session_id', sessionId)
+      .eq('type', 'audio');
+    if (!attachments || attachments.length === 0) return;
+    const { error: removeError } = await db.storage
+      .from('recordings')
+      .remove(attachments.map((a) => a.storage_path));
+    if (removeError) throw removeError;
+    await db
+      .from('attachments')
+      .delete()
+      .in(
+        'id',
+        attachments.map((a) => a.id)
+      );
+  } catch (e) {
+    // Best-effort: the session is already done; leftover files just cost storage.
+    console.warn('could not discard session audio', sessionId, e);
+  }
 }
 
 // GPT output is untrusted: a `priority: "medium"` or a missing title used
