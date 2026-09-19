@@ -138,6 +138,12 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   const autoRestartRef = useRef(false);
   // Set when converse's GPT call says the user just asked to end and save.
   const pendingEndRef = useRef(false);
+  // True once this session actually has something worth keeping (recording
+  // has started at least once) -- lets the unmount cleanup below tell "the
+  // user left before saying anything" (safe to delete) from "the user left
+  // mid-conversation without tapping Save & end or Cancel" (must NOT be
+  // silently discarded).
+  const hasContentRef = useRef(false);
 
   // Metering has to be switched on HERE, in the construction-time options,
   // not passed to prepareToRecordAsync() later: expo-audio's
@@ -216,6 +222,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     player.pause();
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
+    hasContentRef.current = false;
     setTurns([]);
     setState('idle');
     if (sessionId) {
@@ -249,6 +256,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       recordingStartedAtRef.current = Date.now();
       activeRef.current = true;
       abortedRef.current = false;
+      hasContentRef.current = true;
       setInterruption(null);
       setState('recording');
     } catch (e) {
@@ -437,21 +445,44 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     if (current !== 'thinking') setState('idle');
   });
 
-  // Leaving the screen mid-conversation (Android back, swipe) without
-  // ending or cancelling would otherwise leave an un-ended, unprocessed
-  // session row showing up in Home/Records forever.
+  // Leaving the screen mid-conversation (Android back, swipe) must NOT
+  // silently destroy what was already said -- only a session that never
+  // actually started recording (nothing to lose) is safe to delete here.
+  // Anything with real content is instead saved exactly like tapping
+  // "Save & end": the in-flight (not-yet-uploaded) utterance, if any, can
+  // still be lost since there's no way to run the full upload/transcribe
+  // pipeline from an unmount cleanup, but every turn already confirmed
+  // into `messages` is preserved instead of being deleted outright.
   useEffect(
     () => () => {
       abortedRef.current = true;
       const orphan = sessionIdRef.current;
       sessionIdRef.current = null;
-      if (orphan) {
+      if (!orphan) return;
+      if (!hasContentRef.current) {
         deleteSession(orphan).catch(() => {
           // Best-effort cleanup on the way out.
         });
+        return;
       }
+      (async () => {
+        try {
+          if (recorder.isRecording) await recorder.stop();
+        } catch {
+          // Best-effort -- saving the session either way.
+        }
+        player.pause();
+        try {
+          await endSession(orphan);
+        } catch {
+          // Best-effort -- can't surface an alert once the screen is gone.
+        }
+        processSession(orphan).catch(() => {
+          // Best-effort -- Summary/Retry can pick this up later if it failed.
+        });
+      })();
     },
-    []
+    [recorder, player]
   );
 
   // Once idle actually commits (not just requested), auto-relisten if flagged.

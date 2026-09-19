@@ -118,9 +118,25 @@ Deno.serve(async (req) => {
     return json({ status: 'done', summary: session.summary ?? '', taskCount: null, memoryCount: null });
   }
 
-  try {
-    await db.from('sessions').update({ processing_status: 'transcribing' }).eq('id', sessionId);
+  // Atomically claim the session: only a row still in 'pending' or 'error'
+  // can be claimed, and the conditional UPDATE (not a separate read-then-
+  // write) means at most one of two concurrent/retried invocations (e.g. a
+  // double-tap on Summary's Retry button) actually wins and proceeds --
+  // the loser sees `claimed: null` and backs off instead of re-running the
+  // whole extraction and duplicating every task/idea a moment later.
+  const { data: claimed, error: claimError } = await db
+    .from('sessions')
+    .update({ processing_status: 'transcribing' })
+    .eq('id', sessionId)
+    .in('processing_status', ['pending', 'error'])
+    .select('id')
+    .maybeSingle();
+  if (claimError) return json({ error: claimError.message }, 500);
+  if (!claimed) {
+    return json({ status: 'already_processing' }, 409);
+  }
 
+  try {
     // Conversation mode (see supabase/functions/converse) already transcribes
     // each turn live and leaves the result in `messages` -- reuse that
     // instead of re-running Whisper on the same audio a second time. Capture
@@ -135,10 +151,40 @@ Deno.serve(async (req) => {
 
     let transcript: string;
     if (existingMessages && existingMessages.length > 0) {
-      transcript = existingMessages
+      const conversationTranscript = existingMessages
         .filter((m) => m.role === 'user')
         .map((m) => m.content)
         .join('\n\n');
+
+      // A turn whose audio was uploaded but never made it into `messages`
+      // (the app lost connection or was killed between upload and the
+      // converse reply, or converse itself errored before saving the
+      // transcript) leaves an orphaned attachment here -- transcribe it
+      // too instead of silently dropping that turn's content just because
+      // other turns in the same conversation succeeded.
+      const { data: leftoverAudio, error: leftoverError } = await db
+        .from('attachments')
+        .select('*')
+        .eq('session_id', sessionId)
+        .eq('type', 'audio')
+        .order('created_at', { ascending: true });
+      if (leftoverError) throw leftoverError;
+
+      let leftoverTranscript = '';
+      if (leftoverAudio && leftoverAudio.length > 0) {
+        const parts: string[] = [];
+        for (const attachment of leftoverAudio) {
+          const { data: file, error: downloadError } = await db.storage
+            .from('recordings')
+            .download(attachment.storage_path);
+          if (downloadError) throw downloadError;
+          const text = await transcribeAudio(file, attachment.file_name);
+          if (text.trim()) parts.push(text.trim());
+        }
+        leftoverTranscript = parts.join('\n\n');
+      }
+
+      transcript = leftoverTranscript ? `${conversationTranscript}\n\n${leftoverTranscript}` : conversationTranscript;
     } else {
       const { data: attachments, error: attachmentsError } = await db
         .from('attachments')
@@ -171,10 +217,11 @@ Deno.serve(async (req) => {
       transcript = transcriptParts.join('\n\n');
     }
 
-    await db
+    const { error: transcriptError } = await db
       .from('sessions')
       .update({ raw_transcript: transcript, processing_status: 'analyzing' })
       .eq('id', sessionId);
+    if (transcriptError) throw transcriptError;
 
     const { data: existingTopics, error: topicsError } = await db
       .from('topics')

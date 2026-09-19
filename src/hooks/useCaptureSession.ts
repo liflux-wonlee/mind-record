@@ -20,6 +20,7 @@ import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { ensureBackgroundRecordingAllowed } from '@/lib/backgroundRecording';
+import { isNetworkError } from '@/lib/functionsError';
 import { useAuth } from '@/providers/AuthProvider';
 import { processSession } from '@/services/processing';
 import { uploadRecording } from '@/services/recordings';
@@ -63,6 +64,12 @@ export function useCaptureSession() {
   // background (foreground service + notification on Android). Decides
   // whether leaving the app pauses the recording or not.
   const backgroundAllowedRef = useRef(false);
+  // True once this session actually has something worth keeping (recording
+  // has started at least once) -- lets the unmount cleanup below tell "the
+  // user left before recording anything" (safe to delete) from "the user
+  // left mid-capture without tapping Done or Cancel" (must NOT be silently
+  // discarded).
+  const hasContentRef = useRef(false);
 
   const recorder = useAudioRecorder(SPEECH_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 200);
@@ -96,17 +103,32 @@ export function useCaptureSession() {
     }
   }, [recorder]);
 
-  const uploadCurrentSegment = useCallback(async () => {
+  /** Returns false when this segment could NOT be saved, so callers (pause,
+   *  Done, the unmount cleanup below) can tell that apart from a real
+   *  success instead of silently treating a swallowed upload failure as if
+   *  everything had been captured. */
+  const uploadCurrentSegment = useCallback(async (): Promise<boolean> => {
     const uri = recorder.uri;
     const sessionId = sessionIdRef.current;
-    if (!uri || !sessionId || !user) return;
+    if (!uri || !sessionId || !user) return true; // nothing was recorded -- not a failure
     try {
       await uploadRecording(user.id, sessionId, uri);
+      return true;
     } catch (e) {
+      if (isNetworkError(e)) {
+        try {
+          await uploadRecording(user.id, sessionId, uri);
+          return true;
+        } catch {
+          // Falls through to the alert below.
+        }
+      }
       Alert.alert(
-        'Recording not saved',
-        e instanceof Error ? e.message : 'Could not upload this recording. Please try again.'
+        'Part of this recording was not saved',
+        (e instanceof Error ? e.message : 'Could not upload this recording.') +
+          ' Everything recorded before this point is safe.'
       );
+      return false;
     }
   }, [recorder, user]);
 
@@ -148,6 +170,7 @@ export function useCaptureSession() {
           await recorder.prepareToRecordAsync();
           recorder.record();
           recordingStartedAtRef.current = Date.now();
+          hasContentRef.current = true;
           setEverRecorded(true);
           setInterruption(null);
         } catch (e) {
@@ -179,9 +202,10 @@ export function useCaptureSession() {
     if (togglePromiseRef.current) {
       await togglePromiseRef.current.catch(() => false);
     }
+    let lastSegmentSaved = true;
     if (recorder.isRecording) {
       await stopRecorderSafely();
-      await uploadCurrentSegment();
+      lastSegmentSaved = await uploadCurrentSegment();
     }
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
@@ -190,6 +214,15 @@ export function useCaptureSession() {
         await endSession(sessionId);
       } catch (e) {
         Alert.alert('Could not finish saving', e instanceof Error ? e.message : 'Please try again.');
+      }
+      if (!lastSegmentSaved) {
+        // uploadCurrentSegment already explained the failure -- this just
+        // makes clear that what follows (summary/tasks/ideas) reflects only
+        // what was actually saved, not the whole recording.
+        Alert.alert(
+          'Continuing with what was saved',
+          'The last part of this recording is missing, so the summary below may be incomplete.'
+        );
       }
       // Not awaited: transcription + AI analysis can take a while, and
       // Summary polls sessions.processing_status itself rather than
@@ -214,6 +247,7 @@ export function useCaptureSession() {
     }
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
+    hasContentRef.current = false;
     setEverRecorded(false);
     if (sessionId) {
       try {
@@ -239,19 +273,42 @@ export function useCaptureSession() {
     });
   });
 
-  // Leaving the screen mid-capture (Android back, swipe) without Done or
-  // Cancel would otherwise leave an un-ended session row in Home/Records.
+  // Leaving the screen mid-capture (Android back, swipe) must NOT silently
+  // destroy what was already recorded -- only a session that never actually
+  // started recording (nothing to lose) is safe to delete here. Anything
+  // with real content is instead saved exactly like tapping Done: stop and
+  // upload whatever segment is still active, then end + process the session.
   useEffect(
     () => () => {
       const orphan = sessionIdRef.current;
       sessionIdRef.current = null;
-      if (orphan) {
+      if (!orphan) return;
+      if (!hasContentRef.current) {
         deleteSession(orphan).catch(() => {
           // Best-effort cleanup on the way out.
         });
+        return;
       }
+      (async () => {
+        try {
+          if (recorder.isRecording) {
+            await recorder.stop();
+            await uploadCurrentSegment();
+          }
+        } catch {
+          // Best-effort -- saving the session either way.
+        }
+        try {
+          await endSession(orphan);
+        } catch {
+          // Best-effort -- can't surface an alert once the screen is gone.
+        }
+        processSession(orphan).catch(() => {
+          // Best-effort -- Summary/Retry can pick this up later if it failed.
+        });
+      })();
     },
-    []
+    [recorder, uploadCurrentSegment]
   );
 
   return {

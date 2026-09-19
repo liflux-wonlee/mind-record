@@ -254,6 +254,10 @@ export type Database = {
         Args: { source_id: string; target_id: string };
         Returns: void;
       };
+      assign_session_topic: {
+        Args: { p_session_id: string; p_topic_id: string };
+        Returns: void;
+      };
       search_everything: {
         Args: { q: string; max_results?: number };
         Returns: {

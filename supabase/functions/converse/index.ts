@@ -106,20 +106,22 @@ Deno.serve(async (req) => {
     if (downloadError) throw downloadError;
     const userText = (await transcribeAudio(file, storagePath)).trim();
 
-    // The turn is now text; nothing in the app ever plays the audio back,
-    // so keeping it only costs storage. Best-effort -- a failure here must
-    // not fail the turn.
-    await discardAudio(db, storagePath);
-
     let assistantText: string;
     let shouldEnd = false;
     if (!userText) {
+      // Nothing was actually said -- there's no transcript to lose, so the
+      // audio is safe to discard right away.
+      await discardAudio(db, storagePath);
       assistantText = NOTHING_HEARD_REPLY[profile?.locale === 'ko' ? 'ko' : 'en'];
     } else {
-      // The user's own words are saved before asking GPT for anything --
-      // if the reply generation below fails or times out, this turn's
-      // speech is still on record rather than lost with the request.
+      // The user's own words are saved BEFORE the audio is discarded, not
+      // after: discarding used to run immediately post-transcription, so a
+      // failure in insertMessage right below (or anything after it) left
+      // this turn's speech nowhere -- not in `messages`, and the only copy
+      // of it already deleted. Only once the transcript is durably on
+      // record is the audio actually redundant.
       await insertMessage(db, sessionId, user.id, 'user', userText);
+      await discardAudio(db, storagePath);
 
       const { data: history, error: historyError } = await db
         .from('messages')
