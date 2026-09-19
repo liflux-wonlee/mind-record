@@ -5,6 +5,7 @@ import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
 import { Button, Kicker } from '@/components/ui';
+import type { InterruptionReason } from '@/hooks/useAudioInterruption';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
 import { useConversationSession } from '@/hooks/useConversationSession';
 import { dismissToTabs } from '@/nav';
@@ -206,7 +207,7 @@ function CapturePanel({
   onFinish: () => void;
   busy: boolean;
 }) {
-  const { recording, everRecorded, timer } = capture;
+  const { recording, everRecorded, timer, interruption } = capture;
   return (
     <>
       <View style={styles.statusRow}>
@@ -217,7 +218,12 @@ function CapturePanel({
       </View>
 
       <ScrollView style={styles.transcript} contentContainerStyle={styles.transcriptContent}>
-        {!everRecorded ? (
+        {interruption && !recording ? (
+          <Text style={styles.idle}>
+            {INTERRUPTION_TEXT[interruption]} What you said before that is saved. Tap Resume to keep going, or
+            Done to finish.
+          </Text>
+        ) : !everRecorded ? (
           <Text style={styles.idle}>Go ahead and talk. No need to organize it — say everything in one go.</Text>
         ) : (
           <Text style={styles.idle}>
@@ -258,6 +264,11 @@ function CapturePanel({
   );
 }
 
+const INTERRUPTION_TEXT: Record<InterruptionReason, string> = {
+  background: 'Recording paused because the app went to the background (a call, the screen locking, or switching apps).',
+  'recorder-error': 'Recording stopped because the microphone became unavailable.',
+};
+
 const STATE_LABEL: Record<string, string> = {
   idle: 'Ready',
   recording: '● Listening',
@@ -283,7 +294,7 @@ function ConversationPanel({
   onDone: () => void;
   aiName: string | null;
 }) {
-  const { state, turns, turnBusy, startTurn, stopTurn } = conversation;
+  const { state, turns, turnBusy, interruption, startTurn, stopTurn } = conversation;
   const scrollRef = useRef<ScrollView>(null);
 
   useEffect(() => {
@@ -312,7 +323,13 @@ function ConversationPanel({
         style={styles.transcript}
         contentContainerStyle={styles.transcriptContent}
       >
-        {turns.length === 0 ? (
+        {interruption && state === 'idle' ? (
+          <Text style={styles.idle}>
+            {INTERRUPTION_TEXT[interruption]} Anything you were mid-way through saying wasn&apos;t sent. Tap Talk to
+            continue the conversation, or Save &amp; end to finish.
+          </Text>
+        ) : null}
+        {turns.length === 0 && !interruption ? (
           <Text style={styles.idle}>
             Go ahead and talk. When you pause, the AI replies, and the conversation keeps going on its own. Say
             &quot;save and end&quot; or tap Save &amp; end to finish.

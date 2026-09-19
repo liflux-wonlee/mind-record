@@ -18,6 +18,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
+import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { useAuth } from '@/providers/AuthProvider';
 import { processSession } from '@/services/processing';
 import { uploadRecording } from '@/services/recordings';
@@ -54,6 +55,9 @@ export function useCaptureSession() {
   // pause's upload to finish instead of racing it.
   const [toggleBusy, setToggleBusy] = useState(false);
   const togglePromiseRef = useRef<Promise<boolean> | null>(null);
+  // Why the recording is paused when it wasn't the user who paused it --
+  // cleared the next time recording starts.
+  const [interruption, setInterruption] = useState<InterruptionReason | null>(null);
 
   const recorder = useAudioRecorder(SPEECH_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 200);
@@ -132,6 +136,7 @@ export function useCaptureSession() {
           recorder.record();
           recordingStartedAtRef.current = Date.now();
           setEverRecorded(true);
+          setInterruption(null);
         } catch (e) {
           Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
         }
@@ -206,6 +211,18 @@ export function useCaptureSession() {
     }
   }, [recorder, stopRecorderSafely]);
 
+  // Losing the mic (app backgrounded, native recorder error) is handled as
+  // a pause: the segment recorded so far is finalized and uploaded exactly
+  // as if the user had tapped pause, so nothing said before the
+  // interruption is lost, and the screen explains why it stopped.
+  useAudioInterruption(recorder, (reason) => {
+    if (!recorder.isRecording || toggleBusyRef.current) return;
+    setInterruption(reason);
+    toggleRecording().catch(() => {
+      // toggleRecording reports its own failures.
+    });
+  });
+
   // Leaving the screen mid-capture (Android back, swipe) without Done or
   // Cancel would otherwise leave an un-ended session row in Home/Records.
   useEffect(
@@ -225,6 +242,7 @@ export function useCaptureSession() {
     recording,
     everRecorded,
     toggleBusy,
+    interruption,
     saveOnly,
     toggleSaveOnly: () => setSaveOnly((s) => !s),
     toggleRecording,

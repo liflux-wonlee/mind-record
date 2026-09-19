@@ -40,6 +40,7 @@ import { File, Paths } from 'expo-file-system';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
+import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { SPEECH_RECORDING_OPTIONS } from '@/hooks/useCaptureSession';
 import { isNetworkError } from '@/lib/functionsError';
 import { useAuth } from '@/providers/AuthProvider';
@@ -106,6 +107,9 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   // playing (or it failed) -- covers the window where `state` still says
   // 'recording' but the recorder is already being padded/stopped/uploaded.
   const [turnBusy, setTurnBusy] = useState(false);
+  // Why the loop stopped when it wasn't the user who stopped it -- cleared
+  // the next time a turn starts.
+  const [interruption, setInterruption] = useState<InterruptionReason | null>(null);
   const stateRef = useRef<ConversationState>('idle');
   stateRef.current = state;
   const sessionIdRef = useRef<string | null>(null);
@@ -241,6 +245,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       recordingStartedAtRef.current = Date.now();
       activeRef.current = true;
       abortedRef.current = false;
+      setInterruption(null);
       setState('recording');
     } catch (e) {
       Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
@@ -299,7 +304,12 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
         player.play();
         setState('speaking');
       } catch (e) {
-        if (e instanceof TurnAbortedError) return;
+        if (e instanceof TurnAbortedError) {
+          // An interruption aborts a 'thinking' turn without touching state
+          // itself (see useAudioInterruption below) -- land it in idle here.
+          if (stateRef.current === 'thinking') setState('idle');
+          return;
+        }
         Alert.alert(
           'Could not process that',
           (e instanceof Error ? e.message : 'Please try again.') +
@@ -398,6 +408,31 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     return () => subscription.remove();
   }, [player]);
 
+  // Losing the mic or the foreground mid-loop: stop the hands-free loop
+  // and go idle, keeping the session so the user can pick it back up with
+  // one tap. A half-recorded turn is discarded rather than sent -- a
+  // sentence cut off by a phone call would only produce a confused reply
+  // -- and a reply that was playing is simply stopped (the OS has paused
+  // the player anyway; it would otherwise sit in 'speaking' forever,
+  // because a paused player never reports didJustFinish).
+  useAudioInterruption(recorder, (reason) => {
+    const current = stateRef.current;
+    if (current === 'idle') return;
+    setInterruption(reason);
+    activeRef.current = false;
+    autoRestartRef.current = false;
+    if (current === 'recording' || current === 'thinking') {
+      abortedRef.current = true;
+      if (recorder.isRecording) {
+        recorder.stop().catch(() => {
+          // Best-effort -- the recorder may already be gone.
+        });
+      }
+    }
+    player.pause();
+    if (current !== 'thinking') setState('idle');
+  });
+
   // Leaving the screen mid-conversation (Android back, swipe) without
   // ending or cancelling would otherwise leave an un-ended, unprocessed
   // session row showing up in Home/Records forever.
@@ -427,6 +462,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     state,
     turns,
     turnBusy,
+    interruption,
     startTurn,
     stopTurn,
     endConversation,
