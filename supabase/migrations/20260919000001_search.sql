@@ -9,12 +9,17 @@
 
 create extension if not exists pg_trgm with schema extensions;
 
--- Trigram indexes so ilike '%q%' stays fast as transcripts pile up.
-create index if not exists sessions_transcript_trgm_idx on public.sessions using gin (raw_transcript gin_trgm_ops);
-create index if not exists sessions_summary_trgm_idx on public.sessions using gin (summary gin_trgm_ops);
-create index if not exists sessions_title_trgm_idx on public.sessions using gin (title gin_trgm_ops);
-create index if not exists tasks_title_trgm_idx on public.tasks using gin (title gin_trgm_ops);
-create index if not exists memories_content_trgm_idx on public.memories using gin (content gin_trgm_ops);
+-- Trigram indexes so ilike '%q%' stays fast as transcripts pile up. The
+-- opclass is schema-qualified: pg_trgm installs into the `extensions`
+-- schema above (Supabase's recommended location, not `public`), and the
+-- role running migrations doesn't necessarily have that schema on its
+-- search_path -- an unqualified `gin_trgm_ops` then fails to resolve at
+-- all ("operator class gin_trgm_ops does not exist for access method gin").
+create index if not exists sessions_transcript_trgm_idx on public.sessions using gin (raw_transcript extensions.gin_trgm_ops);
+create index if not exists sessions_summary_trgm_idx on public.sessions using gin (summary extensions.gin_trgm_ops);
+create index if not exists sessions_title_trgm_idx on public.sessions using gin (title extensions.gin_trgm_ops);
+create index if not exists tasks_title_trgm_idx on public.tasks using gin (title extensions.gin_trgm_ops);
+create index if not exists memories_content_trgm_idx on public.memories using gin (content extensions.gin_trgm_ops);
 
 -- A ~140-char window around the first match, so the result row shows the
 -- matching sentence rather than the start of a long transcript.
