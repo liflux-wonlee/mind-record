@@ -1,7 +1,15 @@
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from 'react-native';
 
 import { CopyIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
@@ -12,7 +20,7 @@ import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/service
 import { getSession, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
 import { confirmTopicSuggestion, listTopics, type Topic } from '@/services/topics';
-import { colors, font } from '@/theme';
+import { colors, font, radius } from '@/theme';
 
 /** Renders `**bold**` spans within an outline bullet or the transcript is never bolded, only bullets are. */
 function renderInlineBold(text: string): React.ReactNode {
@@ -82,6 +90,11 @@ export default function SummaryScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { sessionId } = useLocalSearchParams<{ sessionId?: string }>();
+  // Everything used to start flush against the top edge (and under the
+  // floating Account button). Start it around the upper-middle instead --
+  // the outline/tasks below just scroll.
+  const { height: windowHeight } = useWindowDimensions();
+  const topOffset = Math.round(windowHeight * 0.22);
 
   const [session, setSession] = useState<Session | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -163,6 +176,7 @@ export default function SummaryScreen() {
   ];
   const processing =
     !!sessionId && session?.processing_status !== 'done' && session?.processing_status !== 'error';
+  const done = !!sessionId && !loadError && session?.processing_status === 'done';
 
   const assignEntryTopic = async (entry: Entry, topicId: string) => {
     setBusyEntryId(entry.id);
@@ -194,40 +208,9 @@ export default function SummaryScreen() {
 
   return (
     <Screen safeBottom>
-      {!sessionId ? (
-        <>
-          <Kicker style={{ color: colors.neutral600 }}>Saved</Kicker>
-          <Text style={styles.title}>Recording saved.</Text>
-        </>
-      ) : loadError ? (
-        <>
-          <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t load</Kicker>
-          <Text style={styles.title}>{loadError}</Text>
-        </>
-      ) : processing ? (
-        <View style={styles.processing}>
-          <ActivityIndicator color={colors.accent} />
-          <Text style={styles.processingLabel}>
-            {session?.processing_status === 'analyzing'
-              ? 'Understanding what you said…'
-              : 'Transcribing your recording…'}
-          </Text>
-        </View>
-      ) : session?.processing_status === 'error' ? (
-        <>
-          <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t process this recording</Kicker>
-          <Text style={styles.title}>{session.processing_error ?? 'Something went wrong.'}</Text>
-        </>
-      ) : (
-        <>
-          <Kicker style={{ color: colors.neutral600 }}>Saved</Kicker>
-          <Text style={styles.title}>
-            {session?.summary || `${tasks.length} tasks, ${memories.length} ideas.`}
-          </Text>
-        </>
-      )}
+      <View style={{ height: topOffset }} />
 
-      {!processing && !loadError && session?.processing_status === 'done' ? (
+      {done ? (
         <View style={styles.tabRow}>
           <TabOption label="Summary" selected={tab === 'summary'} onPress={() => setTab('summary')} />
           <TabOption
@@ -239,9 +222,42 @@ export default function SummaryScreen() {
         </View>
       ) : null}
 
-      <RuleThick />
+      {!sessionId ? (
+        <View style={styles.summaryCard}>
+          <Kicker style={{ color: colors.neutral700 }}>Saved</Kicker>
+          <Text style={styles.summaryText}>Recording saved.</Text>
+        </View>
+      ) : loadError ? (
+        <View style={[styles.summaryCard, { backgroundColor: colors.pastelPink }]}>
+          <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t load</Kicker>
+          <Text style={styles.summaryText}>{loadError}</Text>
+        </View>
+      ) : processing ? (
+        <View style={[styles.summaryCard, styles.processing]}>
+          <ActivityIndicator color={colors.accent} />
+          <Text style={styles.processingLabel}>
+            {session?.processing_status === 'analyzing'
+              ? 'Understanding what you said…'
+              : 'Transcribing your recording…'}
+          </Text>
+        </View>
+      ) : session?.processing_status === 'error' ? (
+        <View style={[styles.summaryCard, { backgroundColor: colors.pastelPink }]}>
+          <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t process this recording</Kicker>
+          <Text style={styles.summaryText}>{session.processing_error ?? 'Something went wrong.'}</Text>
+        </View>
+      ) : tab === 'summary' ? (
+        <View style={styles.summaryCard}>
+          <Kicker style={{ color: colors.neutral700 }}>Summary</Kicker>
+          <Text style={styles.summaryText}>
+            {session?.summary || `${tasks.length} tasks, ${memories.length} ideas.`}
+          </Text>
+        </View>
+      ) : null}
 
-      {processing || loadError || session?.processing_status !== 'done' ? null : tab === 'summary' ? (
+      {done ? <RuleThick /> : null}
+
+      {!done ? null : tab === 'summary' ? (
         <>
           {(session?.outline ?? []).map((section, i) => (
             <View key={i} style={styles.outlineSection}>
@@ -369,16 +385,22 @@ export default function SummaryScreen() {
 }
 
 const styles = StyleSheet.create({
-  title: {
+  summaryCard: {
+    borderRadius: radius.pastel,
+    padding: 16,
+    backgroundColor: colors.pastelYellow,
+    marginTop: 12,
+    marginBottom: 14,
+  },
+  summaryText: {
     fontFamily: font.semibold,
     fontSize: 19,
     lineHeight: 26,
     color: colors.text,
     marginTop: 6,
-    marginBottom: 14,
   },
   processing: {
-    marginTop: 24,
+    backgroundColor: colors.pastelBlue,
     alignItems: 'flex-start',
     gap: 12,
   },
