@@ -94,7 +94,15 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   // Set when converse's GPT call says the user just asked to end and save.
   const pendingEndRef = useRef(false);
 
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  // Metering has to be switched on HERE, in the construction-time options,
+  // not passed to prepareToRecordAsync() later: expo-audio's
+  // createRecordingOptions() rebuilds the whole native config from whatever
+  // object it's handed, so calling prepareToRecordAsync({ isMeteringEnabled })
+  // silently dropped the preset's extension/sampleRate/encoder -- the
+  // recorder then wrote an unencoded, zero-duration file (Whisper: "Invalid
+  // file format", duration 0) and never reported a metering level, which is
+  // why the silence auto-stop never fired either.
+  const recorder = useAudioRecorder({ ...RecordingPresets.HIGH_QUALITY, isMeteringEnabled: true });
   const recorderState = useAudioRecorderState(recorder, 200);
   meteringRef.current = recorderState.metering;
   const player = useAudioPlayer(null);
@@ -180,7 +188,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     try {
       await ensureSession();
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
-      await recorder.prepareToRecordAsync({ isMeteringEnabled: true });
+      await recorder.prepareToRecordAsync();
       recorder.record();
       recordingStartedAtRef.current = Date.now();
       activeRef.current = true;

@@ -336,7 +336,13 @@ export default function SummaryScreen() {
         />
       </View>
 
-      <Modal visible={picking !== null} transparent animationType="fade" onRequestClose={() => setPicking(null)}>
+      <Modal
+        visible={picking !== null}
+        transparent
+        statusBarTranslucent
+        animationType="fade"
+        onRequestClose={() => setPicking(null)}
+      >
         <Pressable style={styles.backdrop} onPress={() => setPicking(null)}>
           <Pressable style={styles.sheet} onPress={(ev) => ev.stopPropagation()}>
             <Text style={styles.sheetTitle}>Pick a topic</Text>

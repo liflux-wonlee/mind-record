@@ -238,7 +238,7 @@ function TaskEditSheet({
   const nextWeek = isoDate(new Date(Date.now() + 7 * 86_400_000));
 
   return (
-    <Modal visible={task !== null} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal visible={task !== null} transparent statusBarTranslucent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
           <Text style={styles.sheetTitle}>Edit task</Text>

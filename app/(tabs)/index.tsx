@@ -173,6 +173,7 @@ export default function HomeScreen() {
       <Modal
         visible={menuSession !== null}
         transparent
+        statusBarTranslucent
         animationType="fade"
         onRequestClose={() => setMenuSession(null)}
       >
