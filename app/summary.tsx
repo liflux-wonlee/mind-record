@@ -1,7 +1,7 @@
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
 import { CopyIcon } from '@/components/Icon';
@@ -13,7 +13,13 @@ import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/service
 import { processSession } from '@/services/processing';
 import { getSession, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
-import { confirmTopicSuggestion, listTopics, type Topic } from '@/services/topics';
+import {
+  assignSessionTopic,
+  confirmTopicSuggestion,
+  listSessionTopics,
+  listTopics,
+  type Topic,
+} from '@/services/topics';
 import { colors, font, radius } from '@/theme';
 
 /** Renders `**bold**` spans within an outline bullet or the transcript is never bolded, only bullets are. */
@@ -104,8 +110,10 @@ export default function SummaryScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
+  const [sessionTopics, setSessionTopics] = useState<Topic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [picking, setPicking] = useState<Entry | null>(null);
+  // What the topic picker sheet is filing: a task/idea, or the whole recording.
+  const [picking, setPicking] = useState<Entry | { kind: 'session'; id: string } | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [tab, setTab] = useState<'summary' | 'transcript'>('summary');
   const [copied, setCopied] = useState(false);
@@ -119,14 +127,16 @@ export default function SummaryScreen() {
 
   const loadResults = useCallback(async () => {
     if (!sessionId || !user) return;
-    const [t, m, tp] = await Promise.all([
+    const [t, m, tp, st] = await Promise.all([
       listTasksBySession(sessionId),
       listMemoriesBySession(sessionId),
       listTopics(user.id),
+      listSessionTopics(sessionId),
     ]);
     setTasks(t);
     setMemories(m);
     setTopics(tp);
+    setSessionTopics(st);
   }, [sessionId, user]);
 
   // Bumped by "Retry" to restart the poll (and re-kick processing).
@@ -238,6 +248,40 @@ export default function SummaryScreen() {
     }
   };
 
+  const fileSessionUnder = async (topicId: string) => {
+    if (!sessionId) return;
+    setBusyEntryId(sessionId);
+    try {
+      await assignSessionTopic(sessionId, topicId);
+      const [s, st] = await Promise.all([getSession(sessionId), listSessionTopics(sessionId)]);
+      setSession(s);
+      setSessionTopics(st);
+      setPicking(null);
+    } catch (e) {
+      Alert.alert('Could not file this recording', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setBusyEntryId(null);
+    }
+  };
+
+  const useSessionSuggestion = async () => {
+    if (!user || !session?.topic_suggestion) return;
+    setBusyEntryId(sessionId ?? null);
+    try {
+      const topic = await confirmTopicSuggestion(user.id, topics, session.topic_suggestion);
+      await fileSessionUnder(topic.id);
+    } catch (e) {
+      Alert.alert('Could not file this recording', e instanceof Error ? e.message : 'Please try again.');
+      setBusyEntryId(null);
+    }
+  };
+
+  const onPickTopic = (topicId: string) => {
+    if (!picking) return;
+    if (picking.kind === 'session') fileSessionUnder(topicId);
+    else assignEntryTopic(picking, topicId);
+  };
+
   return (
     <Screen safeBottom>
       {done ? (
@@ -299,6 +343,62 @@ export default function SummaryScreen() {
           <Text style={styles.summaryText}>
             {session?.summary || `${tasks.length} tasks, ${memories.length} ideas.`}
           </Text>
+
+          {/* Where this recording is filed. Every recording should end up
+              under a topic -- this is the only place a plain journal entry
+              (no tasks/ideas) can be filed or re-filed. */}
+          <View style={styles.topicRow}>
+            {sessionTopics.length > 0 ? (
+              <>
+                <View style={styles.topicTags}>
+                  {sessionTopics.map((t) => (
+                    <Tag key={t.id} variant="neutral">
+                      {topicDisplayName(t, topics)}
+                    </Tag>
+                  ))}
+                </View>
+                <Button
+                  variant="ghost"
+                  label="Change"
+                  disabled={busyEntryId === sessionId}
+                  onPress={() => sessionId && setPicking({ kind: 'session', id: sessionId })}
+                  style={{ minHeight: 32, paddingHorizontal: 6 }}
+                  textStyle={{ fontSize: 12 }}
+                />
+              </>
+            ) : session?.topic_suggestion ? (
+              <View style={{ flex: 1 }}>
+                <Text style={styles.suggestText}>AI thinks this belongs under &quot;{session.topic_suggestion}&quot;</Text>
+                <View style={styles.suggestActions}>
+                  <Button
+                    label={busyEntryId === sessionId ? 'Saving…' : `Use "${session.topic_suggestion}"`}
+                    disabled={busyEntryId === sessionId}
+                    onPress={useSessionSuggestion}
+                    style={[styles.suggestButton, { backgroundColor: colors.pastelGreen }]}
+                    textStyle={styles.pastelSmallText}
+                  />
+                  <Button
+                    label="Pick topic"
+                    disabled={busyEntryId === sessionId}
+                    onPress={() => sessionId && setPicking({ kind: 'session', id: sessionId })}
+                    style={[styles.suggestButton, { backgroundColor: colors.pastelLavender }]}
+                    textStyle={styles.pastelSmallText}
+                  />
+                </View>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.suggestText}>Not filed under a topic yet.</Text>
+                <Button
+                  label="Pick topic"
+                  disabled={busyEntryId === sessionId}
+                  onPress={() => sessionId && setPicking({ kind: 'session', id: sessionId })}
+                  style={[styles.suggestButton, { backgroundColor: colors.pastelLavender }]}
+                  textStyle={styles.pastelSmallText}
+                />
+              </>
+            )}
+          </View>
         </View>
       ) : null}
 
@@ -407,7 +507,7 @@ export default function SummaryScreen() {
                   key={t.id}
                   label={topicDisplayName(t, topics)}
                   align="flex-start"
-                  onPress={() => picking && assignEntryTopic(picking, t.id)}
+                  onPress={() => onPickTopic(t.id)}
                   style={{
                     marginBottom: 8,
                     borderRadius: radius.pastel,
@@ -437,6 +537,22 @@ const styles = StyleSheet.create({
     lineHeight: 26,
     color: colors.text,
     marginTop: 6,
+  },
+  topicRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(32,30,29,0.12)',
+  },
+  topicTags: {
+    flex: 1,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
   },
   retryButton: {
     alignSelf: 'flex-start',

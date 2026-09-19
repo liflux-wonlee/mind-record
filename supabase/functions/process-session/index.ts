@@ -50,6 +50,7 @@ type ExtractedMemory = {
 };
 type OutlineSection = { heading: string; bullets: string[] };
 type RequestedTopic = { name: string; parent_name?: string | null };
+type SessionTopic = { topic_name: string; topic_parent_name?: string | null; topic_confidence?: number };
 
 type Extraction = {
   summary: string;
@@ -58,6 +59,8 @@ type Extraction = {
   memories: ExtractedMemory[];
   /** Topics the speaker explicitly asked to have created, even with nothing to file under them yet. */
   requested_topics: RequestedTopic[];
+  /** The one topic the recording as a whole is about -- how a plain journal entry gets filed. */
+  session_topic: SessionTopic | null;
 };
 
 Deno.serve(async (req) => {
@@ -234,10 +237,20 @@ Deno.serve(async (req) => {
       if (error) throw error;
     }
 
-    // session_topics is a rollup of every topic actually assigned above --
-    // not a separate thing the model produces, so it can never disagree
-    // with what the tasks/memories themselves say.
+    // session_topics: the recording's own topic (what it is about as a
+    // whole -- the only way a plain journal entry with no tasks/ideas gets
+    // filed anywhere) plus a rollup of every topic the tasks/ideas above
+    // were assigned to.
     const confidenceByTopic = new Map<string, number>();
+    let sessionTopicSuggestion: string | null = null;
+    if (extraction.session_topic) {
+      const resolved = await resolveTopic(db, user.id, topics, extraction.session_topic);
+      if (resolved.topicId) {
+        confidenceByTopic.set(resolved.topicId, extraction.session_topic.topic_confidence ?? 1);
+      } else {
+        sessionTopicSuggestion = resolved.suggestion;
+      }
+    }
     const allResolved = [...resolvedTasks, ...resolvedMemories];
     const allExtracted = [...extraction.tasks, ...extraction.memories];
     allResolved.forEach((row, i) => {
@@ -264,6 +277,8 @@ Deno.serve(async (req) => {
         summary: extraction.summary,
         outline: extraction.outline,
         title: session.title ?? extraction.summary.slice(0, 80),
+        // Only worth asking the user when nothing got linked at all.
+        topic_suggestion: confidenceByTopic.size === 0 ? sessionTopicSuggestion : null,
         processing_status: 'done',
       })
       .eq('id', sessionId);
@@ -433,6 +448,7 @@ async function analyzeTranscript(transcript: string, topics: TopicRow[]): Promis
       tasks: [],
       memories: [],
       requested_topics: [],
+      session_topic: null,
     };
   }
 
@@ -475,8 +491,15 @@ Respond with strict JSON matching this shape:
     "topic_parent_name": string or null,
     "topic_confidence": number between 0 and 1
   }],
-  "requested_topics": [{ "name": string, "parent_name": string or null }]
+  "requested_topics": [{ "name": string, "parent_name": string or null }],
+  "session_topic": {
+    "topic_name": string,
+    "topic_parent_name": string or null,
+    "topic_confidence": number between 0 and 1
+  }
 }
+
+"session_topic" is the ONE topic this recording as a whole is about -- how it gets filed in the user's topic list. ALWAYS fill it in (unless the transcript is genuinely empty or pure test noise, then null). Strongly prefer an existing topic from the list above when one fits. Otherwise propose a short, general, reusable name in the transcript's language (e.g. "신앙", "가족", "Business", "Health"), not a description of this one entry. Match the user's existing naming style. Use topic_parent_name only when the recording clearly belongs to an existing sub-topic's parent. If the speaker explicitly named a topic for this recording, use it with confidence near 1.0.
 
 "requested_topics" is ONLY for explicit instructions to create a topic/folder/category -- e.g. "교단이라는 토픽을 만들어줘", "make a new topic called Family", "add a Health folder" -- including ones with nothing to file under them yet. Use the exact name the speaker gave. Do not put topics here just because they are mentioned or would be a sensible place to file things; that is what topic_name on tasks/memories is for. Empty array when there is no such instruction.
 
@@ -522,6 +545,7 @@ The transcript may be in Korean, English, or a mix -- write "title"/"content"/"s
     outline,
     tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map(sanitizeTask).filter(Boolean) : [],
     memories: Array.isArray(parsed.memories) ? parsed.memories.map(sanitizeMemory).filter(Boolean) : [],
+    session_topic: sanitizeSessionTopic(parsed.session_topic),
     requested_topics: Array.isArray(parsed.requested_topics)
       ? parsed.requested_topics.filter(
           (t: unknown): t is RequestedTopic =>
@@ -576,6 +600,17 @@ function sanitizeTask(raw: unknown): ExtractedTask | null {
     topic_name: optionalString(t.topic_name),
     topic_parent_name: optionalString(t.topic_parent_name),
     topic_confidence: clampConfidence(t.topic_confidence),
+  };
+}
+function sanitizeSessionTopic(raw: unknown): SessionTopic | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const s = raw as Record<string, unknown>;
+  const topic_name = optionalString(s.topic_name);
+  if (!topic_name) return null;
+  return {
+    topic_name,
+    topic_parent_name: optionalString(s.topic_parent_name),
+    topic_confidence: clampConfidence(s.topic_confidence),
   };
 }
 function sanitizeMemory(raw: unknown): ExtractedMemory | null {

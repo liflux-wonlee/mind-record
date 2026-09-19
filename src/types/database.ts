@@ -72,6 +72,8 @@ export type Database = {
           outline: SessionOutlineSection[] | null;
           processing_status: SessionProcessingStatus;
           processing_error: string | null;
+          /** AI's best-guess topic for the whole recording when it wasn't confident enough to file it; null once filed. */
+          topic_suggestion: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -82,6 +84,7 @@ export type Database = {
           mode: SessionMode;
           started_at?: string;
           ended_at?: string | null;
+          topic_suggestion?: string | null;
           raw_transcript?: string | null;
           summary?: string | null;
           outline?: SessionOutlineSection[] | null;

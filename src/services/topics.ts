@@ -173,6 +173,22 @@ export async function listSessionsUnclassified(userId: string): Promise<Session[
   return recent.filter((s) => !classified.has(s.id));
 }
 
+/** Files a recording under exactly this topic (replacing any AI links)
+ *  and clears its pending suggestion. */
+export async function assignSessionTopic(sessionId: string, topicId: string): Promise<void> {
+  const { error: unlinkError } = await supabase.from('session_topics').delete().eq('session_id', sessionId);
+  if (unlinkError) throw unlinkError;
+  const { error: linkError } = await supabase
+    .from('session_topics')
+    .insert({ session_id: sessionId, topic_id: topicId, confidence: null });
+  if (linkError) throw linkError;
+  const { error: clearError } = await supabase
+    .from('sessions')
+    .update({ topic_suggestion: null })
+    .eq('id', sessionId);
+  if (clearError) throw clearError;
+}
+
 export async function listSessionTopics(sessionId: string): Promise<Topic[]> {
   const { data: links, error: linksError } = await supabase
     .from('session_topics')
