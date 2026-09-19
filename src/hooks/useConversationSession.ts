@@ -41,7 +41,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
-import { SPEECH_RECORDING_OPTIONS } from '@/hooks/useCaptureSession';
+import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCaptureSession';
 import { isNetworkError } from '@/lib/functionsError';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
@@ -295,7 +295,12 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
         throwIfAborted();
         setState('thinking');
 
-        const uri = recorder.uri;
+        // recorder.uri is a native SharedObject property, not plain JS state
+        // -- reading it the instant stop() resolves occasionally still saw
+        // a stale/null value rather than the file that had just been
+        // written, throwing "No audio was captured" for a turn that really
+        // did record something. See waitForRecorderUri's own comment.
+        const uri = await waitForRecorderUri(recorder);
         if (!uri) throw new Error('No audio was captured for that turn.');
         const attachment = await uploadRecording(user.id, sessionId, uri);
         throwIfAborted();

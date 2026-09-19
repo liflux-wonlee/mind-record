@@ -42,6 +42,29 @@ export const SPEECH_RECORDING_OPTIONS = {
   bitRate: 64000,
 };
 
+/**
+ * `recorder.uri` is a native SharedObject property, not plain JS state --
+ * reading it the instant `recorder.stop()`'s promise resolves occasionally
+ * still saw the PREVIOUS recording's uri (or null, on a recorder that had
+ * never finished one before) rather than the one that had just been
+ * written, silently treated by callers as "nothing was recorded" and
+ * losing the whole segment with no error shown at all (the failure mode
+ * behind a "No audio was recorded for this session" error on Summary right
+ * after a real recording). Polling briefly for the native side to catch up
+ * closes that race without restructuring the stop/upload flow around it.
+ */
+export async function waitForRecorderUri(
+  recorder: { uri: string | null },
+  attempts = 8,
+  delayMs = 150
+): Promise<string | null> {
+  for (let i = 0; i < attempts; i++) {
+    if (recorder.uri) return recorder.uri;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return recorder.uri;
+}
+
 export function useCaptureSession() {
   const { user } = useAuth();
   const [saveOnly, setSaveOnly] = useState(false);
@@ -109,9 +132,21 @@ export function useCaptureSession() {
    *  success instead of silently treating a swallowed upload failure as if
    *  everything had been captured. */
   const uploadCurrentSegment = useCallback(async (): Promise<boolean> => {
-    const uri = recorder.uri;
     const sessionId = sessionIdRef.current;
-    if (!uri || !sessionId || !user) return true; // nothing was recorded -- not a failure
+    if (!sessionId || !user) return true; // nothing to upload against -- not a failure
+    const uri = await waitForRecorderUri(recorder);
+    if (!uri) {
+      // Every call site only ever reaches here right after an active
+      // recording was stopped, so a uri that's STILL missing after waiting
+      // for the native side to catch up is a real loss, not "nothing was
+      // recorded" -- silently treating it as fine is what used to let a
+      // whole segment vanish with no error shown at all.
+      Alert.alert(
+        'Part of this recording was not saved',
+        "The recorder didn't produce a file for this part. Everything recorded before this point is safe."
+      );
+      return false;
+    }
     try {
       await uploadRecording(user.id, sessionId, uri);
       return true;
