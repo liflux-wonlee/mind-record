@@ -70,6 +70,8 @@ export type Database = {
           raw_transcript: string | null;
           summary: string | null;
           outline: SessionOutlineSection[] | null;
+          /** Standout, verbatim lines worth pulling out on their own -- empty (not null) when nothing qualified. */
+          notable_quotes: string[];
           processing_status: SessionProcessingStatus;
           processing_error: string | null;
           /** AI's best-guess topic for the whole recording when it wasn't confident enough to file it; null once filed. */
@@ -88,6 +90,7 @@ export type Database = {
           raw_transcript?: string | null;
           summary?: string | null;
           outline?: SessionOutlineSection[] | null;
+          notable_quotes?: string[];
           processing_status?: SessionProcessingStatus;
           processing_error?: string | null;
           created_at?: string;

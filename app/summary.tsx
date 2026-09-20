@@ -190,7 +190,10 @@ export default function SummaryScreen() {
     const outlineText = (session.outline ?? [])
       .map((s) => `${s.heading}\n${s.bullets.map((b) => `• ${stripBold(b)}`).join('\n')}`)
       .join('\n\n');
-    const body = [header, session.summary, outlineText].filter(Boolean).join('\n\n');
+    const quotesText = (session.notable_quotes ?? []).length
+      ? `Notable quotes\n${session.notable_quotes.map((q) => `"${q}"`).join('\n')}`
+      : '';
+    const body = [header, session.summary, outlineText, quotesText].filter(Boolean).join('\n\n');
     setShareContent({ kicker: 'Recording · Summary', title: session.title || 'Recording', body });
   };
 
@@ -509,6 +512,23 @@ export default function SummaryScreen() {
             </Pressable>
           ))}
 
+          {session?.notable_quotes && session.notable_quotes.length > 0 ? (
+            <>
+              <Kicker style={{ color: colors.neutral600, marginTop: 8, marginBottom: 4 }}>Notable quotes</Kicker>
+              {session.notable_quotes.map((quote, i) => (
+                <Pressable
+                  key={i}
+                  style={styles.quote}
+                  onLongPress={() => setShareContent({ kicker: 'Quote', title: 'Notable quote', body: quote })}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Share quote: ${quote}`}
+                >
+                  <Text style={styles.quoteText}>&ldquo;{quote}&rdquo;</Text>
+                </Pressable>
+              ))}
+            </>
+          ) : null}
+
           {entries.length > 0 ? (
             <>
               <Kicker style={{ color: colors.neutral600, marginTop: 8, marginBottom: 4 }}>
@@ -755,6 +775,20 @@ const styles = StyleSheet.create({
   bold: {
     fontFamily: font.semibold,
     color: colors.text,
+  },
+  quote: {
+    paddingVertical: 8,
+    paddingLeft: 14,
+    marginBottom: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent,
+  },
+  quoteText: {
+    fontFamily: font.regular,
+    fontStyle: 'italic',
+    fontSize: 15,
+    lineHeight: 22,
+    color: colors.neutral800,
   },
   tabRow: {
     flexDirection: 'row',

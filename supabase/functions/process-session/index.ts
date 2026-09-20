@@ -58,6 +58,8 @@ type SessionTopic = { topic_name: string; topic_parent_name?: string | null; top
 type Extraction = {
   summary: string;
   outline: OutlineSection[];
+  /** Standout, verbatim lines worth pulling out on their own -- empty for most casual, day-to-day recordings. */
+  notable_quotes: string[];
   tasks: ExtractedTask[];
   memories: ExtractedMemory[];
   /** Topics the speaker explicitly asked to have created, even with nothing to file under them yet. */
@@ -372,6 +374,7 @@ Deno.serve(async (req) => {
       .update({
         summary: extraction.summary,
         outline: extraction.outline,
+        notable_quotes: extraction.notable_quotes,
         title: session.title ?? extraction.summary.slice(0, 80),
         // Only worth asking the user when nothing got linked at all.
         topic_suggestion: confidenceByTopic.size === 0 ? sessionTopicSuggestion : null,
@@ -534,6 +537,7 @@ async function analyzeTranscript(
       extraction: {
         summary: 'No speech was detected in this recording.',
         outline: [],
+        notable_quotes: [],
         tasks: [],
         memories: [],
         requested_topics: [],
@@ -559,8 +563,11 @@ There are TWO different summaries to produce, for two different places in the ap
 "outline" is the FULL breakdown, organized into sections with headings and bullet points -- this is the one people actually read to see what they talked about, so it must not throw content away. Cover everything substantive in the transcript, not just the headline point: named people/places/things mentioned, specific reasons or arguments given, numbers or dates, examples, open questions, decisions made or not yet made, plans, feelings expressed. Structure:
 - Start with an "Overview" section: a handful of bullets giving the high-level gist.
 - Follow with additional sections for each distinct topic, theme, or line of thought in the transcript, each with its own heading (2-6 words) and bullet points. Split into more sections rather than fewer when the transcript covers genuinely distinct things -- don't cram unrelated points under one heading just to keep the section count low.
+- Choose section headings that fit what this recording actually IS, not a one-size-fits-all template. A sermon or talk naturally wants sections like "Key Points", "Application", or "Reflection Questions" (only include ones the content actually supports -- don't invent an "Application" section with nothing real in it). A meeting wants "Decisions" / "Action Items" / "Open Questions". A casual personal journal entry just wants free-form sections named after whatever the speaker actually talked about. Let the content decide -- never force a fixed set of headings onto content that doesn't call for them.
 - Bullets are concise phrases or short sentences, not full paragraphs. Wrap the 2-4 most important words or the key claim of a bullet in **double asterisks** (e.g. "**Prayer** described as essential for spiritual growth.") the way the emphasis reads in a well-formatted outline -- don't bold entire bullets or bold nothing.
 - If the recording is short, mundane, or has barely anything in it, this can be as small as one "Overview" section with one or two honest bullets (e.g. "Brief note testing the recording, no real content.") -- do not pad a thin transcript with invented sections, and do not comment on the recording itself (its length, repetition, audio quality) as if it were content.
+
+"notable_quotes" pulls out 0-5 short lines worth quoting on their own, word-for-word from the transcript (never paraphrased or reconstructed) -- the kind of standout, memorable, or pull-quote-worthy sentence a sermon, talk, lecture, or meaningful conversation tends to have. Most casual day-to-day journal entries genuinely have none of these -- an empty array is the normal, expected result for most recordings, not a failure to find something.
 
 Both "summary" and "outline" describe the CONTENT only -- never the speech act itself. Do not comment on repetition, filler, hesitation, pacing, tone, or recording quality, and never describe the speaker's behavior or mental state as an outside observer (e.g. never write "the speaker seems rushed" or "is repeating themselves").
 
@@ -573,6 +580,7 @@ Respond with strict JSON matching this shape:
 {
   "summary": string (1-2 sentences, short recap as described above, in the transcript's own language),
   "outline": [{ "heading": string, "bullets": string[] }] (full breakdown as described above, at least one section),
+  "notable_quotes": string[] (0-5 verbatim standout lines as described above; empty array is the normal case),
   "tasks": [{
     "title": string,
     "priority": "low" | "normal" | "high",
@@ -635,11 +643,15 @@ ${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bull
         }))
         .filter((s: OutlineSection) => s.heading && s.bullets.length > 0)
     : [];
+  const notableQuotes: string[] = Array.isArray(parsed.notable_quotes)
+    ? parsed.notable_quotes.filter((q: unknown): q is string => typeof q === 'string' && q.trim().length > 0).slice(0, 5)
+    : [];
 
   return {
     extraction: {
       summary: typeof parsed.summary === 'string' ? parsed.summary : '',
       outline,
+      notable_quotes: notableQuotes,
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map(sanitizeTask).filter(Boolean) : [],
       memories: Array.isArray(parsed.memories) ? parsed.memories.map(sanitizeMemory).filter(Boolean) : [],
       session_topic: sanitizeSessionTopic(parsed.session_topic),
