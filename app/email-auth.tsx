@@ -11,6 +11,7 @@ import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput,
 import { ChevronLeftIcon, EyeIcon, EyeOffIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button } from '@/components/ui';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { signInWithEmail, signUpWithEmail } from '@/services/auth';
 import { colors, font, h2 } from '@/theme';
 
@@ -51,7 +52,7 @@ export default function EmailAuthScreen() {
         // is off for this project) and the guard redirects to Home.
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong. Please try again.');
+      setError(friendlyMessage(e, 'Something went wrong. Please try again.'));
     } finally {
       setLoading(false);
     }

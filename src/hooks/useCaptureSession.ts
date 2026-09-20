@@ -20,6 +20,7 @@ import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { ensureBackgroundRecordingAllowed } from '@/lib/backgroundRecording';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { isNetworkError } from '@/lib/functionsError';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
@@ -161,7 +162,7 @@ export function useCaptureSession() {
       }
       Alert.alert(
         'Part of this recording was not saved',
-        (e instanceof Error ? e.message : 'Could not upload this recording.') +
+        friendlyMessage(e, 'Could not upload this recording.') +
           ' Everything recorded before this point is safe.'
       );
       return false;
@@ -212,7 +213,7 @@ export function useCaptureSession() {
           setEverRecorded(true);
           setInterruption(null);
         } catch (e) {
-          Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
+          Alert.alert('Could not start recording', friendlyMessage(e, 'Please try again.'));
         }
         return false;
       } finally {
@@ -251,7 +252,7 @@ export function useCaptureSession() {
       try {
         await endSession(sessionId);
       } catch (e) {
-        Alert.alert('Could not finish saving', e instanceof Error ? e.message : 'Please try again.');
+        Alert.alert('Could not finish saving', friendlyMessage(e, 'Please try again.'));
       }
       if (!lastSegmentSaved) {
         // uploadCurrentSegment already explained the failure -- this just
@@ -268,7 +269,7 @@ export function useCaptureSession() {
       processSession(sessionId).catch((e) => {
         Alert.alert(
           'Could not process this recording',
-          e instanceof Error ? e.message : 'Please try again.'
+          friendlyMessage(e, 'Please try again.')
         );
       });
     }

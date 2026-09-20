@@ -14,6 +14,7 @@ import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import {
   createTopic,
@@ -61,7 +62,7 @@ export default function MemoryScreen() {
     setLoadError(null);
     listTopics(user.id)
       .then(setTopics)
-      .catch((e) => setLoadError(e instanceof Error ? e.message : 'Could not load topics.'))
+      .catch((e) => setLoadError(friendlyMessage(e, 'Could not load topics.')))
       .finally(() => setLoading(false));
   }, [user]);
 
@@ -83,7 +84,7 @@ export default function MemoryScreen() {
       closeSheet();
       reload();
     } catch (e) {
-      Alert.alert('Something went wrong', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Something went wrong', friendlyMessage(e, 'Please try again.'));
     } finally {
       setBusy(false);
     }

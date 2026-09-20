@@ -42,6 +42,7 @@ import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCaptureSession';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { isNetworkError } from '@/lib/functionsError';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
@@ -194,12 +195,12 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       try {
         await endSession(sessionId);
       } catch (e) {
-        Alert.alert('Could not finish saving', e instanceof Error ? e.message : 'Please try again.');
+        Alert.alert('Could not finish saving', friendlyMessage(e, 'Please try again.'));
       }
       processSession(sessionId).catch((e) => {
         Alert.alert(
           'Could not process this recording',
-          e instanceof Error ? e.message : 'Please try again.'
+          friendlyMessage(e, 'Please try again.')
         );
       });
     }
@@ -263,7 +264,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       setInterruption(null);
       setState('recording');
     } catch (e) {
-      Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not start recording', friendlyMessage(e, 'Please try again.'));
     }
   }, [state, recorder, ensureSession]);
 
@@ -332,7 +333,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
         }
         Alert.alert(
           'Could not process that',
-          (e instanceof Error ? e.message : 'Please try again.') +
+          friendlyMessage(e, 'Please try again.') +
             ' What you just said may not have been saved.'
         );
         setState('idle');

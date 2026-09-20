@@ -7,6 +7,7 @@ import { ShareIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
 import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/services/memories';
@@ -220,7 +221,7 @@ export default function SummaryScreen() {
           timer = setTimeout(poll, 2500);
           return;
         }
-        setLoadError(e instanceof Error ? e.message : 'Could not load this session.');
+        setLoadError(friendlyMessage(e, 'Could not load this session.'));
       }
     };
     poll();
@@ -300,7 +301,7 @@ export default function SummaryScreen() {
       setSessionTopics(st);
       setPicking(null);
     } catch (e) {
-      Alert.alert('Could not file this recording', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not file this recording', friendlyMessage(e, 'Please try again.'));
     } finally {
       setBusyEntryId(null);
     }
@@ -313,7 +314,7 @@ export default function SummaryScreen() {
       const topic = await confirmTopicSuggestion(user.id, topics, session.topic_suggestion);
       await fileSessionUnder(topic.id);
     } catch (e) {
-      Alert.alert('Could not file this recording', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not file this recording', friendlyMessage(e, 'Please try again.'));
       setBusyEntryId(null);
     }
   };

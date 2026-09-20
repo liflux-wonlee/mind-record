@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 import { ChevronLeftIcon, ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import {
   deleteSession,
@@ -175,7 +176,7 @@ export default function RecordsScreen() {
           onPress: () =>
             deleteSession(session.id)
               .then(onDone)
-              .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+              .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
         },
       ]
     );

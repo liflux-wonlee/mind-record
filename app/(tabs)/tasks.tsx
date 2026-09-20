@@ -12,6 +12,7 @@ import {
   sendToGoogleTasks,
   type GoogleTasksSendRecord,
 } from '@/services/googleTasks';
+import { friendlyMessage } from '@/lib/friendlyError';
 import type { Task } from '@/services/tasks';
 import { colors, font, h2 } from '@/theme';
 
@@ -80,7 +81,7 @@ export default function TasksScreen() {
       await tasksState.add(title);
       setNewTitle('');
     } catch (e) {
-      Alert.alert('Could not add task', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not add task', friendlyMessage(e, 'Please try again.'));
     } finally {
       setAdding(false);
     }
@@ -146,7 +147,7 @@ export default function TasksScreen() {
             onToggle={() =>
               tasksState
                 .toggle(task)
-                .catch((e) => Alert.alert('Could not update', e instanceof Error ? e.message : 'Please try again.'))
+                .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
             }
             onPress={() => setEditing(task)}
             onShare={() =>
@@ -298,7 +299,7 @@ function TaskEditSheet({
       } else if (name === 'NeedsListError') {
         Alert.alert('Choose a list first', 'Pick a default list in Account -> Google Tasks.');
       } else {
-        Alert.alert('Could not send', e instanceof Error ? e.message : 'Please try again.');
+        Alert.alert('Could not send', friendlyMessage(e, 'Please try again.'));
       }
     } finally {
       setSending(false);
@@ -315,7 +316,7 @@ function TaskEditSheet({
     try {
       await onSave({ title: title.trim(), dueDate });
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {
       setSaving(false);
     }
@@ -328,7 +329,7 @@ function TaskEditSheet({
         text: 'Delete',
         style: 'destructive',
         onPress: () =>
-          onDelete().catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+          onDelete().catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
       },
     ]);
   };

@@ -7,6 +7,7 @@ import { ChevronLeftIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import {
   clearMemoryTopic,
@@ -114,7 +115,7 @@ export default function TopicDetailScreen() {
       setTasks(t);
       setMemories(m);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : 'Could not load this topic.');
+      setLoadError(friendlyMessage(e, 'Could not load this topic.'));
     } finally {
       setLoading(false);
     }
@@ -134,7 +135,7 @@ export default function TopicDetailScreen() {
       setSessions((prev) => [...prev, ...page.sessions]);
       setSessionsCursor(page.nextCursor);
     } catch (e) {
-      Alert.alert('Could not load more', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not load more', friendlyMessage(e, 'Please try again.'));
     } finally {
       setLoadingMoreSessions(false);
     }
@@ -149,7 +150,7 @@ export default function TopicDetailScreen() {
       if (after) after();
       else load();
     } catch (e) {
-      Alert.alert('Something went wrong', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Something went wrong', friendlyMessage(e, 'Please try again.'));
     } finally {
       setBusy(false);
     }
@@ -183,7 +184,7 @@ export default function TopicDetailScreen() {
           onPress: () =>
             deleteSession(session.id)
               .then(load)
-              .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+              .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
         },
       ]
     );
@@ -225,7 +226,7 @@ export default function TopicDetailScreen() {
         onPress: () =>
           clearTaskTopic(task.id)
             .then(load)
-            .catch((e) => Alert.alert('Could not update', e instanceof Error ? e.message : 'Please try again.')),
+            .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'))),
       });
     }
     options.push({
@@ -234,7 +235,7 @@ export default function TopicDetailScreen() {
       onPress: () =>
         deleteTask(task.id)
           .then(load)
-          .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+          .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
     });
     options.push({ text: 'Cancel', style: 'cancel' });
     Alert.alert(task.title, undefined, options);
@@ -253,7 +254,7 @@ export default function TopicDetailScreen() {
         onPress: () =>
           clearMemoryTopic(memory.id)
             .then(load)
-            .catch((e) => Alert.alert('Could not update', e instanceof Error ? e.message : 'Please try again.')),
+            .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'))),
       });
     }
     options.push({
@@ -262,7 +263,7 @@ export default function TopicDetailScreen() {
       onPress: () =>
         deleteMemory(memory.id)
           .then(load)
-          .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+          .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
     });
     options.push({ text: 'Cancel', style: 'cancel' });
     Alert.alert(truncate(memory.content, 60), undefined, options);

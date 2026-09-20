@@ -19,6 +19,7 @@ import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCaptureSession';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import {
@@ -67,7 +68,7 @@ export function useVoiceSearch(onResult: (result: SearchAnswerResult) => void, h
       setInterruption(null);
       setState('recording');
     } catch (e) {
-      Alert.alert('Could not start recording', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not start recording', friendlyMessage(e, 'Please try again.'));
     }
   }, [recorder, user]);
 
@@ -110,7 +111,7 @@ export function useVoiceSearch(onResult: (result: SearchAnswerResult) => void, h
         setState('idle');
       }
     } catch (e) {
-      Alert.alert('Could not answer that', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not answer that', friendlyMessage(e, 'Please try again.'));
       setState('idle');
     }
   }, [user, recorder, player, onResult]);

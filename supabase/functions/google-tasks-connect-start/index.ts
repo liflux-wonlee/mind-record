@@ -19,6 +19,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
 import { GOOGLE_TASKS_CLIENT_ID } from '../_shared/googleTasks.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -69,7 +70,7 @@ Deno.serve(async (req) => {
     return json({ authUrl: authUrl.toString() });
   } catch (e) {
     console.error('google-tasks-connect-start failed:', e);
-    return json({ error: e instanceof Error ? e.message : 'Could not start connecting Google Tasks.' }, 500);
+    return json({ error: errorMessage(e, 'Could not start connecting Google Tasks.') }, 500);
   }
 });
 

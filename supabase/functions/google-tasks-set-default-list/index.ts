@@ -6,6 +6,8 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -45,7 +47,10 @@ Deno.serve(async (req) => {
     .from('google_tasks_connections')
     .update({ default_list_id: listId, default_list_title: listTitle ?? null })
     .eq('user_id', user.id);
-  if (error) return json({ error: error.message }, 500);
+  if (error) {
+    console.error('google-tasks-set-default-list failed:', error);
+    return json({ error: errorMessage(error, 'Could not save your default list.') }, 500);
+  }
 
   return json({ status: 'ok' });
 });

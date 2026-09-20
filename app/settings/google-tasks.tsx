@@ -15,6 +15,7 @@ import {
   type GoogleTaskList,
   type GoogleTasksStatus,
 } from '@/services/googleTasks';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { colors, font, radius } from '@/theme';
 
 /**
@@ -53,7 +54,7 @@ export default function GoogleTasksSettingsScreen() {
       refresh();
     } catch (e) {
       if (!(e instanceof GoogleTasksCancelledError)) {
-        Alert.alert('Could not connect', e instanceof Error ? e.message : 'Please try again.');
+        Alert.alert('Could not connect', friendlyMessage(e, 'Please try again.'));
       }
     } finally {
       setConnecting(false);
@@ -76,7 +77,7 @@ export default function GoogleTasksSettingsScreen() {
               await disconnectGoogleTasks();
               setStatus({ connected: false, email: null, defaultListId: null, defaultListTitle: null });
             } catch (e) {
-              Alert.alert('Could not disconnect', e instanceof Error ? e.message : 'Please try again.');
+              Alert.alert('Could not disconnect', friendlyMessage(e, 'Please try again.'));
             } finally {
               setDisconnecting(false);
             }
@@ -93,7 +94,7 @@ export default function GoogleTasksSettingsScreen() {
       const result = await listGoogleTaskLists();
       setLists(result);
     } catch (e) {
-      Alert.alert('Could not load your lists', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not load your lists', friendlyMessage(e, 'Please try again.'));
       setPickingList(false);
     } finally {
       setLoadingLists(false);
@@ -107,7 +108,7 @@ export default function GoogleTasksSettingsScreen() {
       setStatus((s) => (s ? { ...s, defaultListId: list.id, defaultListTitle: list.title } : s));
       setPickingList(false);
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {
       setSavingList(null);
     }

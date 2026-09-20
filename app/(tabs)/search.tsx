@@ -15,6 +15,7 @@ import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { useVoiceSearch } from '@/hooks/useVoiceSearch';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { searchEverything, type SearchHit } from '@/services/search';
 import {
   askSearchQuestion,
@@ -79,7 +80,7 @@ export default function SearchScreen() {
         })
         .catch((e) => {
           if (stale) return;
-          setError(e instanceof Error ? e.message : 'Search failed.');
+          setError(friendlyMessage(e, 'Search failed.'));
         })
         .finally(() => {
           if (!stale) setSearching(false);
@@ -112,7 +113,7 @@ export default function SearchScreen() {
       const result = await askSearchQuestion({ question: q, history });
       recordTurn(result);
     } catch (e) {
-      setAskError(e instanceof Error ? e.message : 'Could not answer that.');
+      setAskError(friendlyMessage(e, 'Could not answer that.'));
     } finally {
       setAsking(false);
     }

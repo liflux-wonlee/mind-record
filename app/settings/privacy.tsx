@@ -12,6 +12,7 @@ import {
   isBiometricLockEnabled,
   type BiometricKind,
 } from '@/lib/biometricLock';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors, font, radius } from '@/theme';
 
@@ -62,7 +63,7 @@ export default function PrivacySettingsScreen() {
         }
       }
     } catch (e) {
-      Alert.alert('Something went wrong', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Something went wrong', friendlyMessage(e, 'Please try again.'));
     } finally {
       setBusy(false);
     }

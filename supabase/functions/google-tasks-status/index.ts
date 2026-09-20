@@ -7,6 +7,8 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -38,7 +40,10 @@ Deno.serve(async (req) => {
     .select('google_email, default_list_id, default_list_title')
     .eq('user_id', user.id)
     .maybeSingle();
-  if (error) return json({ error: error.message }, 500);
+  if (error) {
+    console.error('google-tasks-status failed:', error);
+    return json({ error: errorMessage(error, 'Could not check Google Tasks connection.') }, 500);
+  }
 
   if (!connection) {
     return json({ connected: false, email: null, defaultListId: null, defaultListTitle: null });

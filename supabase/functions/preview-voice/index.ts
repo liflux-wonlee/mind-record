@@ -10,6 +10,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -76,7 +77,8 @@ Deno.serve(async (req) => {
       body: JSON.stringify({ model: 'tts-1', voice, input: text, response_format: 'mp3' }),
     });
     if (!res.ok) {
-      throw new Error(`Speech synthesis failed (${res.status}): ${await res.text()}`);
+      console.error('OpenAI TTS (preview) failed:', res.status, await res.text());
+      throw new Error('Speech synthesis failed.');
     }
     const buffer = await res.arrayBuffer();
     const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -89,7 +91,7 @@ Deno.serve(async (req) => {
     return json({ audioBase64: arrayBufferToBase64(buffer) });
   } catch (e) {
     console.error('preview-voice failed:', e);
-    return json({ error: e instanceof Error ? e.message : 'Could not synthesize a preview.' }, 500);
+    return json({ error: errorMessage(e, 'Could not synthesize a preview.') }, 500);
   }
 });
 

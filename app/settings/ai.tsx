@@ -7,6 +7,7 @@ import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'rea
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
 import { Button, Kicker } from '@/components/ui';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile, updateProfile, type Profile } from '@/services/profiles';
 import { previewVoice } from '@/services/voicePreview';
@@ -91,7 +92,7 @@ function AiSettingsForm({
       const updated = await updateProfile(userId, { locale });
       onSaved(updated);
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {
       setSavingLocale(null);
     }
@@ -113,7 +114,7 @@ function AiSettingsForm({
       });
       onSaved(updated);
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {
       setSavingNames(false);
     }
@@ -126,7 +127,7 @@ function AiSettingsForm({
       const updated = await updateProfile(userId, { ai_voice: voice });
       onSaved(updated);
     } catch (e) {
-      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {
       setSavingVoice(null);
     }
@@ -159,7 +160,7 @@ function AiSettingsForm({
       });
       player.play();
     } catch (e) {
-      Alert.alert('Preview failed', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Preview failed', friendlyMessage(e, 'Please try again.'));
       setPreviewing(null);
     }
   };

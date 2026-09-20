@@ -20,6 +20,7 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -83,7 +84,7 @@ Deno.serve(async (req) => {
     .select('id, user_id')
     .eq('id', sessionId)
     .maybeSingle();
-  if (sessionError) return json({ error: sessionError.message }, 500);
+  if (sessionError) return json({ error: errorMessage(sessionError, 'Could not load this session.') }, 500);
   if (!session || session.user_id !== user.id) {
     return json({ error: 'Session not found.' }, 404);
   }
@@ -175,28 +176,9 @@ Deno.serve(async (req) => {
     return json({ userText, assistantText, shouldEnd, audioBase64 });
   } catch (e) {
     console.error('converse failed:', e);
-    return json({ error: errorMessage(e) }, 500);
+    return json({ error: errorMessage(e, 'Something went wrong while talking to the AI.') }, 500);
   }
 });
-
-// What the user sees in an alert. The raw error (with the upstream HTTP
-// body) is already in the function logs via console.error above; showing
-// it in the app just dumps JSON on the user.
-function errorMessage(e: unknown): string {
-  const raw =
-    e instanceof Error
-      ? e.message
-      : e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string'
-        ? (e as { message: string }).message
-        : '';
-  if (/^Whisper transcription failed/.test(raw)) return "Couldn't understand the audio right now. Please try again.";
-  if (/^AI reply failed/.test(raw) || /returned no content/.test(raw)) {
-    return "The AI couldn't reply just now. Please try again.";
-  }
-  if (/^Speech synthesis failed/.test(raw)) return "Couldn't generate the voice reply. Please try again.";
-  if (/fetch failed|network|ECONNRESET|timed? ?out/i.test(raw)) return 'Connection problem. Please try again.';
-  return raw || 'Something went wrong while talking to the AI.';
-}
 
 async function discardAudio(db: SupabaseClient, storagePath: string): Promise<void> {
   try {

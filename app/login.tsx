@@ -4,6 +4,7 @@ import { Alert, Platform, Pressable, StyleSheet, Text, View } from 'react-native
 
 import { AppleIcon, MailIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { signInWithOAuth } from '@/lib/oauth';
 import { AppleSignInUnavailableError, signInWithApple, signInWithGoogle } from '@/services/auth';
 import { colors, font, radius } from '@/theme';
@@ -53,7 +54,7 @@ export default function LoginScreen() {
       } else if ((e as { name?: string })?.name === 'OAuthCancelledError') {
         // User closed the browser tab — not an error worth surfacing.
       } else {
-        Alert.alert('Sign-in failed', e instanceof Error ? e.message : 'Please try again.');
+        Alert.alert('Sign-in failed', friendlyMessage(e, 'Please try again.'));
       }
     } finally {
       setBusy(null);

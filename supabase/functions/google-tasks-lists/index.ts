@@ -3,6 +3,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
 import { getValidAccessToken, googleTasksFetch, NotConnectedError } from '../_shared/googleTasks.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -35,7 +36,10 @@ Deno.serve(async (req) => {
   try {
     const { accessToken } = await getValidAccessToken(db, user.id);
     const res = await googleTasksFetch(accessToken, 'users/@me/lists');
-    if (!res.ok) throw new Error(`Google Tasks API failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) {
+      console.error('Google Tasks API (lists) failed:', res.status, await res.text());
+      throw new Error('Could not load your Google Tasks lists.');
+    }
     const data = await res.json();
     const lists = (data.items ?? []).map((l: { id: string; title: string }) => ({ id: l.id, title: l.title }));
     return json({ lists });
@@ -44,7 +48,7 @@ Deno.serve(async (req) => {
     // reads straight off `data`, not a thrown FunctionsHttpError.
     if (e instanceof NotConnectedError) return json({ error: e.message, notConnected: true });
     console.error('google-tasks-lists failed:', e);
-    return json({ error: e instanceof Error ? e.message : 'Could not load your Google Tasks lists.' }, 500);
+    return json({ error: errorMessage(e, 'Could not load your Google Tasks lists.') }, 500);
   }
 });
 

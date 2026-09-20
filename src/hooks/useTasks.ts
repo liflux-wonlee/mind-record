@@ -7,6 +7,7 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { createTask, deleteTask, listTasks, setTaskStatus, updateTask, type Task } from '@/services/tasks';
 
@@ -26,7 +27,7 @@ export function useTasks() {
       const tasks = await listTasks(user.id);
       setState({ status: 'ready', tasks });
     } catch (e) {
-      setState({ status: 'error', message: e instanceof Error ? e.message : 'Failed to load tasks.' });
+      setState({ status: 'error', message: friendlyMessage(e, 'Failed to load tasks.') });
     }
   }, [user]);
 

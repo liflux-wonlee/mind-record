@@ -20,6 +20,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
 import { getValidAccessToken, googleTasksFetch, NotConnectedError } from '../_shared/googleTasks.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -125,7 +126,10 @@ Deno.serve(async (req) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, notes: notes ?? undefined, due }),
     });
-    if (!res.ok) throw new Error(`Google Tasks API failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) {
+      console.error('Google Tasks API (send) failed:', res.status, await res.text());
+      throw new Error('Could not send this to Google Tasks.');
+    }
     const created = await res.json();
 
     const insertPayload = {
@@ -152,7 +156,7 @@ Deno.serve(async (req) => {
       return json({ error: 'Google Tasks is not connected.', notConnected: true });
     }
     console.error('google-tasks-send failed:', e);
-    return json({ error: e instanceof Error ? e.message : 'Could not send this to Google Tasks.' }, 500);
+    return json({ error: errorMessage(e, 'Could not send this to Google Tasks.') }, 500);
   }
 });
 

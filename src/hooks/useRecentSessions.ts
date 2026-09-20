@@ -7,6 +7,7 @@
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { listRecentSessions, type Session } from '@/services/sessions';
 
@@ -28,7 +29,7 @@ export function useRecentSessions(limit = 5) {
     } catch (e) {
       setState({
         status: 'error',
-        message: e instanceof Error ? e.message : 'Failed to load recent sessions.',
+        message: friendlyMessage(e, 'Failed to load recent sessions.'),
       });
     }
   }, [user, limit]);

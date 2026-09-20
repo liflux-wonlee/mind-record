@@ -6,6 +6,7 @@ import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker } from '@/components/ui';
 import { getBiometricSupport, isBiometricLockEnabled } from '@/lib/biometricLock';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { resetOnboarding } from '@/lib/onboarding';
 import { useAuth } from '@/providers/AuthProvider';
 import { deleteAccount } from '@/services/account';
@@ -112,7 +113,7 @@ export default function AccountScreen() {
       await signOut();
       // app/_layout.tsx's auth guard redirects to /login once the session clears.
     } catch (e) {
-      Alert.alert('Sign out failed', e instanceof Error ? e.message : 'Please try again.');
+      Alert.alert('Sign out failed', friendlyMessage(e, 'Please try again.'));
       setSigningOut(false);
     }
   };
@@ -154,7 +155,7 @@ export default function AccountScreen() {
     } catch (e) {
       Alert.alert(
         'Could not fully delete your account',
-        (e instanceof Error ? e.message : 'Please try again.') +
+        friendlyMessage(e, 'Please try again.') +
           ' No partial deletion was left in place -- your account is safe to keep using, or you can try deleting it again.'
       );
       setDeleting(false);

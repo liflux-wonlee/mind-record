@@ -24,6 +24,7 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -216,25 +217,9 @@ Deno.serve(async (req) => {
     });
   } catch (e) {
     console.error('search-ask failed:', e);
-    return json({ error: errorMessage(e) }, 500);
+    return json({ error: errorMessage(e, 'Something went wrong while searching.') }, 500);
   }
 });
-
-function errorMessage(e: unknown): string {
-  const raw =
-    e instanceof Error
-      ? e.message
-      : e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string'
-        ? (e as { message: string }).message
-        : '';
-  if (/^Whisper transcription failed/.test(raw)) return "Couldn't understand the audio right now. Please try again.";
-  if (/^AI (interpretation|answer) failed/.test(raw) || /returned no content/.test(raw)) {
-    return "Couldn't answer that just now. Please try again.";
-  }
-  if (/^Speech synthesis failed/.test(raw)) return "Couldn't generate the voice reply. Please try again.";
-  if (/fetch failed|network|ECONNRESET|timed? ?out/i.test(raw)) return 'Connection problem. Please try again.';
-  return raw || 'Something went wrong while searching.';
-}
 
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
 

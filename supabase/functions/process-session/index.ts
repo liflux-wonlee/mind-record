@@ -17,6 +17,7 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -106,7 +107,7 @@ Deno.serve(async (req) => {
     .select('*')
     .eq('id', sessionId)
     .maybeSingle();
-  if (sessionError) return json({ error: sessionError.message }, 500);
+  if (sessionError) return json({ error: errorMessage(sessionError, 'Could not load this session.') }, 500);
   if (!session || session.user_id !== user.id) {
     return json({ error: 'Session not found.' }, 404);
   }
@@ -133,7 +134,10 @@ Deno.serve(async (req) => {
     .in('processing_status', ['pending', 'error'])
     .select('id')
     .maybeSingle();
-  if (claimError) return json({ error: claimError.message }, 500);
+  if (claimError) {
+    console.error('process-session claim failed:', claimError);
+    return json({ error: errorMessage(claimError, 'Could not start processing this recording.') }, 500);
+  }
   if (!claimed) {
     return json({ status: 'already_processing' }, 409);
   }
@@ -384,7 +388,7 @@ Deno.serve(async (req) => {
     });
   } catch (e) {
     console.error('process-session failed:', e);
-    const message = errorMessage(e);
+    const message = errorMessage(e, 'Something went wrong while processing this recording. Tap Retry.');
     await db
       .from('sessions')
       .update({ processing_status: 'error', processing_error: message })
@@ -392,34 +396,6 @@ Deno.serve(async (req) => {
     return json({ error: message }, 500);
   }
 });
-
-/**
- * `e instanceof Error` alone misses most Supabase client errors --
- * PostgrestError (from .from(...).insert/update/select) is a plain object
- * implementing an interface, not an actual Error subclass, so it was
- * silently falling through to the generic "Unknown error" message here
- * and every real failure reason was being discarded before it ever
- * reached `sessions.processing_error` or the client.
- */
-// What ends up in sessions.processing_error and on the Summary screen. The
-// raw error (with the upstream HTTP body) is in the function logs via
-// console.error; the user only needs to know what to do about it.
-function errorMessage(e: unknown): string {
-  const raw =
-    e instanceof Error
-      ? e.message
-      : e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string'
-        ? (e as { message: string }).message
-        : '';
-  if (/too large to transcribe/.test(raw)) return raw; // already user-facing
-  if (/^Whisper transcription failed/.test(raw)) return "Couldn't transcribe this recording right now. Tap Retry.";
-  if (/^AI analysis failed/.test(raw) || /returned no content/.test(raw)) {
-    return "Couldn't summarize this recording right now. Tap Retry.";
-  }
-  if (/fetch failed|network|ECONNRESET|timed? ?out/i.test(raw)) return 'Connection problem while processing. Tap Retry.';
-  if (/violates|constraint|duplicate key|null value/i.test(raw)) return "Couldn't save the results. Tap Retry.";
-  return raw || 'Something went wrong while processing this recording. Tap Retry.';
-}
 
 /**
  * Finds or creates the topic (and, if named, its parent) an extracted item

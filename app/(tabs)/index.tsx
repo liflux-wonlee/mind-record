@@ -7,6 +7,7 @@ import { MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useRecentSessions } from '@/hooks/useRecentSessions';
+import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
 import { deleteSession, listSessionsForDay, type Session } from '@/services/sessions';
@@ -84,7 +85,7 @@ export default function HomeScreen() {
           onPress: () =>
             deleteSession(session.id)
               .then(() => recentSessions.refresh())
-              .catch((e) => Alert.alert('Could not delete', e instanceof Error ? e.message : 'Please try again.')),
+              .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
         },
       ]
     );

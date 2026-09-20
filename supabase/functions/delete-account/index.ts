@@ -35,6 +35,8 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { errorMessage } from '../_shared/errorMessage.ts';
+
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -74,7 +76,8 @@ Deno.serve(async (req) => {
     // subject of every other admin-level log line Supabase itself emits)
     // and the raw error for whoever reads the function logs.
     console.error('delete-account failed for user', user.id, e);
-    return json({ error: errorMessage(e) }, 500);
+    const message = `${errorMessage(e, 'Something went wrong.')} Your account has not been fully deleted -- please try again.`;
+    return json({ error: message }, 500);
   }
 });
 
@@ -105,19 +108,6 @@ async function deleteAllUserStorage(db: SupabaseClient, userId: string): Promise
 
   const { error: removeError } = await db.storage.from('recordings').remove(paths);
   if (removeError) throw removeError;
-}
-
-function errorMessage(e: unknown): string {
-  const raw =
-    e instanceof Error
-      ? e.message
-      : e && typeof e === 'object' && typeof (e as { message?: unknown }).message === 'string'
-        ? (e as { message: string }).message
-        : '';
-  if (/fetch failed|network|ECONNRESET|timed? ?out/i.test(raw)) return 'Connection problem. Please try again.';
-  return raw
-    ? `${raw} Your account has not been fully deleted -- please try again.`
-    : 'Something went wrong. Your account has not been fully deleted -- please try again.';
 }
 
 function json(body: unknown, status = 200): Response {

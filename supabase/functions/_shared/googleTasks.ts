@@ -64,7 +64,10 @@ export async function getValidAccessToken(
     // -- treat it as "disconnected", not a generic server error, so the
     // app can prompt to reconnect instead of just showing "try again".
     if (res.status === 400 && /invalid_grant/i.test(body)) throw new NotConnectedError();
-    throw new Error(`Could not refresh the Google Tasks connection (${res.status}): ${body}`);
+    // The raw Google response body is logged, not shown -- it's Google's
+    // own OAuth error JSON, not something a user should ever see.
+    console.error('Google Tasks token refresh failed:', res.status, body);
+    throw new Error('Could not refresh the Google Tasks connection. Please try again.');
   }
   const data = await res.json();
   const accessToken = data.access_token as string;
