@@ -3,7 +3,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
-import { ShareIcon } from '@/components/Icon';
+import { CheckIcon, ShareIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
@@ -90,6 +90,44 @@ const PICKER_COLORS = [
   colors.pastelYellow,
   colors.pastelPink,
 ];
+
+type StepState = 'done' | 'active' | 'pending';
+
+/**
+ * Step-by-step processing status, honestly derived from the real
+ * `sessions.processing_status` the poll above already tracks -- no fake
+ * percentages, since process-session doesn't report granular progress
+ * within a step. "Uploading" is always shown as already complete: by the
+ * time this screen can poll a session at all, the recording's audio has
+ * already been uploaded (useCaptureSession/useConversationSession await
+ * that before ever navigating here).
+ */
+function ProcessingSteps({ status }: { status: Session['processing_status'] | undefined }) {
+  const transcribingDone = status === 'analyzing';
+  const steps: { label: string; state: StepState }[] = [
+    { label: 'Uploading', state: 'done' },
+    { label: 'Transcribing your recording', state: transcribingDone ? 'done' : 'active' },
+    { label: 'Finding tasks, ideas & topics', state: transcribingDone ? 'active' : 'pending' },
+  ];
+  return (
+    <View style={[styles.summaryCard, styles.processing]}>
+      {steps.map((step) => (
+        <View key={step.label} style={styles.stepRow}>
+          {step.state === 'done' ? (
+            <View style={[styles.stepIcon, styles.stepIconDone]}>
+              <CheckIcon size={13} color={colors.bg} />
+            </View>
+          ) : step.state === 'active' ? (
+            <ActivityIndicator size="small" color={colors.accent700} style={styles.stepIcon} />
+          ) : (
+            <View style={[styles.stepIcon, styles.stepIconPending]} />
+          )}
+          <Text style={[styles.stepLabel, step.state === 'pending' && styles.stepLabelPending]}>{step.label}</Text>
+        </View>
+      ))}
+    </View>
+  );
+}
 
 /**
  * The transcribe-then-analyze pipeline (supabase/functions/process-session)
@@ -326,7 +364,7 @@ export default function SummaryScreen() {
   };
 
   return (
-    <Screen safeBottom>
+    <Screen safeBottom showAccount={false}>
       {done ? (
         <View style={styles.tabRow}>
           <View style={styles.tabGroup}>
@@ -372,14 +410,7 @@ export default function SummaryScreen() {
           />
         </View>
       ) : processing ? (
-        <View style={[styles.summaryCard, styles.processing]}>
-          <ActivityIndicator color={colors.accent} />
-          <Text style={styles.processingLabel}>
-            {session?.processing_status === 'analyzing'
-              ? 'Understanding what you said…'
-              : 'Transcribing your recording…'}
-          </Text>
-        </View>
+        <ProcessingSteps status={session?.processing_status} />
       ) : session?.processing_status === 'error' ? (
         <View style={[styles.summaryCard, { backgroundColor: colors.pastelPink }]}>
           <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t process this recording</Kicker>
@@ -619,12 +650,34 @@ const styles = StyleSheet.create({
   processing: {
     backgroundColor: colors.pastelBlue,
     alignItems: 'flex-start',
+    gap: 14,
+  },
+  stepRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 12,
   },
-  processingLabel: {
-    fontFamily: font.regular,
+  stepIcon: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepIconDone: {
+    backgroundColor: colors.accent700,
+  },
+  stepIconPending: {
+    borderWidth: 2,
+    borderColor: colors.neutral400,
+  },
+  stepLabel: {
+    fontFamily: font.semibold,
     fontSize: 15,
-    color: colors.neutral700,
+    color: colors.text,
+  },
+  stepLabelPending: {
+    color: colors.neutral500,
   },
   entry: {
     paddingVertical: 12,

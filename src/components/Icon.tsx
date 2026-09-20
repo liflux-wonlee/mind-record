@@ -3,7 +3,7 @@
  * react-native-svg. All stroke icons share the lucide 24x24 / stroke-2 geometry.
  */
 import React from 'react';
-import Svg, { Circle, Line, Path, Polyline, Rect } from 'react-native-svg';
+import Svg, { Circle, Line, Path, Polygon, Polyline, Rect } from 'react-native-svg';
 
 import { colors } from '@/theme';
 
@@ -157,6 +157,50 @@ export function ShareIcon(props: IconProps) {
       <Path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7" />
       <Polyline points="16 6 12 2 8 6" />
       <Line x1="12" x2="12" y1="2" y2="15" />
+    </Stroke>
+  );
+}
+
+export function XIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Line x1="18" x2="6" y1="6" y2="18" />
+      <Line x1="6" x2="18" y1="6" y2="18" />
+    </Stroke>
+  );
+}
+
+export function PauseIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Rect x="6" y="4" width="5" height="16" rx="1" />
+      <Rect x="13" y="4" width="5" height="16" rx="1" />
+    </Stroke>
+  );
+}
+
+export function PlayIcon({ size = 24, color = colors.text }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Polygon points="6 3 20 12 6 21 6 3" />
+    </Svg>
+  );
+}
+
+/** Solid, not stroked -- reads clearly at the small size it's used at,
+ *  centered on a filled circular "stop/finish recording" button. */
+export function StopIcon({ size = 24, color = colors.text }: IconProps) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>
+      <Rect x="5" y="5" width="14" height="14" rx="2" />
+    </Svg>
+  );
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Polyline points="20 6 9 17 4 12" />
     </Stroke>
   );
 }

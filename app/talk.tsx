@@ -2,6 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { CheckIcon, MicIcon, PauseIcon, PlayIcon, StopIcon, XIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
 import { Button, Kicker } from '@/components/ui';
@@ -208,16 +209,11 @@ function CapturePanel({
   busy: boolean;
 }) {
   const { recording, everRecorded, timer, interruption } = capture;
+  const statusLabel = busy ? 'Saving…' : recording ? 'Recording' : everRecorded ? 'Paused' : 'Ready';
+
   return (
     <>
-      <View style={styles.statusRow}>
-        <Kicker style={{ color: recording ? colors.accent : colors.neutral600 }}>
-          {busy ? 'Saving…' : recording ? '● Listening' : everRecorded ? 'Paused' : 'Ready'}
-        </Kicker>
-        <Text style={styles.timer}>{timer}</Text>
-      </View>
-
-      <ScrollView style={styles.transcript} contentContainerStyle={styles.transcriptContent}>
+      <View style={styles.hintBox}>
         {interruption && !recording ? (
           <Text style={styles.idle}>
             {INTERRUPTION_TEXT[interruption]} What you said before that is saved. Tap Resume to keep going, or
@@ -225,42 +221,93 @@ function CapturePanel({
           </Text>
         ) : !everRecorded ? (
           <Text style={styles.idle}>Go ahead and talk. No need to organize it — say everything in one go.</Text>
-        ) : (
-          <Text style={styles.idle}>
-            Listening. Tap the button again to pause, and tap Done below when you&apos;re finished.
-          </Text>
-        )}
-      </ScrollView>
-
-      <Waveform active={recording} />
-
-      <View style={styles.controls}>
-        <Button
-          label={busy ? 'Saving…' : recording ? 'Listening… tap to pause' : everRecorded ? 'Resume' : 'Start talking'}
-          onPress={onToggleRecording}
-          disabled={busy}
-          align="flex-start"
-          style={[styles.micButton, { backgroundColor: recording ? colors.pastelPink : colors.pastelGreen }]}
-          textStyle={[styles.pastelButtonText, { fontSize: 16 }]}
-        />
+        ) : null}
       </View>
-      <View style={[styles.controls, { marginTop: 8 }]}>
-        <Button
+
+      <View style={styles.stage}>
+        <View style={styles.statusPill}>
+          {recording ? <View style={styles.recordingDot} /> : null}
+          <Kicker style={recording ? { color: colors.accent700 } : { color: colors.neutral600 }}>
+            {statusLabel}
+          </Kicker>
+        </View>
+        <Waveform active={recording} height={90} />
+        <Text style={styles.bigTimer}>{timer}</Text>
+      </View>
+
+      <View style={styles.circleRow}>
+        <CircleButton
+          icon={<XIcon size={22} color={colors.text} />}
           label="Cancel"
           onPress={onCancel}
           disabled={busy}
-          style={[styles.halfButton, { backgroundColor: colors.pastelLavender }]}
-          textStyle={styles.pastelButtonText}
+          background={colors.pastelLavender}
         />
-        <Button
+        <CircleButton
+          icon={<StopIcon size={26} color={colors.bg} />}
           label="Done"
           onPress={onFinish}
           disabled={busy || !everRecorded}
-          style={[styles.halfButton, { backgroundColor: colors.pastelBlue }]}
-          textStyle={styles.pastelButtonText}
+          background={colors.accent700}
+          large
+        />
+        <CircleButton
+          icon={
+            recording ? (
+              <PauseIcon size={22} color={colors.text} />
+            ) : (
+              <PlayIcon size={22} color={colors.text} />
+            )
+          }
+          label={recording ? 'Pause' : everRecorded ? 'Resume' : 'Start'}
+          onPress={onToggleRecording}
+          disabled={busy}
+          background={recording ? colors.pastelPink : colors.pastelGreen}
         />
       </View>
     </>
+  );
+}
+
+/** One of the three recording-screen controls -- everyday recorder
+ *  metaphor (Cancel / Stop-and-finish / Pause-or-resume) instead of a
+ *  single wide "tap to pause" button, so the primary "I'm done" action
+ *  has its own unambiguous, always-visible target throughout the whole
+ *  recording instead of being folded into the mic button's own label. */
+function CircleButton({
+  icon,
+  label,
+  onPress,
+  disabled,
+  background,
+  large,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  background: string;
+  large?: boolean;
+}) {
+  const diameter = large ? 76 : 60;
+  return (
+    <View style={styles.circleButtonWrap}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        onPress={onPress}
+        disabled={disabled}
+        style={({ pressed }) => [
+          styles.circleButton,
+          { width: diameter, height: diameter, borderRadius: diameter / 2, backgroundColor: background },
+          disabled && styles.circleButtonDisabled,
+          pressed && !disabled && styles.circleButtonPressed,
+        ]}
+      >
+        {icon}
+      </Pressable>
+      <Text style={styles.circleButtonLabel}>{label}</Text>
+    </View>
   );
 }
 
@@ -270,16 +317,19 @@ const INTERRUPTION_TEXT: Record<InterruptionReason, string> = {
   'recorder-error': 'Recording stopped because the microphone became unavailable.',
 };
 
+// The leading-dot styling (styles.recordingDot, next to this label) is only
+// ever shown for 'recording' -- these strings stay plain text so there's
+// never a second, text-embedded dot alongside it.
 const STATE_LABEL: Record<string, string> = {
   idle: 'Ready',
-  recording: '● Listening',
+  recording: 'Listening',
   thinking: 'Thinking…',
-  speaking: '● Speaking',
+  speaking: 'Speaking',
 };
 
 const TALK_BUTTON_LABEL: Record<string, string> = {
   idle: 'Talk',
-  recording: 'Listening… tap to stop',
+  recording: 'Stop',
   thinking: 'Thinking…',
   speaking: 'Speaking…',
 };
@@ -308,17 +358,9 @@ function ConversationPanel({
   };
   const talkDisabled = state === 'thinking' || state === 'speaking' || turnBusy;
   const endDisabled = state === 'thinking' || turnBusy;
-  const talkButtonColor =
-    state === 'recording' ? colors.pastelPink : state === 'idle' ? colors.pastelGreen : colors.pastelYellow;
 
   return (
     <>
-      <View style={styles.statusRow}>
-        <Kicker style={{ color: state === 'idle' ? colors.neutral600 : colors.accent }}>
-          {STATE_LABEL[state]}
-        </Kicker>
-      </View>
-
       <ScrollView
         ref={scrollRef}
         style={styles.transcript}
@@ -347,32 +389,44 @@ function ConversationPanel({
         )}
       </ScrollView>
 
-      <Waveform active={state === 'recording'} />
-
-      <View style={styles.controls}>
-        <Button
-          label={TALK_BUTTON_LABEL[state]}
-          onPress={onPressTalk}
-          disabled={talkDisabled}
-          align="flex-start"
-          style={[styles.micButton, { backgroundColor: talkButtonColor }]}
-          textStyle={[styles.pastelButtonText, { fontSize: 16 }]}
-        />
+      <View style={styles.stageCompact}>
+        <View style={styles.statusPill}>
+          {state === 'recording' ? <View style={styles.recordingDot} /> : null}
+          <Kicker style={state === 'idle' ? { color: colors.neutral600 } : { color: colors.accent700 }}>
+            {STATE_LABEL[state]}
+          </Kicker>
+        </View>
+        <Waveform active={state === 'recording'} height={90} />
       </View>
-      <View style={[styles.controls, { marginTop: 8 }]}>
-        <Button
+
+      <View style={styles.circleRow}>
+        <CircleButton
+          icon={<XIcon size={22} color={colors.text} />}
           label="Cancel"
           onPress={onCancel}
           disabled={endDisabled}
-          style={[styles.halfButton, { backgroundColor: colors.pastelLavender }]}
-          textStyle={styles.pastelButtonText}
+          background={colors.pastelLavender}
         />
-        <Button
+        <CircleButton
+          icon={<CheckIcon size={26} color={colors.bg} />}
           label="Save & end"
           onPress={onDone}
           disabled={endDisabled}
-          style={[styles.halfButton, { backgroundColor: colors.pastelBlue }]}
-          textStyle={styles.pastelButtonText}
+          background={colors.accent700}
+          large
+        />
+        <CircleButton
+          icon={
+            state === 'recording' ? (
+              <StopIcon size={22} color={colors.text} />
+            ) : (
+              <MicIcon size={22} color={colors.text} />
+            )
+          }
+          label={TALK_BUTTON_LABEL[state]}
+          onPress={onPressTalk}
+          disabled={talkDisabled}
+          background={state === 'recording' ? colors.pastelPink : colors.pastelGreen}
         />
       </View>
     </>
@@ -447,21 +501,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: colors.neutral700,
   },
-  statusRow: {
-    marginTop: 22,
-    borderTopWidth: 2,
-    borderTopColor: colors.divider,
-    paddingTop: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-  },
-  timer: {
-    fontFamily: font.extrabold,
-    fontSize: 28,
-    letterSpacing: 28 * -0.02,
-    color: colors.text,
-  },
   transcript: {
     flex: 1,
     marginTop: 14,
@@ -469,6 +508,12 @@ const styles = StyleSheet.create({
   transcriptContent: {
     gap: 14,
     paddingBottom: 8,
+  },
+  // Capture's hint text is 1-2 lines, not a growing list -- unlike
+  // Conversation's turn history (styles.transcript, flex: 1), it takes its
+  // natural height so the stage below gets the screen's remaining space.
+  hintBox: {
+    marginTop: 14,
   },
   idle: {
     fontFamily: font.regular,
@@ -482,23 +527,65 @@ const styles = StyleSheet.create({
     lineHeight: 23,
     color: colors.text,
   },
-  controls: {
+  // The centered recording "stage" -- status pill, waveform, and (Capture
+  // only) the big timer -- given most of the screen's vertical space so it
+  // reads as the primary thing happening, the way a plain recorder app's
+  // record screen does, rather than being squeezed between a status row
+  // and a wide button.
+  stage: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 18,
+  },
+  // Conversation's turn history is the primary growing area (styles.
+  // transcript already claims flex: 1), so its stage just takes natural
+  // height instead of also competing for the remaining space.
+  stageCompact: {
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 14,
+  },
+  statusPill: {
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 14,
+    alignItems: 'center',
+    gap: 8,
   },
-  micButton: {
-    flex: 1,
-    minHeight: 64,
-    paddingHorizontal: 16,
-    borderRadius: radius.pastel,
+  recordingDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: colors.accent700,
   },
-  halfButton: {
-    flex: 1,
-    minHeight: 52,
-    borderRadius: radius.pastel,
-  },
-  pastelButtonText: {
+  bigTimer: {
+    fontFamily: font.extrabold,
+    fontSize: 52,
+    letterSpacing: 52 * -0.02,
     color: colors.text,
+  },
+  circleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-evenly',
+    alignItems: 'flex-start',
+    paddingTop: 8,
+  },
+  circleButtonWrap: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  circleButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  circleButtonDisabled: {
+    opacity: 0.4,
+  },
+  circleButtonPressed: {
+    opacity: 0.8,
+  },
+  circleButtonLabel: {
+    fontFamily: font.semibold,
+    fontSize: 12,
+    color: colors.neutral700,
   },
 });

@@ -11,10 +11,18 @@ import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { colors } from '@/theme';
 
 const BAR_COUNT = 24;
-const HEIGHT = 40;
+const DEFAULT_HEIGHT = 40;
 const IDLE = 0.15;
 
-export function Waveform({ active, dark = false }: { active: boolean; dark?: boolean }) {
+export function Waveform({
+  active,
+  dark = false,
+  height = DEFAULT_HEIGHT,
+}: {
+  active: boolean;
+  dark?: boolean;
+  height?: number;
+}) {
   const values = useMemo(
     () => Array.from({ length: BAR_COUNT }, () => new Animated.Value(IDLE)),
     []
@@ -63,7 +71,7 @@ export function Waveform({ active, dark = false }: { active: boolean; dark?: boo
   const barColor = active ? colors.accent : dark ? colors.neutral700 : colors.neutral300;
 
   return (
-    <View style={[styles.row, dark && styles.rowDark]}>
+    <View style={[styles.row, dark && styles.rowDark, { height }]}>
       {values.map((v, i) => (
         <Animated.View
           key={i}
@@ -73,7 +81,7 @@ export function Waveform({ active, dark = false }: { active: boolean; dark?: boo
               backgroundColor: barColor,
               height: v.interpolate({
                 inputRange: [0, 1],
-                outputRange: [0, HEIGHT],
+                outputRange: [0, height],
               }),
             },
           ]}
@@ -88,7 +96,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 4,
     alignItems: 'flex-end',
-    height: HEIGHT,
   },
   rowDark: {
     marginBottom: 16,
