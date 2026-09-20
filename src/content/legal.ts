@@ -12,7 +12,7 @@
 export const COMPANY_NAME = 'Liflux';
 export const APP_NAME = 'Mind Record';
 export const CONTACT_EMAIL = 'mindrecord@joasuite.com';
-export const GOVERNING_LAW = '[governing law / jurisdiction -- to be confirmed]';
+export const GOVERNING_LAW = 'the State of New Jersey, USA, without regard to its conflict-of-laws principles';
 export const EFFECTIVE_DATE = 'September 20, 2026';
 
 export type LegalSection = { heading: string; paragraphs: string[] };
