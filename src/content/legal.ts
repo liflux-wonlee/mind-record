@@ -11,7 +11,7 @@
  */
 export const COMPANY_NAME = 'Liflux';
 export const APP_NAME = 'Mind Record';
-export const CONTACT_EMAIL = 'privacy@liflux.com';
+export const CONTACT_EMAIL = 'mindrecord@joasuite.com';
 export const GOVERNING_LAW = '[governing law / jurisdiction -- to be confirmed]';
 export const EFFECTIVE_DATE = 'September 20, 2026';
 
