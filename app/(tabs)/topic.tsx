@@ -23,12 +23,13 @@ import {
   listTasksUnclassified,
   type Task,
 } from '@/services/tasks';
+import type { SessionsPageCursor } from '@/services/sessions';
 import {
   createTopic,
   deleteTopic,
   descendantTopicIds,
   listSessionsByTopics,
-  listSessionsUnclassified,
+  listSessionsUnclassifiedPage,
   listTopics,
   mergeTopics,
   moveTopic,
@@ -72,6 +73,11 @@ export default function TopicDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
+  // Unclassified sessions only -- real pagination, since a fixed cap here
+  // would permanently hide older unclassified recordings (see
+  // listSessionsUnclassifiedPage's own comment).
+  const [sessionsCursor, setSessionsCursor] = useState<SessionsPageCursor | null>(null);
+  const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
 
   const topic = id ? allTopics.find((t) => t.id === id) ?? null : null;
   const parent = topic?.parent_topic_id ? allTopics.find((t) => t.id === topic.parent_topic_id) ?? null : null;
@@ -84,10 +90,13 @@ export default function TopicDetailScreen() {
 
     try {
       if (isUnclassified) {
-        const s = await listSessionsUnclassified(user.id);
-        const t = await listTasksUnclassified(user.id);
-        const m = await listMemoriesUnclassified(user.id);
-        setSessions(s);
+        const [sPage, t, m] = await Promise.all([
+          listSessionsUnclassifiedPage(user.id),
+          listTasksUnclassified(user.id),
+          listMemoriesUnclassified(user.id),
+        ]);
+        setSessions(sPage.sessions);
+        setSessionsCursor(sPage.nextCursor);
         setTasks(t);
         setMemories(m);
         return;
@@ -116,6 +125,20 @@ export default function TopicDetailScreen() {
       load();
     }, [load])
   );
+
+  const loadMoreSessions = async () => {
+    if (!user || !sessionsCursor || loadingMoreSessions) return;
+    setLoadingMoreSessions(true);
+    try {
+      const page = await listSessionsUnclassifiedPage(user.id, { before: sessionsCursor });
+      setSessions((prev) => [...prev, ...page.sessions]);
+      setSessionsCursor(page.nextCursor);
+    } catch (e) {
+      Alert.alert('Could not load more', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setLoadingMoreSessions(false);
+    }
+  };
 
   const closeSheet = () => setSheet(null);
   const runAction = async (action: () => Promise<void>, after?: () => void) => {
@@ -336,6 +359,17 @@ export default function TopicDetailScreen() {
                   </Text>
                 </Row>
               ))}
+              {isUnclassified && sessionsCursor ? (
+                <Button
+                  variant="ghost"
+                  label={loadingMoreSessions ? 'Loading…' : 'Load more recordings'}
+                  disabled={loadingMoreSessions}
+                  onPress={loadMoreSessions}
+                  align="flex-start"
+                  style={{ marginTop: 4 }}
+                  textStyle={{ fontSize: 12 }}
+                />
+              ) : null}
             </>
           ) : null}
 

@@ -6,7 +6,13 @@ import { ChevronLeftIcon, ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
-import { deleteSession, listSessionsInMonth, listSessionsPage, type Session } from '@/services/sessions';
+import {
+  deleteSession,
+  listSessionsInMonth,
+  listSessionsPage,
+  type Session,
+  type SessionsPageCursor,
+} from '@/services/sessions';
 import { colors, font, h2, monthColors, radius } from '@/theme';
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
@@ -142,7 +148,8 @@ export default function RecordsScreen() {
   const loadMoreList = () => {
     if (!user || listLoadingMore || listSessions.length === 0) return;
     setListLoadingMore(true);
-    const cursor = listSessions[listSessions.length - 1].started_at;
+    const last = listSessions[listSessions.length - 1];
+    const cursor: SessionsPageCursor = { startedAt: last.started_at, id: last.id };
     listSessionsPage(user.id, { before: cursor, limit: LIST_PAGE_SIZE })
       .then((sessions) => {
         setListSessions((prev) => [...prev, ...sessions]);

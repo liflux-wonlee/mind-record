@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import type { Session } from '@/services/sessions';
+import type { Session, SessionsPageCursor } from '@/services/sessions';
 import type { Database } from '@/types/database';
 
 export type Topic = Database['public']['Tables']['topics']['Row'];
@@ -147,30 +147,68 @@ export async function listSessionsByTopics(topicIds: string[]): Promise<Session[
 
 /**
  * Sessions with no `session_topics` link at all -- Topics' "Unclassified"
- * view. Two round trips (ids, then the diff) rather than a single query,
- * since Postgrest can't express "not linked in another table" directly;
- * capped at the 200 most recent so this stays a quick client-side diff.
+ * view. Real cursor-based pagination: a fixed cap here (there used to be
+ * one at 200) would permanently hide any older unclassified session past
+ * it, since "unclassified" isn't a column Postgrest can filter on directly
+ * -- it has to fetch a batch of sessions, diff them against
+ * `session_topics`, and keep going until it has found `limit` unclassified
+ * ones or genuinely run out, rather than ever silently stopping at an
+ * arbitrary recency cutoff. Bounded to a handful of round trips per call
+ * (a user whose entire history happens to already be classified still
+ * gets a fast, if page-less, response instead of this scanning their
+ * whole account in one request) -- `nextCursor` says whether there's
+ * plausibly more to look at.
  */
-export async function listSessionsUnclassified(userId: string): Promise<Session[]> {
-  const { data: recent, error: recentError } = await supabase
-    .from('sessions')
-    .select('*')
-    .eq('user_id', userId)
-    .order('started_at', { ascending: false })
-    .limit(200);
-  if (recentError) throw recentError;
-  if (!recent || recent.length === 0) return [];
+export async function listSessionsUnclassifiedPage(
+  userId: string,
+  { before, limit = 30 }: { before?: SessionsPageCursor; limit?: number } = {}
+): Promise<{ sessions: Session[]; nextCursor: SessionsPageCursor | null }> {
+  const BATCH_SIZE = 200;
+  const MAX_BATCHES = 10;
+  const collected: Session[] = [];
+  let cursor = before ?? null;
+  let exhausted = false;
 
-  const { data: links, error: linksError } = await supabase
-    .from('session_topics')
-    .select('session_id')
-    .in(
-      'session_id',
-      recent.map((s) => s.id)
-    );
-  if (linksError) throw linksError;
-  const classified = new Set((links ?? []).map((l) => l.session_id));
-  return recent.filter((s) => !classified.has(s.id));
+  for (let i = 0; i < MAX_BATCHES && collected.length < limit; i++) {
+    let query = supabase
+      .from('sessions')
+      .select('*')
+      .eq('user_id', userId)
+      .order('started_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(BATCH_SIZE);
+    if (cursor) {
+      query = query.or(`started_at.lt.${cursor.startedAt},and(started_at.eq.${cursor.startedAt},id.lt.${cursor.id})`);
+    }
+    const { data: batch, error } = await query;
+    if (error) throw error;
+    if (!batch || batch.length === 0) {
+      exhausted = true;
+      break;
+    }
+
+    const { data: links, error: linksError } = await supabase
+      .from('session_topics')
+      .select('session_id')
+      .in(
+        'session_id',
+        batch.map((s) => s.id)
+      );
+    if (linksError) throw linksError;
+    const classified = new Set((links ?? []).map((l) => l.session_id));
+    for (const s of batch) {
+      if (!classified.has(s.id)) collected.push(s);
+    }
+
+    const last = batch[batch.length - 1];
+    cursor = { startedAt: last.started_at, id: last.id };
+    if (batch.length < BATCH_SIZE) {
+      exhausted = true;
+      break;
+    }
+  }
+
+  return { sessions: collected, nextCursor: exhausted ? null : cursor };
 }
 
 /**

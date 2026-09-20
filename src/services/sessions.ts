@@ -53,24 +53,33 @@ export async function listSessionsInMonth(userId: string, year: number, month: n
   return data;
 }
 
+export type SessionsPageCursor = { startedAt: string; id: string };
+
 /**
  * Records' List view -- pages through EVERY session, oldest never falling
  * out of reach the way Home's `listRecentSessions`/`listSessionsInMonth`
- * top out. `before` is the `started_at` of the last row already loaded
- * (an ISO timestamp cursor, not an offset) so a page boundary landing
- * mid-second can't skip or repeat a row.
+ * top out. `before` is a composite (started_at, id) cursor, not a bare
+ * offset or a `started_at`-only cursor -- two sessions can share the same
+ * `started_at` (rapid recordings, or any future bulk-insert path), and a
+ * plain `lt('started_at', ...)` cursor would then drop every row exactly
+ * equal to the last one loaded from every later page instead of just the
+ * ones already shown. Ordering and filtering by (started_at, id) together
+ * keeps the sequence stable across pages regardless of ties.
  */
 export async function listSessionsPage(
   userId: string,
-  { before, limit = 20 }: { before?: string; limit?: number } = {}
+  { before, limit = 20 }: { before?: SessionsPageCursor; limit?: number } = {}
 ): Promise<Session[]> {
   let query = supabase
     .from('sessions')
     .select('*')
     .eq('user_id', userId)
     .order('started_at', { ascending: false })
+    .order('id', { ascending: false })
     .limit(limit);
-  if (before) query = query.lt('started_at', before);
+  if (before) {
+    query = query.or(`started_at.lt.${before.startedAt},and(started_at.eq.${before.startedAt},id.lt.${before.id})`);
+  }
   const { data, error } = await query;
   if (error) throw error;
   return data;
