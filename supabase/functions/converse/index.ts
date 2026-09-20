@@ -130,7 +130,7 @@ Deno.serve(async (req) => {
         .order('position', { ascending: true });
       if (historyError) throw historyError;
 
-      const reply = await generateReply(history ?? [], aiName, userHonorific);
+      const reply = await generateReply(history ?? [], aiName, userHonorific, profile?.locale);
       assistantText = reply.reply;
       shouldEnd = reply.end;
       await insertMessage(db, sessionId, user.id, 'assistant', assistantText);
@@ -250,7 +250,8 @@ Never invent facts about the user. Never break character to explain that you're 
 async function generateReply(
   history: { role: string; content: string }[],
   aiName: string | null,
-  userHonorific: string | null
+  userHonorific: string | null,
+  locale: string | null | undefined
 ): Promise<{ reply: string; end: boolean }> {
   const messages = [
     { role: 'system', content: buildSystemPrompt(aiName, userHonorific, locale) },
