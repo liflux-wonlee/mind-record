@@ -102,6 +102,7 @@ export default function AccountScreen() {
     { key: 'ai', title: 'AI', subtitle: aiLine, route: '/settings/ai' as const },
     { key: 'privacy', title: 'Privacy', subtitle: biometricLine, route: '/settings/privacy' as const },
     { key: 'google-tasks', title: 'Google Tasks', subtitle: googleTasksLine, route: '/settings/google-tasks' as const },
+    { key: 'legal', title: 'Legal', subtitle: 'Privacy Policy & Terms of Service', route: '/settings/legal' as const },
   ];
 
   const handleSignOut = async () => {

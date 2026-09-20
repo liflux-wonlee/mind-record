@@ -107,8 +107,14 @@ export default function LoginScreen() {
 
       <Text style={styles.legal}>
         Your voice and records are stored securely. By continuing you agree to the{' '}
-        <Text style={styles.legalLink}>Terms</Text> and{' '}
-        <Text style={styles.legalLink}>Privacy Policy</Text>.
+        <Text style={styles.legalLink} onPress={() => router.push('/legal/terms-of-service')}>
+          Terms
+        </Text>{' '}
+        and{' '}
+        <Text style={styles.legalLink} onPress={() => router.push('/legal/privacy-policy')}>
+          Privacy Policy
+        </Text>
+        .
       </Text>
     </Screen>
   );

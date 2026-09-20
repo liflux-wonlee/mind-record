@@ -76,6 +76,12 @@ function RootNavigator() {
           <Stack.Screen name="email-auth" options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="auth/callback" options={{ animation: 'fade' }} />
         </Stack.Protected>
+        {/* Reachable regardless of auth state: Login must be able to link to
+            them before an account exists, and Account links to them again
+            once signed in -- so they sit outside every Stack.Protected
+            group rather than being duplicated into two of them. */}
+        <Stack.Screen name="legal/privacy-policy" options={{ animation: 'slide_from_right' }} />
+        <Stack.Screen name="legal/terms-of-service" options={{ animation: 'slide_from_right' }} />
         {/* The intro and the app proper are mutually exclusive: on a fresh
             install only the intro exists, and finishing it flips
             `onboardingDone` (in-process, not just on next launch) so the
@@ -93,6 +99,7 @@ function RootNavigator() {
           <Stack.Screen name="settings/ai" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/privacy" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/google-tasks" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="settings/legal" options={{ animation: 'slide_from_right' }} />
         </Stack.Protected>
       </Stack>
       {/* Rendered as a sibling overlay, never a route -- a route change
