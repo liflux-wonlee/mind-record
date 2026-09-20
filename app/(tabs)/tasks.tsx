@@ -7,6 +7,11 @@ import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, Kicker, RuleThick } from '@/components/ui';
 import { useTasks } from '@/hooks/useTasks';
+import {
+  getGoogleTasksSendRecord,
+  sendToGoogleTasks,
+  type GoogleTasksSendRecord,
+} from '@/services/googleTasks';
 import type { Task } from '@/services/tasks';
 import { colors, font, h2 } from '@/theme';
 
@@ -262,13 +267,43 @@ function TaskEditSheet({
   const [title, setTitle] = useState('');
   const [dueDate, setDueDate] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [sendRecord, setSendRecord] = useState<GoogleTasksSendRecord | null>(null);
+  const [sending, setSending] = useState(false);
 
   React.useEffect(() => {
     if (task) {
       setTitle(task.title);
       setDueDate(task.due_date);
+      setSendRecord(null);
+      getGoogleTasksSendRecord('task', task.id)
+        .then(setSendRecord)
+        .catch(() => {
+          // Not worth surfacing an error for -- the Send button just
+          // stays available and a duplicate send is harmlessly deduped
+          // server-side anyway.
+        });
     }
   }, [task]);
+
+  const send = async () => {
+    if (!task || sending) return;
+    setSending(true);
+    try {
+      const result = await sendToGoogleTasks('task', task.id);
+      setSendRecord({ googleTaskId: result.googleTaskId, listTitle: null, sentAt: new Date().toISOString() });
+    } catch (e) {
+      const name = e instanceof Error ? e.name : '';
+      if (name === 'NotConnectedError') {
+        Alert.alert('Not connected', 'Connect Google Tasks first in Account -> Google Tasks.');
+      } else if (name === 'NeedsListError') {
+        Alert.alert('Choose a list first', 'Pick a default list in Account -> Google Tasks.');
+      } else {
+        Alert.alert('Could not send', e instanceof Error ? e.message : 'Please try again.');
+      }
+    } finally {
+      setSending(false);
+    }
+  };
 
   const save = async () => {
     if (!title.trim() || saving) return;
@@ -335,6 +370,21 @@ function TaskEditSheet({
               onPress={() => task.source_session_id && onOpenSource(task.source_session_id)}
               style={{ marginTop: 14 }}
             />
+          ) : null}
+
+          <Button
+            variant="secondary"
+            label={sending ? 'Sending…' : sendRecord ? 'Sent to Google Tasks ✓' : 'Send to Google Tasks'}
+            align="flex-start"
+            disabled={sending || !!sendRecord}
+            onPress={send}
+            style={{ marginTop: 10 }}
+          />
+          {sendRecord ? (
+            <Text style={styles.sendHint}>
+              {sendRecord.listTitle ? `In ${sendRecord.listTitle}. ` : ''}Editing or completing this task here
+              won&apos;t update it in Google Tasks.
+            </Text>
           ) : null}
 
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
@@ -499,6 +549,13 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.divider,
     marginBottom: 10,
+  },
+  sendHint: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    lineHeight: 16,
+    color: colors.neutral600,
+    marginTop: 6,
   },
   fieldLabel: {
     fontFamily: font.semibold,

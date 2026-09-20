@@ -4,6 +4,7 @@ import { File, Paths } from 'expo-file-system';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { BottomSheet } from '@/components/BottomSheet';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, RuleThick } from '@/components/ui';
 import { useAuth } from '@/providers/AuthProvider';
@@ -18,6 +19,16 @@ import {
 import { resetOnboarding } from '@/lib/onboarding';
 import { deleteAccount } from '@/services/account';
 import { signOut } from '@/services/auth';
+import {
+  connectGoogleTasks,
+  disconnectGoogleTasks,
+  getGoogleTasksStatus,
+  GoogleTasksCancelledError,
+  listGoogleTaskLists,
+  setDefaultGoogleTaskList,
+  type GoogleTaskList,
+  type GoogleTasksStatus,
+} from '@/services/googleTasks';
 import { getProfile, updateProfile, type Profile } from '@/services/profiles';
 import { getAccountStats, type AccountStats } from '@/services/stats';
 import { previewVoice } from '@/services/voicePreview';
@@ -178,6 +189,8 @@ export default function AccountScreen() {
       ) : null}
 
       {user ? <BiometricSettings userId={user.id} /> : null}
+
+      <GoogleTasksSettings />
 
       <Button
         variant="secondary"
@@ -481,6 +494,176 @@ function BiometricSettings({ userId }: { userId: string }) {
           textStyle={{ fontSize: 12 }}
         />
       </View>
+    </View>
+  );
+}
+
+/**
+ * Available regardless of which provider (Google/Apple/email) the user
+ * actually signed into Mind Record with -- this is a completely separate
+ * consent/connection (see src/services/googleTasks.ts), never the login
+ * token. "Send" (not "sync"): sending a task never links it to keep
+ * updating both ways -- see the Tasks screen's own send action for the
+ * per-item side of this.
+ */
+function GoogleTasksSettings() {
+  const [status, setStatus] = useState<GoogleTasksStatus | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [pickingList, setPickingList] = useState(false);
+  const [lists, setLists] = useState<GoogleTaskList[] | null>(null);
+  const [loadingLists, setLoadingLists] = useState(false);
+  const [savingList, setSavingList] = useState<string | null>(null);
+
+  const refresh = useCallback(() => {
+    getGoogleTasksStatus()
+      .then(setStatus)
+      .catch(() => {
+        // Leave the section in its previous state rather than showing an
+        // error card for what's a secondary, optional settings section.
+      });
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  const connect = async () => {
+    if (connecting) return;
+    setConnecting(true);
+    try {
+      await connectGoogleTasks();
+      refresh();
+    } catch (e) {
+      if (!(e instanceof GoogleTasksCancelledError)) {
+        Alert.alert('Could not connect', e instanceof Error ? e.message : 'Please try again.');
+      }
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const disconnect = () => {
+    if (disconnecting) return;
+    Alert.alert(
+      'Disconnect Google Tasks?',
+      'Tasks already sent stay in Google Tasks -- this only stops future sends.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Disconnect',
+          style: 'destructive',
+          onPress: async () => {
+            setDisconnecting(true);
+            try {
+              await disconnectGoogleTasks();
+              setStatus({ connected: false, email: null, defaultListId: null, defaultListTitle: null });
+            } catch (e) {
+              Alert.alert('Could not disconnect', e instanceof Error ? e.message : 'Please try again.');
+            } finally {
+              setDisconnecting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const openListPicker = async () => {
+    setPickingList(true);
+    setLoadingLists(true);
+    try {
+      const result = await listGoogleTaskLists();
+      setLists(result);
+    } catch (e) {
+      Alert.alert('Could not load your lists', e instanceof Error ? e.message : 'Please try again.');
+      setPickingList(false);
+    } finally {
+      setLoadingLists(false);
+    }
+  };
+
+  const chooseList = async (list: GoogleTaskList) => {
+    setSavingList(list.id);
+    try {
+      await setDefaultGoogleTaskList(list.id, list.title);
+      setStatus((s) => (s ? { ...s, defaultListId: list.id, defaultListTitle: list.title } : s));
+      setPickingList(false);
+    } catch (e) {
+      Alert.alert('Could not save', e instanceof Error ? e.message : 'Please try again.');
+    } finally {
+      setSavingList(null);
+    }
+  };
+
+  if (!status) return null;
+
+  return (
+    <View style={{ marginTop: 18 }}>
+      <Kicker style={{ color: colors.neutral600 }}>Google Tasks</Kicker>
+      <RuleThick style={{ marginTop: 6, marginBottom: 10 }} />
+      {status.connected ? (
+        <>
+          <Text style={styles.fieldHint}>Connected as {status.email}.</Text>
+          <View style={styles.voiceRow}>
+            <View style={{ flex: 1, paddingRight: 10 }}>
+              <Text style={styles.voiceLabel}>Default list</Text>
+              <Text style={[styles.fieldHint, { marginBottom: 0, marginTop: 2 }]}>
+                {status.defaultListTitle ?? 'Not chosen yet'}
+              </Text>
+            </View>
+            <Button
+              variant="secondary"
+              label="Change"
+              onPress={openListPicker}
+              style={{ minHeight: 36, paddingHorizontal: 14 }}
+              textStyle={{ fontSize: 12 }}
+            />
+          </View>
+          <Button
+            variant="ghost"
+            label={disconnecting ? 'Disconnecting…' : 'Disconnect'}
+            disabled={disconnecting}
+            onPress={disconnect}
+            align="flex-start"
+            style={{ marginTop: 10 }}
+            textStyle={{ fontSize: 12, color: colors.accent700 }}
+          />
+        </>
+      ) : (
+        <>
+          <Text style={styles.fieldHint}>
+            Connect a Google account to send tasks to Google Tasks. This never syncs automatically -- you choose
+            what to send, from that task&apos;s own menu.
+          </Text>
+          <Button
+            label={connecting ? 'Connecting…' : 'Connect Google Tasks'}
+            disabled={connecting}
+            onPress={connect}
+            align="flex-start"
+            style={{ minHeight: 40, paddingHorizontal: 16, marginTop: 6 }}
+          />
+        </>
+      )}
+
+      <BottomSheet visible={pickingList} onClose={() => setPickingList(false)} title="Choose a list">
+        {loadingLists ? (
+          <ActivityIndicator color={colors.accent} />
+        ) : !lists || lists.length === 0 ? (
+          <Text style={styles.fieldHint}>No lists found.</Text>
+        ) : (
+          lists.map((list) => (
+            <Button
+              key={list.id}
+              label={savingList === list.id ? 'Saving…' : list.title}
+              align="flex-start"
+              variant="secondary"
+              disabled={savingList !== null}
+              onPress={() => chooseList(list)}
+              style={{ marginBottom: 8, borderRadius: radius.pastel }}
+            />
+          ))
+        )}
+        <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setPickingList(false)} />
+      </BottomSheet>
     </View>
   );
 }

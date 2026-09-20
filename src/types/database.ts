@@ -247,6 +247,30 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['attachments']['Insert']>;
         Relationships: [];
       };
+      google_tasks_sends: {
+        Row: {
+          id: string;
+          user_id: string;
+          task_id: string | null;
+          memory_id: string | null;
+          google_task_list_id: string;
+          google_task_list_title: string | null;
+          google_task_id: string;
+          sent_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          task_id?: string | null;
+          memory_id?: string | null;
+          google_task_list_id: string;
+          google_task_list_title?: string | null;
+          google_task_id: string;
+          sent_at?: string;
+        };
+        Update: Partial<Database['public']['Tables']['google_tasks_sends']['Insert']>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
