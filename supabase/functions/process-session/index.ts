@@ -160,6 +160,10 @@ Deno.serve(async (req) => {
     // one usage event, not one per segment.
     let transcribedSeconds = 0;
     let transcribedBytes = 0;
+    // The language Whisper detected for the first segment that actually had
+    // one -- used to steer the analysis step's output language below,
+    // instead of leaving GPT to re-detect it from the transcript text alone.
+    let detectedLanguage: string | null = null;
 
     let transcript: string;
     if (existingMessages && existingMessages.length > 0) {
@@ -194,6 +198,7 @@ Deno.serve(async (req) => {
           transcribedSeconds += result.durationSeconds;
           transcribedBytes += result.bytes;
           if (result.text.trim()) parts.push(result.text.trim());
+          if (!detectedLanguage && result.language) detectedLanguage = result.language;
         }
         leftoverTranscript = parts.join('\n\n');
       }
@@ -229,6 +234,7 @@ Deno.serve(async (req) => {
         transcribedSeconds += result.durationSeconds;
         transcribedBytes += result.bytes;
         if (result.text.trim()) transcriptParts.push(result.text.trim());
+        if (!detectedLanguage && result.language) detectedLanguage = result.language;
       }
       transcript = transcriptParts.join('\n\n');
     }
@@ -262,7 +268,7 @@ Deno.serve(async (req) => {
       extraction,
       inputTokens: analysisInputTokens,
       outputTokens: analysisOutputTokens,
-    } = await analyzeTranscript(transcript, topics);
+    } = await analyzeTranscript(transcript, topics, detectedLanguage);
     if (analysisInputTokens > 0 || analysisOutputTokens > 0) {
       await recordUsage(db, {
         userId: user.id,
@@ -467,7 +473,7 @@ async function findOrCreateTopic(
 // mix), whatever the app's settings say, so Whisper auto-detects.
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
 
-type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
+type TranscribeResult = { text: string; durationSeconds: number; bytes: number; language: string | null };
 
 async function transcribeAudio(file: Blob, fileName: string): Promise<TranscribeResult> {
   if (file.size > WHISPER_MAX_BYTES) {
@@ -497,6 +503,11 @@ async function transcribeAudio(file: Blob, fileName: string): Promise<Transcribe
     text: data.text ?? '',
     durationSeconds: typeof data.duration === 'number' ? data.duration : 0,
     bytes: file.size,
+    // verbose_json also returns Whisper's own detected spoken language (e.g.
+    // "english") -- a much more reliable signal for what language the
+    // analysis step should write in than asking GPT to re-detect it from
+    // the transcript text alone, which a short transcript makes unreliable.
+    language: typeof data.language === 'string' && data.language ? data.language : null,
   };
 }
 
@@ -515,7 +526,8 @@ function formatTopicTree(topics: TopicRow[]): string {
 
 async function analyzeTranscript(
   transcript: string,
-  topics: TopicRow[]
+  topics: TopicRow[],
+  detectedLanguage: string | null
 ): Promise<{ extraction: Extraction; inputTokens: number; outputTokens: number }> {
   if (!transcript.trim()) {
     return {
@@ -532,9 +544,13 @@ async function analyzeTranscript(
     };
   }
 
+  const languageInstruction = detectedLanguage
+    ? `CRITICAL: The transcript's spoken language was detected as "${detectedLanguage}" by the transcription system. Write EVERY string you output -- "summary" included, not just "outline" -- in that language. Never translate or switch to a different language, no matter what language any example text elsewhere in these instructions happens to be written in -- those examples illustrate FORMAT only, not the language to use.`
+    : `CRITICAL: Detect the transcript's own language and write EVERY string you output -- "summary" included, not just "outline" -- in that same language. A Korean transcript gets a Korean "summary", Korean "outline" headings/bullets, Korean "title"/"content" for tasks and memories. Never default to English or translate; match the transcript exactly. Example text elsewhere in these instructions illustrates FORMAT only, not the language to use.`;
+
   const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.
 
-CRITICAL: Detect the transcript's own language and write EVERY string you output -- "summary" included, not just "outline" -- in that same language. A Korean transcript gets a Korean "summary", Korean "outline" headings/bullets, Korean "title"/"content" for tasks and memories. Never default to English or translate; match the transcript exactly.
+${languageInstruction}
 
 There are TWO different summaries to produce, for two different places in the app:
 
@@ -585,7 +601,7 @@ Respond with strict JSON matching this shape:
 
 If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic something belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough.
 
-The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary"/"heading"/bullet text in the same language as the transcript. Never invent tasks, ideas, or outline content that aren't actually in the transcript.`;
+${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bullet text in ${detectedLanguage}, matching the transcript's own detected language, not any other language.` : 'The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary"/"heading"/bullet text in the same language as the transcript.'} Never invent tasks, ideas, or outline content that aren't actually in the transcript.`;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
