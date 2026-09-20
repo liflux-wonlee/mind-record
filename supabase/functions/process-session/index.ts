@@ -17,6 +17,8 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { recordUsage } from '../_shared/usage.ts';
+
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -149,6 +151,12 @@ Deno.serve(async (req) => {
       .order('position', { ascending: true });
     if (messagesError) throw messagesError;
 
+    // Accumulated across every attachment actually sent to Whisper below
+    // (either branch) so this session's transcription cost is recorded as
+    // one usage event, not one per segment.
+    let transcribedSeconds = 0;
+    let transcribedBytes = 0;
+
     let transcript: string;
     if (existingMessages && existingMessages.length > 0) {
       const conversationTranscript = existingMessages
@@ -178,8 +186,10 @@ Deno.serve(async (req) => {
             .from('recordings')
             .download(attachment.storage_path);
           if (downloadError) throw downloadError;
-          const text = await transcribeAudio(file, attachment.file_name);
-          if (text.trim()) parts.push(text.trim());
+          const result = await transcribeAudio(file, attachment.file_name);
+          transcribedSeconds += result.durationSeconds;
+          transcribedBytes += result.bytes;
+          if (result.text.trim()) parts.push(result.text.trim());
         }
         leftoverTranscript = parts.join('\n\n');
       }
@@ -211,10 +221,24 @@ Deno.serve(async (req) => {
           .from('recordings')
           .download(attachment.storage_path);
         if (downloadError) throw downloadError;
-        const text = await transcribeAudio(file, attachment.file_name);
-        if (text.trim()) transcriptParts.push(text.trim());
+        const result = await transcribeAudio(file, attachment.file_name);
+        transcribedSeconds += result.durationSeconds;
+        transcribedBytes += result.bytes;
+        if (result.text.trim()) transcriptParts.push(result.text.trim());
       }
       transcript = transcriptParts.join('\n\n');
+    }
+
+    if (transcribedSeconds > 0 || transcribedBytes > 0) {
+      await recordUsage(db, {
+        userId: user.id,
+        eventType: 'transcribe',
+        source: 'process_session',
+        sessionId,
+        dedupeKey: `process_session:transcribe:${sessionId}`,
+        audioSeconds: transcribedSeconds,
+        audioBytes: transcribedBytes,
+      });
     }
 
     const { error: transcriptError } = await db
@@ -230,7 +254,22 @@ Deno.serve(async (req) => {
     if (topicsError) throw topicsError;
     const topics: TopicRow[] = existingTopics ?? [];
 
-    const extraction = await analyzeTranscript(transcript, topics);
+    const {
+      extraction,
+      inputTokens: analysisInputTokens,
+      outputTokens: analysisOutputTokens,
+    } = await analyzeTranscript(transcript, topics);
+    if (analysisInputTokens > 0 || analysisOutputTokens > 0) {
+      await recordUsage(db, {
+        userId: user.id,
+        eventType: 'gpt_completion',
+        source: 'process_session',
+        sessionId,
+        dedupeKey: `process_session:analyze:${sessionId}`,
+        inputTokens: analysisInputTokens,
+        outputTokens: analysisOutputTokens,
+      });
+    }
 
     // "Make a topic called X" is an instruction, not content -- honour it
     // even when nothing in the recording gets filed under X yet. Before
@@ -452,7 +491,9 @@ async function findOrCreateTopic(
 // mix), whatever the app's settings say, so Whisper auto-detects.
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
 
-async function transcribeAudio(file: Blob, fileName: string): Promise<string> {
+type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
+
+async function transcribeAudio(file: Blob, fileName: string): Promise<TranscribeResult> {
   if (file.size > WHISPER_MAX_BYTES) {
     throw new Error(
       `One recording segment is too large to transcribe (${Math.round(file.size / 1024 / 1024)} MB; the limit is 25 MB). Pause and resume every ~40 minutes to split long recordings.`
@@ -461,6 +502,11 @@ async function transcribeAudio(file: Blob, fileName: string): Promise<string> {
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');
+  // verbose_json is the only response_format that gives back the audio's
+  // actual duration -- the real driver of what this segment cost to
+  // transcribe -- instead of this having to estimate it from file size and
+  // an assumed bitrate.
+  form.append('response_format', 'verbose_json');
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -471,7 +517,11 @@ async function transcribeAudio(file: Blob, fileName: string): Promise<string> {
     throw new Error(`Whisper transcription failed (${res.status}): ${await res.text()}`);
   }
   const data = await res.json();
-  return data.text ?? '';
+  return {
+    text: data.text ?? '',
+    durationSeconds: typeof data.duration === 'number' ? data.duration : 0,
+    bytes: file.size,
+  };
 }
 
 function formatTopicTree(topics: TopicRow[]): string {
@@ -487,15 +537,22 @@ function formatTopicTree(topics: TopicRow[]): string {
   return lines.join('\n');
 }
 
-async function analyzeTranscript(transcript: string, topics: TopicRow[]): Promise<Extraction> {
+async function analyzeTranscript(
+  transcript: string,
+  topics: TopicRow[]
+): Promise<{ extraction: Extraction; inputTokens: number; outputTokens: number }> {
   if (!transcript.trim()) {
     return {
-      summary: 'No speech was detected in this recording.',
-      outline: [],
-      tasks: [],
-      memories: [],
-      requested_topics: [],
-      session_topic: null,
+      extraction: {
+        summary: 'No speech was detected in this recording.',
+        outline: [],
+        tasks: [],
+        memories: [],
+        requested_topics: [],
+        session_topic: null,
+      },
+      inputTokens: 0,
+      outputTokens: 0,
     };
   }
 
@@ -588,17 +645,21 @@ The transcript may be in Korean, English, or a mix -- write "title"/"content"/"s
     : [];
 
   return {
-    summary: typeof parsed.summary === 'string' ? parsed.summary : '',
-    outline,
-    tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map(sanitizeTask).filter(Boolean) : [],
-    memories: Array.isArray(parsed.memories) ? parsed.memories.map(sanitizeMemory).filter(Boolean) : [],
-    session_topic: sanitizeSessionTopic(parsed.session_topic),
-    requested_topics: Array.isArray(parsed.requested_topics)
-      ? parsed.requested_topics.filter(
-          (t: unknown): t is RequestedTopic =>
-            !!t && typeof t === 'object' && typeof (t as RequestedTopic).name === 'string'
-        )
-      : [],
+    extraction: {
+      summary: typeof parsed.summary === 'string' ? parsed.summary : '',
+      outline,
+      tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map(sanitizeTask).filter(Boolean) : [],
+      memories: Array.isArray(parsed.memories) ? parsed.memories.map(sanitizeMemory).filter(Boolean) : [],
+      session_topic: sanitizeSessionTopic(parsed.session_topic),
+      requested_topics: Array.isArray(parsed.requested_topics)
+        ? parsed.requested_topics.filter(
+            (t: unknown): t is RequestedTopic =>
+              !!t && typeof t === 'object' && typeof (t as RequestedTopic).name === 'string'
+          )
+        : [],
+    },
+    inputTokens: typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0,
+    outputTokens: typeof data.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0,
   };
 }
 

@@ -10,9 +10,12 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { recordUsage } from '../_shared/usage.ts';
+
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -76,6 +79,13 @@ Deno.serve(async (req) => {
       throw new Error(`Speech synthesis failed (${res.status}): ${await res.text()}`);
     }
     const buffer = await res.arrayBuffer();
+    const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    await recordUsage(db, {
+      userId: user.id,
+      eventType: 'tts_synthesize',
+      source: 'preview_voice',
+      ttsCharacters: text.length,
+    });
     return json({ audioBase64: arrayBufferToBase64(buffer) });
   } catch (e) {
     console.error('preview-voice failed:', e);

@@ -24,6 +24,8 @@
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { recordUsage } from '../_shared/usage.ts';
+
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -95,6 +97,8 @@ Deno.serve(async (req) => {
     return json({ error: 'Not authenticated.' }, 401);
   }
 
+  const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
   try {
     const { data: profile } = await callerClient
       .from('profiles')
@@ -115,10 +119,19 @@ Deno.serve(async (req) => {
       if (!storagePath.startsWith(`${user.id}/`)) {
         return json({ error: 'Recording not found.' }, 404);
       }
-      const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
       const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath);
       if (downloadError) throw downloadError;
-      question = (await transcribeAudio(file, storagePath)).trim();
+      const transcribed = await transcribeAudio(file, storagePath);
+      question = transcribed.text.trim();
+      if (transcribed.durationSeconds > 0 || transcribed.bytes > 0) {
+        await recordUsage(db, {
+          userId: user.id,
+          eventType: 'transcribe',
+          source: 'search_ask',
+          audioSeconds: transcribed.durationSeconds,
+          audioBytes: transcribed.bytes,
+        });
+      }
       // Best-effort cleanup -- this was never a recording (no `attachments`
       // row exists for it), so there's nothing else to remove.
       db.storage
@@ -128,7 +141,16 @@ Deno.serve(async (req) => {
     }
 
     if (!question || !question.trim()) {
-      const audioBase64 = isVoice ? await synthesizeSpeech(NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'], voice) : null;
+      let audioBase64: string | null = null;
+      if (isVoice) {
+        audioBase64 = await synthesizeSpeech(NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'], voice);
+        await recordUsage(db, {
+          userId: user.id,
+          eventType: 'tts_synthesize',
+          source: 'search_ask',
+          ttsCharacters: NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'].length,
+        });
+      }
       return json({
         question: question ?? '',
         answer: NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'],
@@ -157,7 +179,27 @@ Deno.serve(async (req) => {
     hits = hits.slice(0, 25);
 
     const result = await answer(question, history, hits, aiName, userHonorific, locale);
+    // Combined into one usage row for the whole question (interpret + answer
+    // are two GPT calls behind the scenes, but the user only sees "asked one
+    // question" -- no dedupe key, since a follow-up question is a distinct
+    // user action even if worded similarly, never a retry of this one.
+    await recordUsage(db, {
+      userId: user.id,
+      eventType: 'gpt_completion',
+      source: 'search_ask',
+      inputTokens: interpretation.inputTokens + result.inputTokens,
+      outputTokens: interpretation.outputTokens + result.outputTokens,
+    });
+
     const audioBase64 = isVoice ? await synthesizeSpeech(result.answer, voice) : null;
+    if (isVoice) {
+      await recordUsage(db, {
+        userId: user.id,
+        eventType: 'tts_synthesize',
+        source: 'search_ask',
+        ttsCharacters: result.answer.length,
+      });
+    }
 
     return json({
       question,
@@ -194,13 +236,18 @@ function errorMessage(e: unknown): string {
   return raw || 'Something went wrong while searching.';
 }
 
+type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
+
 // Deliberately no `language` hint: the user may ask in any language
 // regardless of the app's settings, so Whisper auto-detects.
-async function transcribeAudio(file: Blob, storagePath: string): Promise<string> {
+async function transcribeAudio(file: Blob, storagePath: string): Promise<TranscribeResult> {
   const fileName = storagePath.split('/').pop() ?? 'query.m4a';
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');
+  // verbose_json is the only response_format that gives back the audio's
+  // actual duration, for usage measurement (see _shared/usage.ts).
+  form.append('response_format', 'verbose_json');
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
@@ -208,18 +255,24 @@ async function transcribeAudio(file: Blob, storagePath: string): Promise<string>
   });
   if (!res.ok) {
     const bodyText = await res.text();
-    if (res.status === 400 && /invalid file format|could not be decoded/i.test(bodyText)) return '';
+    if (res.status === 400 && /invalid file format|could not be decoded/i.test(bodyText)) {
+      return { text: '', durationSeconds: 0, bytes: file.size };
+    }
     throw new Error(`Whisper transcription failed (${res.status}): ${bodyText}`);
   }
   const data = await res.json();
-  return data.text ?? '';
+  return {
+    text: data.text ?? '',
+    durationSeconds: typeof data.duration === 'number' ? data.duration : 0,
+    bytes: file.size,
+  };
 }
 
 async function interpret(
   question: string,
   history: Turn[],
   timezone: string | null
-): Promise<{ keywords: string; date_from: string | null; date_to: string | null }> {
+): Promise<{ keywords: string; date_from: string | null; date_to: string | null; inputTokens: number; outputTokens: number }> {
   const now = new Date();
   const todayContext = timezone
     ? `Today is ${now.toLocaleDateString('en-CA', { timeZone: timezone })} (${now.toLocaleDateString('en-US', { timeZone: timezone, weekday: 'long' })}), in the ${timezone} timezone.`
@@ -258,6 +311,8 @@ Respond with strict JSON: { "keywords": string, "date_from": string | null, "dat
     keywords: typeof parsed.keywords === 'string' && parsed.keywords.trim() ? parsed.keywords.trim() : question,
     date_from: typeof parsed.date_from === 'string' ? parsed.date_from : null,
     date_to: typeof parsed.date_to === 'string' ? parsed.date_to : null,
+    inputTokens: typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0,
+    outputTokens: typeof data.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0,
   };
 }
 
@@ -274,7 +329,7 @@ async function answer(
   aiName: string | null,
   userHonorific: string | null,
   locale: string | null
-): Promise<{ answer: string }> {
+): Promise<{ answer: string; inputTokens: number; outputTokens: number }> {
   const recordsBlock =
     hits.length === 0
       ? '(no matching records)'
@@ -324,7 +379,11 @@ Rules:
   const parsed = JSON.parse(content);
   const text = typeof parsed.answer === 'string' ? parsed.answer.trim() : '';
   if (!text) throw new Error('AI answer returned no content.');
-  return { answer: text };
+  return {
+    answer: text,
+    inputTokens: typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0,
+    outputTokens: typeof data.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0,
+  };
 }
 
 async function synthesizeSpeech(text: string, voice: string): Promise<string> {

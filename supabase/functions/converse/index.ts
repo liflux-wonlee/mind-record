@@ -20,6 +20,8 @@
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import { recordUsage } from '../_shared/usage.ts';
+
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -104,7 +106,22 @@ Deno.serve(async (req) => {
 
     const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath);
     if (downloadError) throw downloadError;
-    const userText = (await transcribeAudio(file, storagePath)).trim();
+    const transcribed = await transcribeAudio(file, storagePath);
+    const userText = transcribed.text.trim();
+    if (transcribed.durationSeconds > 0 || transcribed.bytes > 0) {
+      // No dedupe key -- a genuine retry of this turn only ever happens
+      // after a network failure that never reached this function at all
+      // (see the client's withOneRetry), so there's no risk of the SAME
+      // completed turn being recorded twice here.
+      await recordUsage(db, {
+        userId: user.id,
+        eventType: 'transcribe',
+        source: 'converse',
+        sessionId,
+        audioSeconds: transcribed.durationSeconds,
+        audioBytes: transcribed.bytes,
+      });
+    }
 
     let assistantText: string;
     let shouldEnd = false;
@@ -134,9 +151,26 @@ Deno.serve(async (req) => {
       assistantText = reply.reply;
       shouldEnd = reply.end;
       await insertMessage(db, sessionId, user.id, 'assistant', assistantText);
+      if (reply.inputTokens > 0 || reply.outputTokens > 0) {
+        await recordUsage(db, {
+          userId: user.id,
+          eventType: 'gpt_completion',
+          source: 'converse',
+          sessionId,
+          inputTokens: reply.inputTokens,
+          outputTokens: reply.outputTokens,
+        });
+      }
     }
 
     const audioBase64 = await synthesizeSpeech(assistantText, voice);
+    await recordUsage(db, {
+      userId: user.id,
+      eventType: 'tts_synthesize',
+      source: 'converse',
+      sessionId,
+      ttsCharacters: assistantText.length,
+    });
 
     return json({ userText, assistantText, shouldEnd, audioBase64 });
   } catch (e) {
@@ -184,13 +218,18 @@ async function insertMessage(
   if (error) throw error;
 }
 
+type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
+
 // Deliberately no `language` hint: the user may speak any language (or mix
 // them) regardless of the app's settings, so Whisper auto-detects per turn.
-async function transcribeAudio(file: Blob, storagePath: string): Promise<string> {
+async function transcribeAudio(file: Blob, storagePath: string): Promise<TranscribeResult> {
   const fileName = storagePath.split('/').pop() ?? 'segment.m4a';
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');
+  // verbose_json is the only response_format that gives back the audio's
+  // actual duration, for usage measurement (see _shared/usage.ts).
+  form.append('response_format', 'verbose_json');
 
   const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
     method: 'POST',
@@ -205,12 +244,16 @@ async function transcribeAudio(file: Blob, storagePath: string): Promise<string>
     // "nothing heard" rather than a hard failure either way, since a raw
     // Whisper error dumped into an alert isn't actionable for the user.
     if (res.status === 400 && /invalid file format|could not be decoded/i.test(bodyText)) {
-      return '';
+      return { text: '', durationSeconds: 0, bytes: file.size };
     }
     throw new Error(`Whisper transcription failed (${res.status}): ${bodyText}`);
   }
   const data = await res.json();
-  return data.text ?? '';
+  return {
+    text: data.text ?? '',
+    durationSeconds: typeof data.duration === 'number' ? data.duration : 0,
+    bytes: file.size,
+  };
 }
 
 // profiles.locale: 'auto' (default -- answer in whatever language the user
@@ -252,7 +295,7 @@ async function generateReply(
   aiName: string | null,
   userHonorific: string | null,
   locale: string | null | undefined
-): Promise<{ reply: string; end: boolean }> {
+): Promise<{ reply: string; end: boolean; inputTokens: number; outputTokens: number }> {
   const messages = [
     { role: 'system', content: buildSystemPrompt(aiName, userHonorific, locale) },
     ...history
@@ -279,7 +322,12 @@ async function generateReply(
   const parsed = JSON.parse(content);
   const reply = typeof parsed.reply === 'string' ? parsed.reply.trim() : '';
   if (!reply) throw new Error('AI reply returned no content.');
-  return { reply, end: parsed.end === true };
+  return {
+    reply,
+    end: parsed.end === true,
+    inputTokens: typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0,
+    outputTokens: typeof data.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0,
+  };
 }
 
 async function synthesizeSpeech(text: string, voice: string): Promise<string> {
