@@ -16,6 +16,7 @@ import {
   type BiometricKind,
 } from '@/lib/biometricLock';
 import { resetOnboarding } from '@/lib/onboarding';
+import { deleteAccount } from '@/services/account';
 import { signOut } from '@/services/auth';
 import { getProfile, updateProfile, type Profile } from '@/services/profiles';
 import { getAccountStats, type AccountStats } from '@/services/stats';
@@ -54,6 +55,7 @@ export default function AccountScreen() {
   const [stats, setStats] = useState<AccountStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [signingOut, setSigningOut] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -96,6 +98,49 @@ export default function AccountScreen() {
     } catch (e) {
       Alert.alert('Sign out failed', e instanceof Error ? e.message : 'Please try again.');
       setSigningOut(false);
+    }
+  };
+
+  // Two-step confirm for something this destructive -- a single "are you
+  // sure" is too easy to tap through by reflex on a delete this permanent.
+  const confirmDeleteAccount = () => {
+    if (deleting) return;
+    Alert.alert(
+      'Delete your account?',
+      'This permanently deletes your recordings, transcripts, tasks, ideas, and topics, and your account itself. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Continue', style: 'destructive', onPress: confirmDeleteAccountFinal },
+      ]
+    );
+  };
+
+  const confirmDeleteAccountFinal = () => {
+    Alert.alert('Are you absolutely sure?', 'There is no way to recover your account or its data after this.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete my account', style: 'destructive', onPress: handleDeleteAccount },
+    ]);
+  };
+
+  const handleDeleteAccount = async () => {
+    setDeleting(true);
+    try {
+      // deleteAccount() throws (rather than reporting success) unless the
+      // server actually confirmed everything was deleted -- never treat a
+      // failed/partial attempt as done.
+      await deleteAccount();
+      await signOut().catch(() => {
+        // The account (and its session) is already gone server-side by
+        // this point -- signOut() failing here just means it couldn't also
+        // clear local storage cleanly, not that the deletion itself failed.
+      });
+      // app/_layout.tsx's auth guard redirects to /login once the session clears.
+    } catch (e) {
+      Alert.alert(
+        'Could not fully delete your account',
+        (e instanceof Error ? e.message : 'Please try again.') + ' No partial deletion was left in place -- your account is safe to keep using, or you can try deleting it again.'
+      );
+      setDeleting(false);
     }
   };
 
@@ -152,6 +197,23 @@ export default function AccountScreen() {
         style={{ marginTop: 8, paddingHorizontal: 0 }}
         textStyle={{ fontSize: 12, color: colors.neutral600 }}
       />
+
+      <View style={styles.dangerZone}>
+        <Kicker style={{ color: colors.accent700 }}>Danger zone</Kicker>
+        <Text style={styles.dangerText}>
+          Deleting your account permanently removes your recordings, transcripts, tasks, ideas, and topics. This
+          cannot be undone.
+        </Text>
+        <Button
+          variant="secondary"
+          label={deleting ? 'Deleting…' : 'Delete account'}
+          align="flex-start"
+          disabled={deleting}
+          onPress={confirmDeleteAccount}
+          style={styles.deleteButton}
+          textStyle={{ color: colors.accent700 }}
+        />
+      </View>
     </Screen>
   );
 }
@@ -532,5 +594,24 @@ const styles = StyleSheet.create({
     minHeight: 48,
     marginTop: 20,
     paddingHorizontal: 16,
+  },
+  dangerZone: {
+    marginTop: 28,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  dangerText: {
+    fontFamily: font.regular,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.neutral600,
+    marginTop: 6,
+    marginBottom: 10,
+  },
+  deleteButton: {
+    minHeight: 44,
+    paddingHorizontal: 16,
+    borderColor: colors.accent,
   },
 });
