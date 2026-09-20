@@ -90,6 +90,9 @@ function RootNavigator() {
           <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="summary" />
           <Stack.Screen name="google-tasks/callback" options={{ animation: 'fade' }} />
+          <Stack.Screen name="settings/ai" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="settings/privacy" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="settings/google-tasks" options={{ animation: 'slide_from_right' }} />
         </Stack.Protected>
       </Stack>
       {/* Rendered as a sibling overlay, never a route -- a route change
