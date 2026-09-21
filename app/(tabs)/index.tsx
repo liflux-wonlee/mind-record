@@ -19,7 +19,6 @@ export default function HomeScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const [firstName, setFirstName] = useState<string | null>(null);
-  const [aiName, setAiName] = useState<string | null>(null);
   const [todayCount, setTodayCount] = useState<number | null>(null);
   const [menuSession, setMenuSession] = useState<Session | null>(null);
   const recentSessions = useRecentSessions(RECENT_LIMIT);
@@ -33,7 +32,6 @@ export default function HomeScreen() {
           if (cancelled) return;
           const name = profile?.display_name?.trim().split(/\s+/)[0];
           setFirstName(name || null);
-          setAiName(profile?.ai_name?.trim() || null);
         })
         .catch(() => {
           // Greeting is a nice-to-have — leave it off rather than block the screen.
@@ -65,11 +63,6 @@ export default function HomeScreen() {
    *  see app/talk.tsx's ModePicker. */
   const startTalk = () => {
     router.push('/talk');
-  };
-
-  /** Skips the picker for users who already said which one they want. */
-  const startConversation = () => {
-    router.push({ pathname: '/talk', params: { mode: 'conv' } });
   };
 
   const confirmDeleteSession = (session: Session) => {
@@ -115,13 +108,6 @@ export default function HomeScreen() {
           <MicIcon size={56} color={colors.bg} />
         </Pressable>
         <Text style={styles.micLabel}>Tap to talk</Text>
-        <Button
-          variant="ghost"
-          label={aiName ? `Or talk with ${aiName} instead` : 'Or start a conversation instead'}
-          onPress={startConversation}
-          style={{ minHeight: 36 }}
-          textStyle={{ fontSize: 12 }}
-        />
       </View>
 
       {todayCount !== null && todayCount > 0 ? (
@@ -136,15 +122,15 @@ export default function HomeScreen() {
         </Pressable>
       ) : null}
 
-      <View style={styles.recentCard}>
-        <Kicker style={{ color: colors.neutral700 }}>Recent conversations</Kicker>
-        <Pressable onPress={() => router.push('/calendar')} style={{ marginTop: 6 }}>
+      <View style={styles.recentSection}>
+        <Text style={styles.sectionHeading}>Recent conversations</Text>
+        <Pressable onPress={() => router.push('/calendar')} style={{ marginTop: 4 }}>
           <Text style={styles.footerLink}>
             Older recordings are in Records, by date. See all records →
           </Text>
         </Pressable>
 
-        <RuleThick style={{ marginTop: 10 }} />
+        <RuleThick style={{ marginTop: 12, marginBottom: 4 }} />
         {recentSessions.status === 'loading' ? (
           <View style={styles.sessionsCenter}>
             <ActivityIndicator color={colors.accent} />
@@ -154,21 +140,27 @@ export default function HomeScreen() {
         ) : recentSessions.sessions.length === 0 ? (
           <Text style={styles.sessionsEmpty}>Nothing yet — tap the mic above to start your first session.</Text>
         ) : (
-          recentSessions.sessions.map((session) => (
-            <Row
-              key={session.id}
-              onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
-              onLongPress={() => setMenuSession(session)}
-              style={styles.continueRow}
-            >
-              <Text style={styles.continueTitle} numberOfLines={1}>
-                {session.title ?? session.mode}
-              </Text>
-              <Text style={styles.continueMeta}>
-                {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-              </Text>
-            </Row>
-          ))
+          <>
+            {recentSessions.sessions.map((session, i) => (
+              <Row
+                key={session.id}
+                onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
+                onLongPress={() => setMenuSession(session)}
+                style={[
+                  styles.continueRow,
+                  { backgroundColor: i % 2 === 0 ? colors.pastelYellow : colors.pastelBlue },
+                ]}
+              >
+                <Text style={styles.continueTitle} numberOfLines={1}>
+                  {session.title ?? session.mode}
+                </Text>
+                <Text style={styles.continueMeta}>
+                  {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                </Text>
+              </Row>
+            ))}
+            <Text style={styles.hint}>Hold a conversation for more options</Text>
+          </>
         )}
       </View>
 
@@ -243,20 +235,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.accent700,
   },
-  recentCard: {
-    marginTop: 20,
-    borderRadius: radius.pastel,
-    padding: 14,
-    backgroundColor: colors.pastelYellow,
+  recentSection: {
+    marginTop: 24,
+  },
+  sectionHeading: {
+    fontFamily: font.semibold,
+    fontSize: 19,
+    color: colors.text,
+  },
+  hint: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.neutral600,
+    marginTop: 2,
+    textAlign: 'center',
   },
   continueRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: 8,
-    minHeight: 48,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    minHeight: 52,
+    borderRadius: radius.pastel,
+    paddingHorizontal: 14,
+    marginTop: 8,
   },
   continueTitle: {
     flex: 1,
