@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, View } from 'react-native';
+import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
@@ -13,6 +13,7 @@ import {
   type BiometricKind,
 } from '@/lib/biometricLock';
 import { friendlyMessage } from '@/lib/friendlyError';
+import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors, font, radius } from '@/theme';
 
@@ -30,6 +31,13 @@ export default function PrivacySettingsScreen() {
   const [enabled, setEnabled] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [changingPassword, setChangingPassword] = useState(false);
+  // Only email/password accounts have a password to change -- Google/Apple
+  // sign-in has nothing here for us to touch.
+  const canChangePassword = user?.identities?.some((i) => i.provider === 'email') ?? false;
+
   useEffect(() => {
     if (!user) return;
     let cancelled = false;
@@ -44,6 +52,30 @@ export default function PrivacySettingsScreen() {
   }, [user]);
 
   const label = support ? biometricLabel(support.kind) : '';
+
+  const changePassword = async () => {
+    if (changingPassword) return;
+    if (newPassword.length < 6) {
+      Alert.alert('Too short', 'Use at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      Alert.alert("Passwords don't match", 'Make sure both fields are the same.');
+      return;
+    }
+    setChangingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setNewPassword('');
+      setConfirmPassword('');
+      Alert.alert('Password changed', 'Your password has been updated.');
+    } catch (e) {
+      Alert.alert('Could not change password', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setChangingPassword(false);
+    }
+  };
 
   const toggle = async () => {
     if (!user || busy) return;
@@ -69,9 +101,11 @@ export default function PrivacySettingsScreen() {
     }
   };
 
+  const passwordDirty = newPassword.length > 0 || confirmPassword.length > 0;
+
   return (
     <Screen showAccount={false}>
-      <SettingsHeader title="Privacy" />
+      <SettingsHeader title="Biometric Lock" />
       {!support ? null : !support.available ? (
         <View style={styles.card}>
           <Text style={styles.body}>
@@ -97,6 +131,39 @@ export default function PrivacySettingsScreen() {
           />
         </View>
       )}
+
+      {canChangePassword ? (
+        <View style={[styles.card, { backgroundColor: colors.pastelPeach, marginTop: 14 }]}>
+          <Kicker style={{ color: colors.neutral600, marginBottom: 8 }}>Change password</Kicker>
+          <TextInput
+            style={styles.input}
+            value={newPassword}
+            onChangeText={setNewPassword}
+            placeholder="New password"
+            placeholderTextColor={colors.neutral600}
+            secureTextEntry
+            autoCapitalize="none"
+          />
+          <TextInput
+            style={styles.input}
+            value={confirmPassword}
+            onChangeText={setConfirmPassword}
+            placeholder="Confirm new password"
+            placeholderTextColor={colors.neutral600}
+            secureTextEntry
+            autoCapitalize="none"
+          />
+          {passwordDirty ? (
+            <Button
+              label={changingPassword ? 'Saving…' : 'Save'}
+              disabled={changingPassword}
+              onPress={changePassword}
+              align="flex-start"
+              style={styles.toggleButton}
+            />
+          ) : null}
+        </View>
+      ) : null}
     </Screen>
   );
 }
@@ -118,5 +185,15 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: radius.pastel,
     paddingHorizontal: 18,
+  },
+  input: {
+    minHeight: 46,
+    paddingHorizontal: 14,
+    fontFamily: font.regular,
+    fontSize: 14,
+    color: colors.text,
+    backgroundColor: colors.bg,
+    borderRadius: radius.pastel,
+    marginBottom: 12,
   },
 });

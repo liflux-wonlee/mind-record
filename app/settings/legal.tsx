@@ -9,7 +9,7 @@ import { colors, font, radius } from '@/theme';
 
 const LINKS = [
   { title: 'Privacy Policy', route: '/legal/privacy-policy' as const, color: colors.pastelBlue },
-  { title: 'Terms of Service', route: '/legal/terms-of-service' as const, color: colors.pastelLavender },
+  { title: 'Terms of Service', route: '/legal/terms-of-service' as const, color: colors.pastelPeach },
 ];
 
 export default function LegalSettingsScreen() {

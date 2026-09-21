@@ -38,11 +38,19 @@ export async function getBiometricSupport(): Promise<{ available: boolean; kind:
     LocalAuthentication.supportedAuthenticationTypesAsync(),
   ]);
   if (!hasHardware || !isEnrolled) return { available: false, kind: null };
-  if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
-    return { available: true, kind: 'face' };
-  }
+  // Fingerprint checked first: many Android phones (this app's primary
+  // Android userbase device, Samsung, included) report BOTH fingerprint and
+  // facial-recognition as hardware-supported even when only a fingerprint
+  // is actually enrolled -- expo-local-authentication has no way to ask
+  // which one the user actually set up, only what the hardware CAN do. iOS
+  // devices only ever report one or the other (Face ID and Touch ID are
+  // mutually exclusive per device), so this order doesn't change anything
+  // there.
   if (types.includes(LocalAuthentication.AuthenticationType.FINGERPRINT)) {
     return { available: true, kind: 'fingerprint' };
+  }
+  if (types.includes(LocalAuthentication.AuthenticationType.FACIAL_RECOGNITION)) {
+    return { available: true, kind: 'face' };
   }
   if (types.includes(LocalAuthentication.AuthenticationType.IRIS)) {
     return { available: true, kind: 'iris' };
