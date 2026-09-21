@@ -75,13 +75,17 @@ function RootNavigator() {
           <Stack.Screen name="login" options={{ animation: 'fade' }} />
           <Stack.Screen name="email-auth" options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="auth/callback" options={{ animation: 'fade' }} />
+          {/* Login links to these before an account exists. Registered here
+              AND again in the appActive group below (Account links to them
+              too) rather than as bare always-present siblings -- a screen
+              declared outside every Stack.Protected group sat alongside
+              `login` as a second candidate "no specific route yet" screen
+              with signedIn false, and on a cold start (no deep link, no
+              restored state) the navigator picked it over login as the
+              initial screen instead of merely being reachable from it. */}
+          <Stack.Screen name="legal/privacy-policy" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="legal/terms-of-service" options={{ animation: 'slide_from_right' }} />
         </Stack.Protected>
-        {/* Reachable regardless of auth state: Login must be able to link to
-            them before an account exists, and Account links to them again
-            once signed in -- so they sit outside every Stack.Protected
-            group rather than being duplicated into two of them. */}
-        <Stack.Screen name="legal/privacy-policy" options={{ animation: 'slide_from_right' }} />
-        <Stack.Screen name="legal/terms-of-service" options={{ animation: 'slide_from_right' }} />
         {/* The intro and the app proper are mutually exclusive: on a fresh
             install only the intro exists, and finishing it flips
             `onboardingDone` (in-process, not just on next launch) so the
@@ -100,6 +104,8 @@ function RootNavigator() {
           <Stack.Screen name="settings/privacy" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/google-tasks" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/legal" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="legal/privacy-policy" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="legal/terms-of-service" options={{ animation: 'slide_from_right' }} />
         </Stack.Protected>
       </Stack>
       {/* Rendered as a sibling overlay, never a route -- a route change
