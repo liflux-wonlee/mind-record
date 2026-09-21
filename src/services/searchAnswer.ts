@@ -18,17 +18,26 @@ export type SearchAnswerResult = {
   citations: SearchCitation[];
   /** Base64-encoded mp3, only synthesized for a voice-originated question. */
   audioBase64: string | null;
+  /** Echoed back from the request for perf-log correlation (see src/lib/perfLog.ts). */
+  turnId?: string;
 };
 
 /**
  * Grounded Q&A over the user's own records (see supabase/functions/
- * search-ask). Pass either `question` (typed) or `storagePath` (a voice
- * question already uploaded via uploadSearchQuestionAudio) -- never both.
- * `history` is the last few turns of this search conversation, for
- * follow-ups like "그중 이번 주에 할 것은?".
+ * search-ask). Pass `question` (typed), `storagePath` (a voice question
+ * already uploaded via uploadSearchQuestionAudio -- the original flow, for
+ * a recording too large to inline or with the direct-send flag off, see
+ * src/lib/featureFlags.ts), or `audioBase64` (the voice question sent
+ * directly, skipping Storage entirely -- see supabase/functions/search-ask
+ * for why this path has no durability tradeoff, unlike converse's turn
+ * audio). Never combine more than one. `history` is the last few turns of
+ * this search conversation, for follow-ups like "그중 이번 주에 할 것은?".
  */
 export async function askSearchQuestion(
-  input: { question: string; history?: SearchTurn[] } | { storagePath: string; history?: SearchTurn[] }
+  input:
+    | { question: string; history?: SearchTurn[] }
+    | { storagePath: string; history?: SearchTurn[] }
+    | { audioBase64: string; mimeType: string; turnId?: string; history?: SearchTurn[] }
 ): Promise<SearchAnswerResult> {
   const { data, error } = await supabase.functions.invoke('search-ask', { body: input });
   if (error) throw await describeFunctionError(error, 'Could not answer that.');

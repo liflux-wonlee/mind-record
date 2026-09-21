@@ -42,13 +42,15 @@ import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCaptureSession';
+import { DIRECT_AUDIO_MAX_BYTES, DIRECT_AUDIO_UPLOAD_ENABLED } from '@/lib/featureFlags';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { isNetworkError } from '@/lib/functionsError';
+import { startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn } from '@/services/conversation';
 import { processSession } from '@/services/processing';
-import { uploadRecording } from '@/services/recordings';
+import { readRecordingBase64, uploadRecording } from '@/services/recordings';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
 export type ConversationTurn = { role: 'user' | 'assistant'; content: string };
@@ -185,6 +187,14 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   // mid-conversation without tapping Save & end or Cancel" (must NOT be
   // silently discarded).
   const hasContentRef = useRef(false);
+  // Latency instrumentation for the current turn (see src/lib/perfLog.ts) --
+  // created when recording starts, marked through transcribe/reply/play,
+  // and printed once the reply either starts playing or the turn errors.
+  // Diagnostic only; never holds transcript/reply text, only stage names
+  // and byte counts.
+  const currentTurnRef = useRef<PerfTurn | null>(null);
+  const firstPlayMarkedRef = useRef(false);
+  const lastTurnMetaRef = useRef<{ trigger: string; audioPath: 'direct' | 'storage' } | null>(null);
 
   // Metering has to be switched on HERE, in the construction-time options,
   // not passed to prepareToRecordAsync() later: expo-audio's
@@ -294,87 +304,133 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       hasContentRef.current = true;
       setInterruption(null);
       setState('recording');
+      currentTurnRef.current = startPerfTurn('conversation');
+      firstPlayMarkedRef.current = false;
     } catch (e) {
       Alert.alert('Could not start recording', friendlyMessage(e, 'Please try again.'));
     }
   }, [state, recorder, ensureSession]);
 
-  const stopTurn = useCallback(async () => {
-    if (state !== 'recording' || !user || stoppingRef.current) return;
-    const sessionId = sessionIdRef.current;
-    if (!sessionId) return;
-    stoppingRef.current = true;
-    setTurnBusy(true);
-    const throwIfAborted = () => {
-      if (abortedRef.current) throw new TurnAbortedError();
-    };
+  const stopTurn = useCallback(
+    async (trigger: 'manual' | 'silence' | 'maxDuration' = 'manual') => {
+      if (state !== 'recording' || !user || stoppingRef.current) return;
+      const sessionId = sessionIdRef.current;
+      if (!sessionId) return;
+      stoppingRef.current = true;
+      setTurnBusy(true);
+      const perf = currentTurnRef.current;
+      perf?.mark('stop_requested');
+      const throwIfAborted = () => {
+        if (abortedRef.current) throw new TurnAbortedError();
+      };
 
-    const run = async () => {
-      try {
-        const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
-        if (elapsed < MIN_RECORDING_MS) {
-          await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
+      const run = async () => {
+        let audioPath: 'direct' | 'storage' = 'storage';
+        try {
+          const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
+          if (elapsed < MIN_RECORDING_MS) {
+            await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
+          }
+
+          // withTimeout also covers the native recorder throwing on stop
+          // (e.g. it was already winding down on its own) -- either way,
+          // press on and try to use whatever got captured rather than
+          // leaving the turn stuck on "Listening…" forever.
+          await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
+          throwIfAborted();
+          setState('thinking');
+          perf?.mark('recorder_stopped');
+
+          // recorder.uri is a native SharedObject property, not plain JS state
+          // -- reading it the instant stop() resolves occasionally still saw
+          // a stale/null value rather than the file that had just been
+          // written, throwing "No audio was captured" for a turn that really
+          // did record something. See waitForRecorderUri's own comment.
+          const uri = await waitForRecorderUri(recorder);
+          if (!uri) throw new Error('No audio was captured for that turn.');
+          throwIfAborted();
+          perf?.mark('file_ready');
+
+          // Send the segment directly in the request when it's small enough
+          // (the common case -- these are single back-and-forth turns, not
+          // Capture's long-form recordings) instead of uploading it to
+          // Storage first and passing just the path -- see
+          // src/lib/featureFlags.ts for the size threshold and how to back
+          // this out. converse still keeps a backup copy in Storage itself
+          // on this path (written in parallel with transcribing, not
+          // blocking it) -- see converse/index.ts.
+          let result;
+          if (DIRECT_AUDIO_UPLOAD_ENABLED) {
+            const { base64, byteLength } = await readRecordingBase64(uri);
+            if (byteLength > 0 && byteLength <= DIRECT_AUDIO_MAX_BYTES) {
+              throwIfAborted();
+              perf?.mark('audio_read');
+              audioPath = 'direct';
+              result = await withOneRetry(() =>
+                converseTurn(sessionId, { audioBase64: base64, mimeType: 'audio/m4a' }, perf?.turnId)
+              );
+            }
+          }
+          if (!result) {
+            const attachment = await uploadRecording(user.id, sessionId, uri);
+            throwIfAborted();
+            perf?.mark('uploaded');
+            audioPath = 'storage';
+            // The audio is already safely uploaded by this point -- retrying
+            // just the transcribe+reply call costs nothing extra on a
+            // transient network hiccup instead of losing the turn outright.
+            result = await withOneRetry(() =>
+              converseTurn(sessionId, { storagePath: attachment.storage_path }, perf?.turnId)
+            );
+          }
+          throwIfAborted();
+          perf?.mark('function_call_done');
+
+          setTurns((prev) => {
+            const next = [...prev];
+            if (result.userText) next.push({ role: 'user', content: result.userText });
+            next.push({ role: 'assistant', content: result.assistantText });
+            return next;
+          });
+          pendingEndRef.current = result.shouldEnd;
+
+          const replyFile = new File(Paths.cache, `mind-record-reply-${Date.now()}.mp3`);
+          replyFile.write(result.audioBase64, { encoding: 'base64' });
+          perf?.mark('reply_file_written');
+          player.replace(replyFile.uri);
+          player.play();
+          perf?.mark('play_called');
+          lastTurnMetaRef.current = { trigger, audioPath };
+          setState('speaking');
+        } catch (e) {
+          if (e instanceof TurnAbortedError) {
+            // An interruption aborts a 'thinking' turn without touching state
+            // itself (see useAudioInterruption below) -- land it in idle here.
+            if (stateRef.current === 'thinking') setState('idle');
+            perf?.finish({ trigger, audioPath, aborted: true });
+            currentTurnRef.current = null;
+            return;
+          }
+          Alert.alert(
+            'Could not process that',
+            friendlyMessage(e, 'Please try again.') +
+              ' What you just said may not have been saved.'
+          );
+          setState('idle');
+          perf?.finish({ trigger, audioPath, error: true });
+          currentTurnRef.current = null;
+        } finally {
+          stoppingRef.current = false;
+          setTurnBusy(false);
         }
-
-        // withTimeout also covers the native recorder throwing on stop
-        // (e.g. it was already winding down on its own) -- either way,
-        // press on and try to use whatever got captured rather than
-        // leaving the turn stuck on "Listening…" forever.
-        await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
-        throwIfAborted();
-        setState('thinking');
-
-        // recorder.uri is a native SharedObject property, not plain JS state
-        // -- reading it the instant stop() resolves occasionally still saw
-        // a stale/null value rather than the file that had just been
-        // written, throwing "No audio was captured" for a turn that really
-        // did record something. See waitForRecorderUri's own comment.
-        const uri = await waitForRecorderUri(recorder);
-        if (!uri) throw new Error('No audio was captured for that turn.');
-        const attachment = await uploadRecording(user.id, sessionId, uri);
-        throwIfAborted();
-        // The audio is already safely uploaded by this point -- retrying
-        // just the transcribe+reply call costs nothing extra on a transient
-        // network hiccup instead of losing the turn outright.
-        const result = await withOneRetry(() => converseTurn(sessionId, attachment.storage_path));
-        throwIfAborted();
-
-        setTurns((prev) => {
-          const next = [...prev];
-          if (result.userText) next.push({ role: 'user', content: result.userText });
-          next.push({ role: 'assistant', content: result.assistantText });
-          return next;
-        });
-        pendingEndRef.current = result.shouldEnd;
-
-        const replyFile = new File(Paths.cache, `mind-record-reply-${Date.now()}.mp3`);
-        replyFile.write(result.audioBase64, { encoding: 'base64' });
-        player.replace(replyFile.uri);
-        player.play();
-        setState('speaking');
-      } catch (e) {
-        if (e instanceof TurnAbortedError) {
-          // An interruption aborts a 'thinking' turn without touching state
-          // itself (see useAudioInterruption below) -- land it in idle here.
-          if (stateRef.current === 'thinking') setState('idle');
-          return;
-        }
-        Alert.alert(
-          'Could not process that',
-          friendlyMessage(e, 'Please try again.') +
-            ' What you just said may not have been saved.'
-        );
-        setState('idle');
-      } finally {
-        stoppingRef.current = false;
-        setTurnBusy(false);
-      }
-    };
-    const promise = run();
-    turnPromiseRef.current = promise;
-    await promise;
-    if (turnPromiseRef.current === promise) turnPromiseRef.current = null;
-  }, [state, user, recorder, player]);
+      };
+      const promise = run();
+      turnPromiseRef.current = promise;
+      await promise;
+      if (turnPromiseRef.current === promise) turnPromiseRef.current = null;
+    },
+    [state, user, recorder, player]
+  );
 
   // Auto-ends the turn after a pause in speech, so the user doesn't have
   // to tap the button every time -- see the file header for the caveats,
@@ -399,7 +455,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       // waiting forever.
       const recordingElapsed = Date.now() - (recordingStartedAtRef.current ?? Date.now());
       if (recordingElapsed >= MAX_TURN_RECORDING_MS) {
-        stopTurn();
+        stopTurn('maxDuration');
         return;
       }
 
@@ -433,7 +489,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
         return;
       }
       if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
-        stopTurn();
+        stopTurn('silence');
       }
     }, 200);
     return () => clearInterval(timer);
@@ -453,6 +509,16 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   const onReplyFinishedRef = useRef<() => void>(() => {});
   onReplyFinishedRef.current = () => {
     if (stateRef.current !== 'speaking') return;
+    const turn = currentTurnRef.current;
+    turn?.mark('reply_finished');
+    turn?.finish({
+      ...lastTurnMetaRef.current,
+      // The headline number this whole effort is about -- see the file
+      // header for why "first_native_playing" is a proxy, not a verified
+      // "audible to a human" timestamp.
+      stopRequestedToFirstAudioMs: turn.msFrom('stop_requested', 'first_native_playing'),
+    });
+    currentTurnRef.current = null;
     if (pendingEndRef.current) {
       pendingEndRef.current = false;
       setState('idle');
@@ -464,6 +530,14 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
   };
   useEffect(() => {
     const subscription = player.addListener('playbackStatusUpdate', (status) => {
+      // The headline number this instrumentation exists for: the first
+      // native "now playing" event after play() was called this turn --
+      // NOT verified to be the first moment sound is actually audible
+      // (see src/lib/perfLog.ts's own caveat on this).
+      if (status.playing && !firstPlayMarkedRef.current && stateRef.current === 'speaking') {
+        firstPlayMarkedRef.current = true;
+        currentTurnRef.current?.mark('first_native_playing');
+      }
       if (status.didJustFinish) onReplyFinishedRef.current();
     });
     return () => subscription.remove();

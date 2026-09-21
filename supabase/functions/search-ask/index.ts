@@ -25,6 +25,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 import { errorMessage } from '../_shared/errorMessage.ts';
+import { PerfTurn, scheduleBackground } from '../_shared/perf.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -66,11 +67,17 @@ Deno.serve(async (req) => {
 
   let question: string | undefined;
   let storagePath: string | undefined;
+  let audioBase64Input: string | undefined;
+  let mimeType: string | undefined;
+  let clientTurnId: string | undefined;
   let history: Turn[] = [];
   try {
     const body = await req.json();
     question = typeof body.question === 'string' ? body.question : undefined;
     storagePath = typeof body.storagePath === 'string' ? body.storagePath : undefined;
+    audioBase64Input = typeof body.audioBase64 === 'string' ? body.audioBase64 : undefined;
+    mimeType = typeof body.mimeType === 'string' ? body.mimeType : undefined;
+    clientTurnId = typeof body.turnId === 'string' ? body.turnId : undefined;
     history = Array.isArray(body.history)
       ? body.history
           .filter((t: unknown): t is Turn => !!t && typeof t === 'object' && typeof (t as Turn).question === 'string')
@@ -79,9 +86,12 @@ Deno.serve(async (req) => {
   } catch {
     // handled below
   }
-  if (!question && !storagePath) {
-    return json({ error: 'question or storagePath is required.' }, 400);
+  if (!question && !storagePath && !audioBase64Input) {
+    return json({ error: 'question, storagePath, or audioBase64 is required.' }, 400);
   }
+
+  const perf = new PerfTurn('search_ask', clientTurnId ?? crypto.randomUUID());
+  perf.mark('request_received');
 
   // The caller's own JWT-bound client -- search_everything() is `security
   // invoker`, so every read below runs under the CALLING user's own RLS,
@@ -97,8 +107,14 @@ Deno.serve(async (req) => {
   if (authError || !user) {
     return json({ error: 'Not authenticated.' }, 401);
   }
+  perf.mark('auth_done');
 
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  // See converse/index.ts's own `background` for the same pattern: work
+  // the response doesn't depend on, scheduled to run after the response is
+  // already on its way back instead of adding to the time before the user
+  // hears an answer.
+  const background: Promise<unknown>[] = [];
 
   try {
     const { data: profile } = await callerClient
@@ -110,9 +126,32 @@ Deno.serve(async (req) => {
     const userHonorific = profile?.user_honorific?.trim() || null;
     const locale = profile?.locale ?? null;
     const voice = profile?.ai_voice && ALLOWED_VOICES.has(profile.ai_voice) ? profile.ai_voice : DEFAULT_VOICE;
+    perf.mark('profile_fetched');
 
     let isVoice = false;
-    if (storagePath) {
+    if (audioBase64Input) {
+      // A search question was never saved as a recording (no `attachments`
+      // row, nothing to keep once transcribed) -- unlike converse's turn
+      // audio, there is no durability tradeoff here at all, so this skips
+      // Storage entirely instead of also keeping a backup copy there.
+      isVoice = true;
+      const bytes = base64ToUint8Array(audioBase64Input);
+      const blob = new Blob([bytes], { type: mimeType || 'audio/m4a' });
+      const transcribed = await transcribeAudio(blob, 'query.m4a');
+      question = transcribed.text.trim();
+      perf.mark('transcribe_done');
+      if (transcribed.durationSeconds > 0 || transcribed.bytes > 0) {
+        background.push(
+          recordUsage(db, {
+            userId: user.id,
+            eventType: 'transcribe',
+            source: 'search_ask',
+            audioSeconds: transcribed.durationSeconds,
+            audioBytes: transcribed.bytes,
+          })
+        );
+      }
+    } else if (storagePath) {
       isVoice = true;
       // Only the service role can download from Storage server-side --
       // the path itself is still pinned to this user's own folder, the
@@ -124,44 +163,55 @@ Deno.serve(async (req) => {
       if (downloadError) throw downloadError;
       const transcribed = await transcribeAudio(file, storagePath);
       question = transcribed.text.trim();
+      perf.mark('transcribe_done');
       if (transcribed.durationSeconds > 0 || transcribed.bytes > 0) {
-        await recordUsage(db, {
-          userId: user.id,
-          eventType: 'transcribe',
-          source: 'search_ask',
-          audioSeconds: transcribed.durationSeconds,
-          audioBytes: transcribed.bytes,
-        });
+        background.push(
+          recordUsage(db, {
+            userId: user.id,
+            eventType: 'transcribe',
+            source: 'search_ask',
+            audioSeconds: transcribed.durationSeconds,
+            audioBytes: transcribed.bytes,
+          })
+        );
       }
       // Best-effort cleanup -- this was never a recording (no `attachments`
       // row exists for it), so there's nothing else to remove.
-      db.storage
-        .from('recordings')
-        .remove([storagePath])
-        .catch((e) => console.warn('could not discard search-query audio', storagePath, e));
+      background.push(
+        db.storage
+          .from('recordings')
+          .remove([storagePath])
+          .catch((e) => console.warn('could not discard search-query audio', storagePath, e))
+      );
     }
 
     if (!question || !question.trim()) {
-      let audioBase64: string | null = null;
+      let audioBase64Reply: string | null = null;
       if (isVoice) {
-        audioBase64 = await synthesizeSpeech(NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'], voice);
-        await recordUsage(db, {
-          userId: user.id,
-          eventType: 'tts_synthesize',
-          source: 'search_ask',
-          ttsCharacters: NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'].length,
-        });
+        audioBase64Reply = await synthesizeSpeech(NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'], voice);
+        background.push(
+          recordUsage(db, {
+            userId: user.id,
+            eventType: 'tts_synthesize',
+            source: 'search_ask',
+            ttsCharacters: NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'].length,
+          })
+        );
       }
-      return json({
+      const response = json({
         question: question ?? '',
         answer: NOTHING_HEARD[locale === 'ko' ? 'ko' : 'en'],
         citations: [],
-        audioBase64,
+        audioBase64: audioBase64Reply,
+        turnId: perf.turnId,
       });
+      scheduleBackground(background, () => perf.finish({ path: audioBase64Input ? 'direct' : 'storage', emptyQuestion: true }));
+      return response;
     }
     question = question.trim();
 
     const interpretation = await interpret(question, history, profile?.timezone ?? null);
+    perf.mark('interpret_done');
 
     const { data: rawHits, error: searchError } = await callerClient.rpc('search_everything', {
       q: interpretation.keywords || question,
@@ -178,31 +228,38 @@ Deno.serve(async (req) => {
       hits = hits.filter((h) => h.happened_at < `${interpretation.date_to}T23:59:59.999Z`);
     }
     hits = hits.slice(0, 25);
+    perf.mark('search_done');
 
     const result = await answer(question, history, hits, aiName, userHonorific, locale);
+    perf.mark('answer_done');
     // Combined into one usage row for the whole question (interpret + answer
     // are two GPT calls behind the scenes, but the user only sees "asked one
     // question" -- no dedupe key, since a follow-up question is a distinct
     // user action even if worded similarly, never a retry of this one.
-    await recordUsage(db, {
-      userId: user.id,
-      eventType: 'gpt_completion',
-      source: 'search_ask',
-      inputTokens: interpretation.inputTokens + result.inputTokens,
-      outputTokens: interpretation.outputTokens + result.outputTokens,
-    });
-
-    const audioBase64 = isVoice ? await synthesizeSpeech(result.answer, voice) : null;
-    if (isVoice) {
-      await recordUsage(db, {
+    background.push(
+      recordUsage(db, {
         userId: user.id,
-        eventType: 'tts_synthesize',
+        eventType: 'gpt_completion',
         source: 'search_ask',
-        ttsCharacters: result.answer.length,
-      });
+        inputTokens: interpretation.inputTokens + result.inputTokens,
+        outputTokens: interpretation.outputTokens + result.outputTokens,
+      })
+    );
+
+    const audioBase64Reply = isVoice ? await synthesizeSpeech(result.answer, voice) : null;
+    perf.mark('tts_done');
+    if (isVoice) {
+      background.push(
+        recordUsage(db, {
+          userId: user.id,
+          eventType: 'tts_synthesize',
+          source: 'search_ask',
+          ttsCharacters: result.answer.length,
+        })
+      );
     }
 
-    return json({
+    const response = json({
       question,
       answer: result.answer,
       citations: hits.map((h) => ({
@@ -213,13 +270,25 @@ Deno.serve(async (req) => {
         session_id: h.session_id,
         topic_id: h.topic_id,
       })),
-      audioBase64,
+      audioBase64: audioBase64Reply,
+      turnId: perf.turnId,
     });
+    perf.mark('response_ready');
+    scheduleBackground(background, () => perf.finish({ path: audioBase64Input ? 'direct' : 'storage' }));
+    return response;
   } catch (e) {
     console.error('search-ask failed:', e);
+    perf.finish({ path: audioBase64Input ? 'direct' : 'storage', error: true });
     return json({ error: errorMessage(e, 'Something went wrong while searching.') }, 500);
   }
 });
+
+function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
 
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
 

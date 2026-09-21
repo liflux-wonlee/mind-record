@@ -1,19 +1,32 @@
 // One turn of the live, continuous conversation in Talk's "Conversation"
-// mode: transcribes the audio segment the client just uploaded, replies
-// using the session's full message history for context, and synthesizes
-// the reply as speech -- in the user's chosen ai_name/user_honorific/
-// ai_voice from `profiles` (see supabase/migrations/
-// 20260918000001_ai_personalization.sql and Account's voice picker).
-// Also decides whether the user just told it, in plain speech, to end and
-// save the conversation right now (`shouldEnd`) -- the client
-// auto-relistens after every reply unless that's set.
+// mode: transcribes the audio segment the client just sent, replies using
+// the session's full message history for context, and synthesizes the
+// reply as speech -- in the user's chosen ai_name/user_honorific/ai_voice
+// from `profiles` (see supabase/migrations/20260918000001_ai_personalization.sql
+// and Account's voice picker). Also decides whether the user just told it,
+// in plain speech, to end and save the conversation right now
+// (`shouldEnd`) -- the client auto-relistens after every reply unless
+// that's set.
 //
 // Invoked by the app via
-//   supabase.functions.invoke('converse', { body: { sessionId, storagePath } })
-// once per turn (see src/hooks/useConversationSession.ts). The transcript
-// left behind in `messages` is reused as the session's raw_transcript when
+//   supabase.functions.invoke('converse', { body: { sessionId, audioBase64, mimeType, turnId } })
+// (or, for an oversized recording / if DIRECT_AUDIO_UPLOAD_ENABLED is off,
+// { sessionId, storagePath } against an already-uploaded attachment -- the
+// original flow, kept as a fallback; see src/lib/featureFlags.ts) once per
+// turn (see src/hooks/useConversationSession.ts). The transcript left
+// behind in `messages` is reused as the session's raw_transcript when
 // `process-session` runs at the end of the conversation, instead of
 // re-transcribing the same audio a second time (see process-session/index.ts).
+//
+// Latency history: this used to require the client to upload the turn's
+// audio to Storage FIRST, then call this function with just the resulting
+// path, which downloaded it back down here before transcribing -- three
+// sequential network hops (client->Storage, then this function->Storage)
+// before Whisper even started. The `audioBase64` path sends the bytes
+// directly in this request instead, and (see below) keeps a backup copy in
+// Storage by writing it in PARALLEL with the Whisper call rather than
+// blocking on it -- see the perf marks below and the accompanying report
+// for what is and isn't been verified on a real device from here.
 //
 // OPENAI_API_KEY / SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
 // are the same Edge Function secrets process-session already relies on.
@@ -21,6 +34,7 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 import { errorMessage } from '../_shared/errorMessage.ts';
+import { PerfTurn, scheduleBackground } from '../_shared/perf.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -57,14 +71,20 @@ Deno.serve(async (req) => {
 
   let sessionId: string | undefined;
   let storagePath: string | undefined;
+  let audioBase64: string | undefined;
+  let mimeType: string | undefined;
+  let clientTurnId: string | undefined;
   try {
-    ({ sessionId, storagePath } = await req.json());
+    ({ sessionId, storagePath, audioBase64, mimeType, turnId: clientTurnId } = await req.json());
   } catch {
     // handled by the checks below
   }
-  if (!sessionId || !storagePath) {
-    return json({ error: 'sessionId and storagePath are required.' }, 400);
+  if (!sessionId || (!storagePath && !audioBase64)) {
+    return json({ error: 'sessionId and (storagePath or audioBase64) are required.' }, 400);
   }
+
+  const perf = new PerfTurn('converse', clientTurnId ?? crypto.randomUUID());
+  perf.mark('request_received');
 
   const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
@@ -76,6 +96,7 @@ Deno.serve(async (req) => {
   if (authError || !user) {
     return json({ error: 'Not authenticated.' }, 401);
   }
+  perf.mark('auth_done');
 
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -89,10 +110,21 @@ Deno.serve(async (req) => {
     return json({ error: 'Session not found.' }, 404);
   }
   // The audio is downloaded with the service role below (bypassing Storage
-  // RLS), so the path itself must be pinned to this user's own session.
-  if (!storagePath.startsWith(`${user.id}/${sessionId}/`)) {
+  // RLS), so a client-supplied path must be pinned to this user's own
+  // session -- a client-supplied audioBase64 has no path to check, but is
+  // itself scoped to this authenticated user's own request.
+  if (storagePath && !storagePath.startsWith(`${user.id}/${sessionId}/`)) {
     return json({ error: 'Recording not found.' }, 404);
   }
+
+  // Work that must happen eventually but that nothing in the response the
+  // user is waiting on actually depends on -- scheduled with
+  // EdgeRuntime.waitUntil below (right before the response is returned)
+  // instead of awaited inline, so it runs after the reply is already on
+  // its way back instead of adding to the time before the user hears it.
+  // recordUsage is already best-effort/non-throwing internally; wrapping
+  // discardAudio's own try/catch the same way keeps this list uniform.
+  const background: Promise<unknown>[] = [];
 
   try {
     const { data: profile, error: profileError } = await db
@@ -104,32 +136,62 @@ Deno.serve(async (req) => {
     const aiName = profile?.ai_name?.trim() || null;
     const userHonorific = profile?.user_honorific?.trim() || null;
     const voice = profile?.ai_voice && ALLOWED_VOICES.has(profile.ai_voice) ? profile.ai_voice : DEFAULT_VOICE;
+    perf.mark('profile_fetched');
 
-    const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath);
-    if (downloadError) throw downloadError;
-    const transcribed = await transcribeAudio(file, storagePath);
+    let transcribed: TranscribeResult;
+    let backupStoragePath: string | null = null;
+    if (audioBase64) {
+      const bytes = base64ToUint8Array(audioBase64);
+      const contentType = mimeType || 'audio/m4a';
+      const blob = new Blob([bytes], { type: contentType });
+      backupStoragePath = `${user.id}/${sessionId}/${Date.now()}.m4a`;
+      // The backup write and the transcription run concurrently -- the
+      // backup is a safety net for the window between "we have the audio"
+      // and "the transcript is durably saved" (see the discardAudio calls
+      // below), not something the user's reply should ever wait on. A
+      // failure here is logged and otherwise ignored: the bytes are still
+      // in hand for transcription either way.
+      const backupWrite = db.storage
+        .from('recordings')
+        .upload(backupStoragePath, bytes, { contentType })
+        .then(({ error }) => {
+          if (error) console.warn('could not write turn audio backup', backupStoragePath, error);
+        })
+        .catch((e) => console.warn('could not write turn audio backup', backupStoragePath, e));
+      [transcribed] = await Promise.all([transcribeAudio(blob, 'segment.m4a'), backupWrite]);
+    } else {
+      const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath!);
+      if (downloadError) throw downloadError;
+      transcribed = await transcribeAudio(file, storagePath!);
+      backupStoragePath = storagePath!;
+    }
+    perf.mark('transcribe_done');
+
     const userText = transcribed.text.trim();
     if (transcribed.durationSeconds > 0 || transcribed.bytes > 0) {
       // No dedupe key -- a genuine retry of this turn only ever happens
       // after a network failure that never reached this function at all
       // (see the client's withOneRetry), so there's no risk of the SAME
       // completed turn being recorded twice here.
-      await recordUsage(db, {
-        userId: user.id,
-        eventType: 'transcribe',
-        source: 'converse',
-        sessionId,
-        audioSeconds: transcribed.durationSeconds,
-        audioBytes: transcribed.bytes,
-      });
+      background.push(
+        recordUsage(db, {
+          userId: user.id,
+          eventType: 'transcribe',
+          source: 'converse',
+          sessionId,
+          audioSeconds: transcribed.durationSeconds,
+          audioBytes: transcribed.bytes,
+        })
+      );
     }
 
     let assistantText: string;
     let shouldEnd = false;
     if (!userText) {
       // Nothing was actually said -- there's no transcript to lose, so the
-      // audio is safe to discard right away.
-      await discardAudio(db, storagePath);
+      // audio is safe to discard right away (in the background -- nothing
+      // about the reply depends on the backup copy being gone yet).
+      background.push(discardAudio(db, backupStoragePath));
       assistantText = NOTHING_HEARD_REPLY[profile?.locale === 'ko' ? 'ko' : 'en'];
     } else {
       // The user's own words are saved BEFORE the audio is discarded, not
@@ -137,9 +199,11 @@ Deno.serve(async (req) => {
       // failure in insertMessage right below (or anything after it) left
       // this turn's speech nowhere -- not in `messages`, and the only copy
       // of it already deleted. Only once the transcript is durably on
-      // record is the audio actually redundant.
+      // record is the audio actually redundant, and even then discarding
+      // it is deferred to the background (see `background` above).
       await insertMessage(db, sessionId, user.id, 'user', userText);
-      await discardAudio(db, storagePath);
+      background.push(discardAudio(db, backupStoragePath));
+      perf.mark('user_message_saved');
 
       const { data: history, error: historyError } = await db
         .from('messages')
@@ -147,35 +211,46 @@ Deno.serve(async (req) => {
         .eq('session_id', sessionId)
         .order('position', { ascending: true });
       if (historyError) throw historyError;
+      perf.mark('history_fetched');
 
       const reply = await generateReply(history ?? [], aiName, userHonorific, profile?.locale);
+      perf.mark('gpt_done');
       assistantText = reply.reply;
       shouldEnd = reply.end;
       await insertMessage(db, sessionId, user.id, 'assistant', assistantText);
       if (reply.inputTokens > 0 || reply.outputTokens > 0) {
-        await recordUsage(db, {
-          userId: user.id,
-          eventType: 'gpt_completion',
-          source: 'converse',
-          sessionId,
-          inputTokens: reply.inputTokens,
-          outputTokens: reply.outputTokens,
-        });
+        background.push(
+          recordUsage(db, {
+            userId: user.id,
+            eventType: 'gpt_completion',
+            source: 'converse',
+            sessionId,
+            inputTokens: reply.inputTokens,
+            outputTokens: reply.outputTokens,
+          })
+        );
       }
     }
 
-    const audioBase64 = await synthesizeSpeech(assistantText, voice);
-    await recordUsage(db, {
-      userId: user.id,
-      eventType: 'tts_synthesize',
-      source: 'converse',
-      sessionId,
-      ttsCharacters: assistantText.length,
-    });
+    const audioBase64Reply = await synthesizeSpeech(assistantText, voice);
+    perf.mark('tts_done');
+    background.push(
+      recordUsage(db, {
+        userId: user.id,
+        eventType: 'tts_synthesize',
+        source: 'converse',
+        sessionId,
+        ttsCharacters: assistantText.length,
+      })
+    );
 
-    return json({ userText, assistantText, shouldEnd, audioBase64 });
+    const response = json({ userText, assistantText, shouldEnd, audioBase64: audioBase64Reply, turnId: perf.turnId });
+    perf.mark('response_ready');
+    scheduleBackground(background, () => perf.finish({ path: audioBase64 ? 'direct' : 'storage' }));
+    return response;
   } catch (e) {
     console.error('converse failed:', e);
+    perf.finish({ path: audioBase64 ? 'direct' : 'storage', error: true });
     return json({ error: errorMessage(e, 'Something went wrong while talking to the AI.') }, 500);
   }
 });
@@ -200,12 +275,19 @@ async function insertMessage(
   if (error) throw error;
 }
 
+function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
 
 // Deliberately no `language` hint: the user may speak any language (or mix
 // them) regardless of the app's settings, so Whisper auto-detects per turn.
-async function transcribeAudio(file: Blob, storagePath: string): Promise<TranscribeResult> {
-  const fileName = storagePath.split('/').pop() ?? 'segment.m4a';
+async function transcribeAudio(file: Blob, fileNameHint: string): Promise<TranscribeResult> {
+  const fileName = fileNameHint.split('/').pop() || 'segment.m4a';
   const form = new FormData();
   form.append('file', file, fileName);
   form.append('model', 'whisper-1');

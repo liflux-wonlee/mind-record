@@ -19,9 +19,12 @@ import { Alert } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCaptureSession';
+import { DIRECT_AUDIO_MAX_BYTES, DIRECT_AUDIO_UPLOAD_ENABLED } from '@/lib/featureFlags';
 import { friendlyMessage } from '@/lib/friendlyError';
+import { startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
+import { readRecordingBase64 } from '@/services/recordings';
 import {
   askSearchQuestion,
   uploadSearchQuestionAudio,
@@ -52,6 +55,11 @@ export function useVoiceSearch(
   stateRef.current = state;
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
+  // Latency instrumentation (see src/lib/perfLog.ts) -- same pattern as
+  // useConversationSession.ts.
+  const currentTurnRef = useRef<PerfTurn | null>(null);
+  const firstPlayMarkedRef = useRef(false);
+  const lastTurnMetaRef = useRef<{ audioPath: 'direct' | 'storage' } | null>(null);
 
   const recorder = useAudioRecorder(SPEECH_RECORDING_OPTIONS);
   const player = useAudioPlayer(null);
@@ -73,6 +81,8 @@ export function useVoiceSearch(
       recordingStartedAtRef.current = Date.now();
       setInterruption(null);
       setState('recording');
+      currentTurnRef.current = startPerfTurn('search_voice');
+      firstPlayMarkedRef.current = false;
     } catch (e) {
       Alert.alert('Could not start recording', friendlyMessage(e, 'Please try again.'));
     }
@@ -91,6 +101,9 @@ export function useVoiceSearch(
   const stopRecordingAndAsk = useCallback(async () => {
     if (stateRef.current !== 'recording' || !user) return;
     setState('thinking');
+    const perf = currentTurnRef.current;
+    perf?.mark('stop_requested');
+    let audioPath: 'direct' | 'storage' = 'storage';
     try {
       const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
       if (elapsed < MIN_RECORDING_MS) {
@@ -102,23 +115,56 @@ export function useVoiceSearch(
         // The native recorder can throw on stop -- press on with whatever
         // it captured rather than leaving the screen stuck on "Listening…"
       }
+      perf?.mark('recorder_stopped');
       const uri = await waitForRecorderUri(recorder);
       if (!uri) throw new Error("Didn't catch that. Please try again.");
-      const storagePath = await uploadSearchQuestionAudio(user.id, uri);
-      const result = await askSearchQuestion({ storagePath, history: historyRef.current });
+      perf?.mark('file_ready');
+
+      // Same direct-send-when-small pattern as useConversationSession.ts --
+      // a search question has no durability tradeoff either way (see
+      // search-ask/index.ts: it was never saved as a recording on the old
+      // Storage-upload path, and isn't on this one).
+      let result: SearchAnswerResult | undefined;
+      if (DIRECT_AUDIO_UPLOAD_ENABLED) {
+        const { base64, byteLength } = await readRecordingBase64(uri);
+        if (byteLength > 0 && byteLength <= DIRECT_AUDIO_MAX_BYTES) {
+          perf?.mark('audio_read');
+          audioPath = 'direct';
+          result = await askSearchQuestion({
+            audioBase64: base64,
+            mimeType: 'audio/m4a',
+            turnId: perf?.turnId,
+            history: historyRef.current,
+          });
+        }
+      }
+      if (!result) {
+        const storagePath = await uploadSearchQuestionAudio(user.id, uri);
+        perf?.mark('uploaded');
+        audioPath = 'storage';
+        result = await askSearchQuestion({ storagePath, history: historyRef.current });
+      }
+      perf?.mark('function_call_done');
       onResult(result);
       if (result.audioBase64 && !mutedRef.current) {
         const file = new File(Paths.cache, `search-answer-${Date.now()}.mp3`);
         file.write(result.audioBase64, { encoding: 'base64' });
+        perf?.mark('reply_file_written');
         player.replace(file.uri);
         player.play();
+        perf?.mark('play_called');
+        lastTurnMetaRef.current = { audioPath };
         setState('speaking');
       } else {
         setState('idle');
+        perf?.finish({ audioPath, muted: mutedRef.current, hadAudio: !!result.audioBase64 });
+        currentTurnRef.current = null;
       }
     } catch (e) {
       Alert.alert('Could not answer that', friendlyMessage(e, 'Please try again.'));
       setState('idle');
+      perf?.finish({ audioPath, error: true });
+      currentTurnRef.current = null;
     }
   }, [user, recorder, player, onResult]);
 
@@ -144,7 +190,20 @@ export function useVoiceSearch(
 
   useEffect(() => {
     const subscription = player.addListener('playbackStatusUpdate', (status) => {
-      if (status.didJustFinish && stateRef.current === 'speaking') setState('idle');
+      if (status.playing && !firstPlayMarkedRef.current && stateRef.current === 'speaking') {
+        firstPlayMarkedRef.current = true;
+        currentTurnRef.current?.mark('first_native_playing');
+      }
+      if (status.didJustFinish && stateRef.current === 'speaking') {
+        setState('idle');
+        const turn = currentTurnRef.current;
+        turn?.mark('reply_finished');
+        turn?.finish({
+          ...lastTurnMetaRef.current,
+          stopRequestedToFirstAudioMs: turn.msFrom('stop_requested', 'first_native_playing'),
+        });
+        currentTurnRef.current = null;
+      }
     });
     return () => subscription.remove();
   }, [player]);

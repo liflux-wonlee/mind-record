@@ -1,7 +1,24 @@
+import { File } from 'expo-file-system';
+
 import { supabase } from '@/lib/supabase';
 import type { Database } from '@/types/database';
 
 export type Attachment = Database['public']['Tables']['attachments']['Row'];
+
+/**
+ * Reads a just-recorded local audio file as base64, for sending directly
+ * in an Edge Function request body (see src/services/conversation.ts /
+ * searchAnswer.ts) instead of uploading it to Storage first -- see
+ * src/lib/featureFlags.ts's DIRECT_AUDIO_UPLOAD_ENABLED for why/when this
+ * path is used at all, and its size guard for why a caller must still be
+ * ready to fall back to uploadRecording() below.
+ */
+export async function readRecordingBase64(fileUri: string): Promise<{ base64: string; byteLength: number }> {
+  const file = new File(fileUri);
+  const byteLength = file.size;
+  const base64 = await file.base64();
+  return { base64, byteLength };
+}
 
 /**
  * Uploads a just-recorded audio segment to the `recordings` Storage bucket
