@@ -483,6 +483,8 @@ export default function TopicDetailScreen() {
               ))}
             </>
           ) : null}
+
+          <Text style={[styles.hint, { marginTop: 14, textAlign: 'center' }]}>Hold an item for more options</Text>
         </>
       )}
 

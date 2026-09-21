@@ -555,6 +555,7 @@ export default function SummaryScreen() {
               {session?.summary || `${tasks.length} tasks, ${memories.length} ideas.`}
             </Text>
           </Pressable>
+          {session?.summary ? <Text style={styles.editHint}>Hold to edit</Text> : null}
 
           {/* Where this recording is filed. Every recording should end up
               under a topic -- this is the only place a plain journal entry
@@ -635,6 +636,9 @@ export default function SummaryScreen() {
               ))}
             </Pressable>
           ))}
+          {(session?.outline?.length ?? 0) > 0 ? (
+            <Text style={styles.editHint}>Hold a section to edit or delete it</Text>
+          ) : null}
 
           {session?.notable_quotes && session.notable_quotes.length > 0 ? (
             <>
@@ -790,6 +794,12 @@ const styles = StyleSheet.create({
     fontSize: 19,
     lineHeight: 26,
     color: colors.text,
+    marginTop: 6,
+  },
+  editHint: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.neutral600,
     marginTop: 6,
   },
   editInput: {

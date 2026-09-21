@@ -164,6 +164,7 @@ export default function MemoryScreen() {
           );
         })
       )}
+      {roots.length > 0 ? <Text style={styles.hint}>Hold a topic for more options</Text> : null}
 
       {/* Action menu for a tapped topic */}
       <ActionModal visible={sheet?.kind === 'menu'} onClose={closeSheet} title={sheet?.kind === 'menu' ? sheet.topic.name : ''}>
@@ -349,6 +350,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     color: colors.neutral600,
     paddingVertical: 14,
+  },
+  hint: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.neutral600,
+    marginTop: 8,
+    textAlign: 'center',
   },
   topicRow: {
     flexDirection: 'row',
