@@ -62,6 +62,10 @@ export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 // quietest level it has seen as a noise floor and looks for a drop back
 // toward that floor after speech, rather than for an absolute level.
 const SILENCE_DURATION_MS = 1500;
+// Absolute cap on one turn's recording, regardless of what the silence
+// detector above sees -- a safety net for the case where metering itself
+// misbehaves (see the interval below), not a normal way for a turn to end.
+const MAX_TURN_RECORDING_MS = 25_000;
 // Louder than this is always speech, whatever the floor says.
 const ABSOLUTE_SPEECH_DB = -20;
 // Above floor + this = speech; below floor + SILENCE_MARGIN_DB = quiet;
@@ -91,6 +95,41 @@ async function withOneRetry<T>(fn: () => Promise<T>): Promise<T> {
     if (!isNetworkError(e)) throw e;
     return await fn();
   }
+}
+
+// Observed on-device: recorder.stop() can occasionally just never resolve
+// or reject at all (a wedged native session), which used to leave the
+// whole conversation stuck showing "Listening" with the Stop button doing
+// nothing -- stopTurn's own try/catch only guards against stop() THROWING,
+// not against it hanging forever. Racing it against a timeout guarantees
+// the turn always moves on to "whatever got captured" instead.
+const RECORDER_STOP_TIMEOUT_MS = 5000;
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(undefined);
+      }
+    }, ms);
+    promise.then(
+      (v) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(v);
+        }
+      },
+      () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(undefined);
+        }
+      }
+    );
+  });
 }
 
 class TurnAbortedError extends Error {
@@ -181,11 +220,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     }
     abortedRef.current = true;
     if (recorderState.isRecording) {
-      try {
-        await recorder.stop();
-      } catch {
-        // Best-effort -- we're ending the conversation either way.
-      }
+      await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
     }
     player.pause();
 
@@ -215,11 +250,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
     activeRef.current = false;
     abortedRef.current = true; // an in-flight turn bails at its next await instead of playing a reply into a dead screen
     if (recorderState.isRecording) {
-      try {
-        await recorder.stop();
-      } catch {
-        // Best-effort -- discarding the conversation either way.
-      }
+      await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
     }
     player.pause();
     const sessionId = sessionIdRef.current;
@@ -285,14 +316,11 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
           await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
         }
 
-        try {
-          await recorder.stop();
-        } catch {
-          // The native recorder can throw on stop (e.g. it was already
-          // winding down on its own) -- press on and try to use whatever it
-          // captured rather than leaving the turn stuck on "Listening…"
-          // forever, which is what silently swallowing this used to do.
-        }
+        // withTimeout also covers the native recorder throwing on stop
+        // (e.g. it was already winding down on its own) -- either way,
+        // press on and try to use whatever got captured rather than
+        // leaving the turn stuck on "Listening…" forever.
+        await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
         throwIfAborted();
         setState('thinking');
 
@@ -363,6 +391,18 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
       return;
     }
     const timer = setInterval(() => {
+      // A hard ceiling independent of the metering-based silence detector
+      // above: if metering itself never reports a reading (or never reads
+      // as "speech" -- observed on-device as a turn stuck on "Listening"
+      // with no way out, since the silence timer never even starts without
+      // hasSpokenRef first flipping true), the turn still ends instead of
+      // waiting forever.
+      const recordingElapsed = Date.now() - (recordingStartedAtRef.current ?? Date.now());
+      if (recordingElapsed >= MAX_TURN_RECORDING_MS) {
+        stopTurn();
+        return;
+      }
+
       const level = meteringRef.current;
       if (level === undefined) return;
 
@@ -475,10 +515,8 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
         return;
       }
       (async () => {
-        try {
-          if (recorder.isRecording) await recorder.stop();
-        } catch {
-          // Best-effort -- saving the session either way.
+        if (recorder.isRecording) {
+          await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
         }
         player.pause();
         try {

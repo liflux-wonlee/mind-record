@@ -289,7 +289,19 @@ Deno.serve(async (req) => {
     // to be assigned to it, so a bare "create this topic" was silently lost.
     for (const requested of extraction.requested_topics) {
       const name = requested.name?.trim();
-      if (name) await findOrCreateTopic(db, user.id, topics, name, requested.parent_name?.trim() || null);
+      if (!name) continue;
+      const parentName = requested.parent_name?.trim() || null;
+      if (!parentName && !topLevelExactMatch(topics, name) && findSimilarTopic(topics, name)) {
+        // A bare "make a topic called X" instruction has no task/idea
+        // attached to it to hang a confirmation card off of (see
+        // resolveTopic below for the case that does), so when X looks like
+        // a near-duplicate of an existing topic the safest thing is to
+        // just not create a second one -- silently creating a near-dupe,
+        // or silently reusing a topic the user didn't actually name,
+        // would both be worse than doing nothing.
+        continue;
+      }
+      await findOrCreateTopic(db, user.id, topics, name, parentName);
     }
 
     // Resolve each item's topic (find-or-create) before inserting, so the
@@ -425,8 +437,73 @@ async function resolveTopic(
   if (!name || (item.topic_confidence ?? 0) < TOPIC_CONFIDENCE_THRESHOLD) {
     return { topicId: null, suggestion: name ?? null };
   }
-  const topic = await findOrCreateTopic(db, userId, topics, name, item.topic_parent_name?.trim() || null);
+  const parentName = item.topic_parent_name?.trim() || null;
+  // Confident (including an explicit "put this under X" instruction, which
+  // the prompt tells GPT to mark near-1.0) but not an exact match against
+  // an existing TOP-LEVEL topic -- e.g. GPT said "Family" and "Familys"
+  // already exists -- falls back to a suggestion instead of silently
+  // creating a near-duplicate topic; Summary's existing "AI thinks this
+  // belongs under X" card already lets the user either confirm X as a new
+  // topic or pick the existing similar one instead.
+  if (!parentName && !topLevelExactMatch(topics, name) && findSimilarTopic(topics, name)) {
+    return { topicId: null, suggestion: name };
+  }
+  const topic = await findOrCreateTopic(db, userId, topics, name, parentName);
   return { topicId: topic.id, suggestion: null };
+}
+
+function topLevelExactMatch(topics: TopicRow[], name: string): boolean {
+  const target = name.toLowerCase();
+  return topics.some((t) => t.parent_topic_id === null && t.name.toLowerCase() === target);
+}
+
+function normalizeTopicName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  const dp: number[] = new Array(n + 1);
+  for (let j = 0; j <= n; j++) dp[j] = j;
+  for (let i = 1; i <= m; i++) {
+    let prev = dp[0];
+    dp[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const temp = dp[j];
+      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
+      prev = temp;
+    }
+  }
+  return dp[n];
+}
+
+/** A TOP-LEVEL topic close enough to `name` that creating a brand new one
+ *  alongside it would likely be an unwanted near-duplicate ("Family" next
+ *  to "Familys", "Health" next to "Health stuff") -- close, but not the
+ *  same name (an exact match is handled separately, by reusing it outright). */
+function findSimilarTopic(topics: TopicRow[], name: string): TopicRow | null {
+  const target = normalizeTopicName(name);
+  let best: TopicRow | null = null;
+  let bestDistance = Infinity;
+  for (const t of topics) {
+    if (t.parent_topic_id !== null) continue;
+    const candidate = normalizeTopicName(t.name);
+    if (candidate === target) continue;
+    const contains =
+      candidate.length > 2 && target.length > 2 && (candidate.includes(target) || target.includes(candidate));
+    const distance = levenshtein(candidate, target);
+    const maxLen = Math.max(candidate.length, target.length);
+    const closeEnough = contains || (maxLen > 0 && distance / maxLen <= 0.3);
+    if (closeEnough && distance < bestDistance) {
+      best = t;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 /** Case-insensitive find-or-create of `name` (under `parentName`, itself

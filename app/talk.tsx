@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
-import { CheckIcon, MicIcon, PauseIcon, PlayIcon, StopIcon, XIcon } from '@/components/Icon';
+import { ArrowUpIcon, CheckIcon, MicIcon, PauseIcon, PlayIcon, StopIcon, XIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Waveform } from '@/components/Waveform';
 import { Button, Kicker } from '@/components/ui';
@@ -327,9 +327,14 @@ const STATE_LABEL: Record<string, string> = {
   speaking: 'Speaking',
 };
 
+// "Stop" (and a stop-square icon) read as ending the whole conversation --
+// the same thing Cancel/Save & end already do -- when this button only
+// ever ends the CURRENT turn so the AI can reply; the loop itself keeps
+// going right after. "Done talking" plus a send-style arrow reads as
+// "hand this turn over" instead.
 const TALK_BUTTON_LABEL: Record<string, string> = {
   idle: 'Talk',
-  recording: 'Stop',
+  recording: 'Done talking',
   thinking: 'Thinking…',
   speaking: 'Speaking…',
 };
@@ -418,7 +423,7 @@ function ConversationPanel({
         <CircleButton
           icon={
             state === 'recording' ? (
-              <StopIcon size={22} color={colors.text} />
+              <ArrowUpIcon size={22} color={colors.text} />
             ) : (
               <MicIcon size={22} color={colors.text} />
             )
