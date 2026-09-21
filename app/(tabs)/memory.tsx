@@ -13,7 +13,7 @@ import {
 import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
-import { Button, Kicker, Row, RuleThick } from '@/components/ui';
+import { Button, Row, RuleThick } from '@/components/ui';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import {
@@ -92,7 +92,10 @@ export default function MemoryScreen() {
 
   return (
     <Screen>
-      <Kicker style={{ color: colors.neutral600 }}>Topics</Kicker>
+      {/* Fixed-height spacer, not removed outright -- keeps the big title
+          in the same position it sat at below the small "Topics" kicker
+          this used to show, without also duplicating "Topics" twice. */}
+      <View style={{ height: 15 }} />
       <View style={[styles.titleRow, { paddingRight: 44 }]}>
         <Text style={styles.title}>Topics</Text>
         <Button

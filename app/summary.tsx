@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
 import { CheckIcon, ShareIcon } from '@/components/Icon';
@@ -12,7 +12,7 @@ import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
 import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/services/memories';
 import { processSession } from '@/services/processing';
-import { getSession, type Session } from '@/services/sessions';
+import { getSession, updateSessionOutline, updateSessionSummary, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
 import {
   assignSessionTopic,
@@ -22,6 +22,7 @@ import {
   type Topic,
 } from '@/services/topics';
 import { colors, font, radius } from '@/theme';
+import type { SessionOutlineSection } from '@/types/database';
 
 /** Renders `**bold**` spans within an outline bullet or the transcript is never bolded, only bullets are. */
 function renderInlineBold(text: string): React.ReactNode {
@@ -34,6 +35,81 @@ function renderInlineBold(text: string): React.ReactNode {
     ) : (
       part
     )
+  );
+}
+
+// Editing an outline section reuses the same "heading, then one bullet per
+// line" text shape shareCurrentView/shareOutlineSection already format for
+// sharing -- so what the user edits looks exactly like what they'd see
+// copied out, **bold** markers included (editing the raw markdown is fine;
+// most edits are just fixing a misheard word).
+function sectionToEditText(section: SessionOutlineSection): string {
+  return [section.heading, ...section.bullets.map((b) => `• ${b}`)].join('\n');
+}
+function editTextToSection(text: string): SessionOutlineSection | null {
+  const lines = text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+  return {
+    heading: lines[0],
+    bullets: lines.slice(1).map((l) => l.replace(/^[•\-*]\s*/, '')),
+  };
+}
+
+function EditTextSheet({
+  visible,
+  title,
+  initialValue,
+  saving,
+  onCancel,
+  onSave,
+  onDelete,
+}: {
+  visible: boolean;
+  title: string;
+  initialValue: string;
+  saving: boolean;
+  onCancel: () => void;
+  onSave: (text: string) => void;
+  onDelete?: () => void;
+}) {
+  const [value, setValue] = useState(initialValue);
+  useEffect(() => {
+    if (visible) setValue(initialValue);
+  }, [visible, initialValue]);
+
+  return (
+    <BottomSheet visible={visible} onClose={onCancel} title={title}>
+      <TextInput
+        style={styles.editInput}
+        value={value}
+        onChangeText={setValue}
+        multiline
+        autoFocus
+        textAlignVertical="top"
+      />
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+        <Button label="Cancel" variant="ghost" align="flex-start" onPress={onCancel} style={{ flex: 1 }} />
+        <Button
+          label={saving ? 'Saving…' : 'Save'}
+          disabled={saving || !value.trim()}
+          onPress={() => onSave(value.trim())}
+          style={{ flex: 1, backgroundColor: colors.pastelGreen, borderRadius: radius.pastel }}
+          textStyle={{ color: colors.text }}
+        />
+      </View>
+      {onDelete ? (
+        <Button
+          label="Delete"
+          disabled={saving}
+          onPress={onDelete}
+          style={{ marginTop: 8, minHeight: 46, backgroundColor: colors.pastelPink, borderRadius: radius.pastel }}
+          textStyle={{ color: colors.accent700 }}
+        />
+      ) : null}
+    </BottomSheet>
   );
 }
 
@@ -156,6 +232,10 @@ export default function SummaryScreen() {
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [tab, setTab] = useState<'summary' | 'transcript'>('summary');
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
+  const [editingSummary, setEditingSummary] = useState(false);
+  // Index into session.outline of the section currently being edited.
+  const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const recordingHeader = (s: Session): string => {
     const title = s.title || 'Untitled recording';
@@ -197,12 +277,50 @@ export default function SummaryScreen() {
     setShareContent({ kicker: 'Recording · Summary', title: session.title || 'Recording', body });
   };
 
-  const shareOutlineSection = (section: { heading: string; bullets: string[] }) => {
-    setShareContent({
-      kicker: 'Outline',
-      title: section.heading,
-      body: `${section.heading}\n\n${section.bullets.map((b) => `• ${stripBold(b)}`).join('\n')}`,
-    });
+  const saveSummaryEdit = async (text: string) => {
+    if (!sessionId) return;
+    setSavingEdit(true);
+    try {
+      await updateSessionSummary(sessionId, text);
+      setSession((s) => (s ? { ...s, summary: text } : s));
+      setEditingSummary(false);
+    } catch (e) {
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const saveSectionEdit = async (text: string) => {
+    if (!sessionId || editingSectionIndex === null || !session) return;
+    const parsed = editTextToSection(text);
+    if (!parsed) return;
+    const nextOutline = (session.outline ?? []).map((s, i) => (i === editingSectionIndex ? parsed : s));
+    setSavingEdit(true);
+    try {
+      await updateSessionOutline(sessionId, nextOutline);
+      setSession((s) => (s ? { ...s, outline: nextOutline } : s));
+      setEditingSectionIndex(null);
+    } catch (e) {
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
+  const deleteSection = async () => {
+    if (!sessionId || editingSectionIndex === null || !session) return;
+    const nextOutline = (session.outline ?? []).filter((_, i) => i !== editingSectionIndex);
+    setSavingEdit(true);
+    try {
+      await updateSessionOutline(sessionId, nextOutline);
+      setSession((s) => (s ? { ...s, outline: nextOutline } : s));
+      setEditingSectionIndex(null);
+    } catch (e) {
+      Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const shareEntry = (entry: Entry) => {
@@ -428,9 +546,15 @@ export default function SummaryScreen() {
       ) : tab === 'summary' ? (
         <View style={styles.summaryCard}>
           <Kicker style={{ color: colors.neutral700 }}>Summary</Kicker>
-          <Text style={styles.summaryText}>
-            {session?.summary || `${tasks.length} tasks, ${memories.length} ideas.`}
-          </Text>
+          <Pressable
+            onLongPress={() => session && setEditingSummary(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Edit summary"
+          >
+            <Text style={styles.summaryText}>
+              {session?.summary || `${tasks.length} tasks, ${memories.length} ideas.`}
+            </Text>
+          </Pressable>
 
           {/* Where this recording is filed. Every recording should end up
               under a topic -- this is the only place a plain journal entry
@@ -498,9 +622,9 @@ export default function SummaryScreen() {
             <Pressable
               key={i}
               style={styles.outlineSection}
-              onLongPress={() => shareOutlineSection(section)}
+              onLongPress={() => setEditingSectionIndex(i)}
               accessibilityRole="button"
-              accessibilityLabel={`Share section: ${section.heading}`}
+              accessibilityLabel={`Edit section: ${section.heading}`}
             >
               <Text style={styles.outlineHeading}>{section.heading}</Text>
               {section.bullets.map((bullet, j) => (
@@ -626,6 +750,29 @@ export default function SummaryScreen() {
       </BottomSheet>
 
       <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
+
+      <EditTextSheet
+        visible={editingSummary}
+        title="Edit summary"
+        initialValue={session?.summary ?? ''}
+        saving={savingEdit}
+        onCancel={() => setEditingSummary(false)}
+        onSave={saveSummaryEdit}
+      />
+
+      <EditTextSheet
+        visible={editingSectionIndex !== null}
+        title="Edit section"
+        initialValue={
+          editingSectionIndex !== null && session?.outline?.[editingSectionIndex]
+            ? sectionToEditText(session.outline[editingSectionIndex])
+            : ''
+        }
+        saving={savingEdit}
+        onCancel={() => setEditingSectionIndex(null)}
+        onSave={saveSectionEdit}
+        onDelete={deleteSection}
+      />
     </Screen>
   );
 }
@@ -644,6 +791,17 @@ const styles = StyleSheet.create({
     lineHeight: 26,
     color: colors.text,
     marginTop: 6,
+  },
+  editInput: {
+    minHeight: 120,
+    maxHeight: 320,
+    padding: 12,
+    fontFamily: font.regular,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.text,
+    backgroundColor: colors.surface,
+    borderRadius: radius.pastel,
   },
   topicRow: {
     flexDirection: 'row',

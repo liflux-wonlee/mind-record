@@ -1,6 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, BackHandler, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronLeftIcon } from '@/components/Icon';
@@ -38,7 +38,17 @@ import {
   wouldCreateCycle,
   type Topic,
 } from '@/services/topics';
-import { colors, font, h2 } from '@/theme';
+import { colors, font, h2, radius } from '@/theme';
+
+type ItemMenuTone = 'share' | 'delete' | 'neutral';
+type ItemMenuAction = { label: string; tone: ItemMenuTone; onPress: () => void };
+type ItemMenu = { title: string; actions: ItemMenuAction[] };
+
+const ITEM_MENU_TONE_COLOR: Record<ItemMenuTone, string> = {
+  share: colors.pastelPeach,
+  delete: colors.pastelPink,
+  neutral: colors.pastelLavender,
+};
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
@@ -74,6 +84,8 @@ export default function TopicDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
+  const [itemMenu, setItemMenu] = useState<ItemMenu | null>(null);
+  const closeItemMenu = () => setItemMenu(null);
   // Unclassified sessions only -- real pagination, since a fixed cap here
   // would permanently hide older unclassified recordings (see
   // listSessionsUnclassifiedPage's own comment).
@@ -125,6 +137,23 @@ export default function TopicDetailScreen() {
     useCallback(() => {
       load();
     }, [load])
+  );
+
+  // `topic` is a hidden tab (see (tabs)/_layout.tsx's comment) rather than a
+  // pushed stack screen, so it doesn't have its own back-stack entry --
+  // Android's hardware back button falls through to the bottom-tab
+  // navigator's default behavior, which jumps straight to the FIRST tab
+  // (Home) instead of back to wherever this topic was opened from. Route it
+  // through the same "Topics" destination as the explicit back button above
+  // instead, so hardware back and the on-screen back arrow always agree.
+  useFocusEffect(
+    useCallback(() => {
+      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+        router.push('/memory');
+        return true;
+      });
+      return () => sub.remove();
+    }, [router])
   );
 
   const loadMoreSessions = async () => {
@@ -191,82 +220,113 @@ export default function TopicDetailScreen() {
   };
 
   const sessionMenu = (session: Session) => {
-    Alert.alert(session.title ?? capitalize(session.mode), undefined, [
-      {
-        text: 'Share',
-        onPress: () =>
-          setShareContent({
-            kicker: capitalize(session.mode),
-            title: session.title ?? 'Recording',
-            body: [
-              session.title ?? 'Untitled recording',
-              new Date(session.started_at).toLocaleDateString(undefined, {
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-              }),
-              session.summary,
-            ]
-              .filter(Boolean)
-              .join('\n\n'),
-          }),
-      },
-      { text: 'Delete', style: 'destructive', onPress: () => confirmDeleteSession(session) },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    setItemMenu({
+      title: session.title ?? capitalize(session.mode),
+      actions: [
+        {
+          label: 'Share',
+          tone: 'share',
+          onPress: () => {
+            closeItemMenu();
+            setShareContent({
+              kicker: capitalize(session.mode),
+              title: session.title ?? 'Recording',
+              body: [
+                session.title ?? 'Untitled recording',
+                new Date(session.started_at).toLocaleDateString(undefined, {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric',
+                }),
+                session.summary,
+              ]
+                .filter(Boolean)
+                .join('\n\n'),
+            });
+          },
+        },
+        {
+          label: 'Delete',
+          tone: 'delete',
+          onPress: () => {
+            closeItemMenu();
+            confirmDeleteSession(session);
+          },
+        },
+      ],
+    });
   };
 
   const taskMenu = (task: Task) => {
-    const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [
-      { text: 'Share', onPress: () => setShareContent({ kicker: 'Task', title: task.title, body: task.title }) },
-    ];
-    if (!isUnclassified) {
-      options.push({
-        text: 'Remove from this topic',
-        onPress: () =>
-          clearTaskTopic(task.id)
-            .then(load)
-            .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'))),
-      });
-    }
-    options.push({
-      text: 'Delete task',
-      style: 'destructive',
-      onPress: () =>
-        deleteTask(task.id)
-          .then(load)
-          .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
-    });
-    options.push({ text: 'Cancel', style: 'cancel' });
-    Alert.alert(task.title, undefined, options);
-  };
-
-  const memoryMenu = (memory: Memory) => {
-    const options: { text: string; style?: 'destructive' | 'cancel'; onPress?: () => void }[] = [
+    const actions: ItemMenuAction[] = [
       {
-        text: 'Share',
-        onPress: () => setShareContent({ kicker: 'Idea', title: truncate(memory.content, 60), body: memory.content }),
+        label: 'Share',
+        tone: 'share',
+        onPress: () => {
+          closeItemMenu();
+          setShareContent({ kicker: 'Task', title: task.title, body: task.title });
+        },
       },
     ];
     if (!isUnclassified) {
-      options.push({
-        text: 'Remove from this topic',
-        onPress: () =>
-          clearMemoryTopic(memory.id)
+      actions.push({
+        label: 'Remove from this topic',
+        tone: 'neutral',
+        onPress: () => {
+          closeItemMenu();
+          clearTaskTopic(task.id)
             .then(load)
-            .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'))),
+            .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')));
+        },
       });
     }
-    options.push({
-      text: 'Delete idea',
-      style: 'destructive',
-      onPress: () =>
+    actions.push({
+      label: 'Delete task',
+      tone: 'delete',
+      onPress: () => {
+        closeItemMenu();
+        deleteTask(task.id)
+          .then(load)
+          .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.')));
+      },
+    });
+    setItemMenu({ title: task.title, actions });
+  };
+
+  const memoryMenu = (memory: Memory) => {
+    const actions: ItemMenuAction[] = [
+      {
+        label: 'Share',
+        tone: 'share',
+        onPress: () => {
+          closeItemMenu();
+          setShareContent({ kicker: 'Idea', title: truncate(memory.content, 60), body: memory.content });
+        },
+      },
+    ];
+    if (!isUnclassified) {
+      actions.push({
+        label: 'Remove from this topic',
+        tone: 'neutral',
+        onPress: () => {
+          closeItemMenu();
+          clearMemoryTopic(memory.id)
+            .then(load)
+            .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')));
+        },
+      });
+    }
+    actions.push({
+      label: 'Delete idea',
+      tone: 'delete',
+      onPress: () => {
+        closeItemMenu();
         deleteMemory(memory.id)
           .then(load)
-          .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
+          .catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.')));
+      },
     });
-    options.push({ text: 'Cancel', style: 'cancel' });
-    Alert.alert(truncate(memory.content, 60), undefined, options);
+    setItemMenu({ title: truncate(memory.content, 60), actions });
   };
 
   // Topic-level share: a digest of what's filed here, not a fixed set of
@@ -509,6 +569,36 @@ export default function TopicDetailScreen() {
       </ActionModal>
 
       <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
+
+      {/* Per-item long-press menu -- pastel actions on a pale grey sheet,
+          instead of the OS's own unstyleable action sheet. */}
+      <BottomSheet
+        visible={itemMenu !== null}
+        onClose={closeItemMenu}
+        title={itemMenu?.title ?? ''}
+        titleLines={2}
+        backgroundColor={colors.neutral200}
+      >
+        <View style={{ gap: 10 }}>
+          {itemMenu?.actions.map((action) => (
+            <Button
+              key={action.label}
+              label={action.label}
+              align="flex-start"
+              onPress={action.onPress}
+              style={[styles.menuAction, { backgroundColor: ITEM_MENU_TONE_COLOR[action.tone] }]}
+              textStyle={styles.menuActionText}
+            />
+          ))}
+          <Button
+            label="Cancel"
+            align="flex-start"
+            onPress={closeItemMenu}
+            style={[styles.menuAction, { backgroundColor: colors.pastelBlue }]}
+            textStyle={styles.menuActionText}
+          />
+        </View>
+      </BottomSheet>
     </Screen>
   );
 }
@@ -576,6 +666,14 @@ const styles = StyleSheet.create({
     minHeight: 44,
     paddingLeft: 0,
     marginLeft: -4,
+  },
+  menuAction: {
+    minHeight: 48,
+    borderRadius: radius.pastel,
+    paddingHorizontal: 16,
+  },
+  menuActionText: {
+    color: colors.text,
   },
   titleRow: {
     flexDirection: 'row',

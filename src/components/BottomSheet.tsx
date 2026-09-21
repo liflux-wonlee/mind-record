@@ -24,6 +24,9 @@ export function BottomSheet({
   title,
   titleLines,
   maxHeight = '80%',
+  /** Override the sheet's own background -- e.g. a pale grey for an item
+   *  action menu, distinct from the app's default cream. */
+  backgroundColor = colors.bg,
   children,
 }: {
   visible: boolean;
@@ -32,6 +35,7 @@ export function BottomSheet({
   /** Pass 1 to ellipsize a long title on a single line. */
   titleLines?: number;
   maxHeight?: `${number}%`;
+  backgroundColor?: string;
   children: React.ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -47,7 +51,7 @@ export function BottomSheet({
       <KeyboardAvoidingView behavior="padding" style={styles.flex}>
         <Pressable style={styles.backdrop} onPress={onClose}>
           <Pressable
-            style={[styles.sheet, { maxHeight, paddingBottom: 24 + insets.bottom }]}
+            style={[styles.sheet, { maxHeight, backgroundColor, paddingBottom: 24 + insets.bottom }]}
             onPress={(e) => e.stopPropagation()}
           >
             <Text style={styles.title} numberOfLines={titleLines}>

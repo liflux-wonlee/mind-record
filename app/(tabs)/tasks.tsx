@@ -5,7 +5,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View 
 import { BottomSheet } from '@/components/BottomSheet';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
-import { Button, Kicker, RuleThick } from '@/components/ui';
+import { Button, RuleThick } from '@/components/ui';
 import { useTasks } from '@/hooks/useTasks';
 import {
   getGoogleTasksSendRecord,
@@ -93,7 +93,10 @@ export default function TasksScreen() {
   return (
     <Screen>
       <View style={[styles.head, { paddingRight: 44 }]}>
-        <Kicker style={{ color: colors.neutral600 }}>Tasks</Kicker>
+        {/* Spacer, not removed outright -- keeps the row's height (and so
+            the big title below it) exactly where the small "Tasks" kicker
+            this used to show left it, while letting "open" sit flush right. */}
+        <View style={{ height: 15 }} />
         <Text style={styles.openCount}>{tasksState.openCount} open</Text>
       </View>
       <Text style={styles.title}>Tasks</Text>

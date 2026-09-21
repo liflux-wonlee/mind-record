@@ -130,7 +130,10 @@ export default function SearchScreen() {
 
   return (
     <Screen scroll={false}>
-      <Kicker style={{ color: colors.neutral600 }}>Search</Kicker>
+      {/* Fixed-height spacer, not removed outright -- keeps the big title
+          in the same position it sat at below the small "Search" kicker
+          this used to show. */}
+      <View style={{ height: 15 }} />
       <Text style={styles.title}>Ask my memory</Text>
 
       <RuleThick />

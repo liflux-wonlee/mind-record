@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import type { Database, SessionMode } from '@/types/database';
+import type { Database, SessionMode, SessionOutlineSection } from '@/types/database';
 
 export type Session = Database['public']['Tables']['sessions']['Row'];
 
@@ -106,6 +106,22 @@ export async function endSession(sessionId: string): Promise<void> {
     .from('sessions')
     .update({ ended_at: new Date().toISOString() })
     .eq('id', sessionId);
+  if (error) throw error;
+}
+
+/** Corrects the AI-written summary -- a typo, a misheard word, or
+ *  something worth adding that the transcription missed. Summary's
+ *  long-press-to-edit is the only place this is called from. */
+export async function updateSessionSummary(sessionId: string, summary: string): Promise<void> {
+  const { error } = await supabase.from('sessions').update({ summary }).eq('id', sessionId);
+  if (error) throw error;
+}
+
+/** Replaces the full `outline` array -- used both to edit one section's
+ *  heading/bullets and to remove a section entirely (Summary's
+ *  long-press-to-edit on an outline section). */
+export async function updateSessionOutline(sessionId: string, outline: SessionOutlineSection[]): Promise<void> {
+  const { error } = await supabase.from('sessions').update({ outline }).eq('id', sessionId);
   if (error) throw error;
 }
 
