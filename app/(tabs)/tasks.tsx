@@ -14,7 +14,7 @@ import {
 } from '@/services/googleTasks';
 import { friendlyMessage } from '@/lib/friendlyError';
 import type { Task } from '@/services/tasks';
-import { colors, font, h2 } from '@/theme';
+import { colors, font, h2, radius } from '@/theme';
 
 type Filter = 'open' | 'completed';
 
@@ -143,27 +143,31 @@ export default function TasksScreen() {
           </Text>
         </View>
       ) : (
-        visibleTasks.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            onToggle={() =>
-              tasksState
-                .toggle(task)
-                .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
-            }
-            onPress={() => setEditing(task)}
-            onShare={() =>
-              setShareContent({
-                kicker: 'Task',
-                title: task.title,
-                body: [task.title, task.due_date ? formatDueDate(task.due_date) : null, task.description]
-                  .filter(Boolean)
-                  .join('\n\n'),
-              })
-            }
-          />
-        ))
+        <>
+          {visibleTasks.map((task, i) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              color={i % 2 === 0 ? colors.pastelYellow : colors.pastelGreen}
+              onToggle={() =>
+                tasksState
+                  .toggle(task)
+                  .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
+              }
+              onPress={() => setEditing(task)}
+              onShare={() =>
+                setShareContent({
+                  kicker: 'Task',
+                  title: task.title,
+                  body: [task.title, task.due_date ? formatDueDate(task.due_date) : null, task.description]
+                    .filter(Boolean)
+                    .join('\n\n'),
+                })
+              }
+            />
+          ))}
+          <Text style={styles.hint}>Hold a task for sharing options</Text>
+        </>
       )}
 
       <TaskEditSheet
@@ -215,18 +219,20 @@ function FilterOption({
 
 function TaskRow({
   task,
+  color,
   onToggle,
   onPress,
   onShare,
 }: {
   task: Task;
+  color: string;
   onToggle: () => void;
   onPress: () => void;
   onShare: () => void;
 }) {
   const done = task.status === 'completed';
   return (
-    <View style={styles.task}>
+    <View style={[styles.task, { backgroundColor: done ? colors.neutral200 : color }]}>
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked: done }}
@@ -450,16 +456,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.divider,
+    borderRadius: radius.pastel,
   },
   addButton: {
     minHeight: 44,
     paddingHorizontal: 18,
+    borderRadius: radius.pastel,
   },
   filterSeg: {
     flexDirection: 'row',
     alignSelf: 'flex-start',
     borderWidth: 1,
     borderColor: colors.divider,
+    borderRadius: radius.pastel,
     overflow: 'hidden',
     marginBottom: 8,
   },
@@ -498,14 +507,15 @@ const styles = StyleSheet.create({
   task: {
     flexDirection: 'row',
     gap: 12,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    padding: 12,
+    marginBottom: 8,
+    borderRadius: radius.pastel,
   },
   checkbox: {
     width: 24,
     height: 24,
     marginTop: 2,
+    borderRadius: 6,
     borderWidth: 2,
     borderColor: colors.text,
     backgroundColor: 'transparent',
@@ -552,6 +562,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.divider,
+    borderRadius: radius.pastel,
     marginBottom: 10,
   },
   sendHint: {
@@ -581,10 +592,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderWidth: 1,
     borderColor: colors.divider,
+    borderRadius: radius.pastel,
   },
   dateChipText: {
     fontFamily: font.regular,
     fontSize: 12,
     color: colors.text,
+  },
+  hint: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.neutral600,
+    marginTop: 2,
+    textAlign: 'center',
   },
 });
