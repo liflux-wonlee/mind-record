@@ -281,7 +281,7 @@ export default function RecordsScreen() {
                 </Text>
               </View>
 
-              <RuleThick style={{ marginTop: 6 }} />
+              <RuleThick style={{ marginTop: 6, marginBottom: 10 }} />
               {dayConversations.map((session, i) => (
                 <Row
                   key={session.id}
@@ -299,6 +299,7 @@ export default function RecordsScreen() {
                   </View>
                 </Row>
               ))}
+              {dayConversations.length > 0 ? <Text style={styles.hint}>Hold a conversation for more options</Text> : null}
               {dayConversations.length === 0 ? <Text style={styles.empty}>No conversations on this day.</Text> : null}
             </>
           )}
@@ -315,7 +316,7 @@ export default function RecordsScreen() {
             <Text style={styles.empty}>No records yet.</Text>
           ) : (
             <>
-              <RuleThick style={{ marginTop: 10 }} />
+              <RuleThick style={{ marginTop: 10, marginBottom: 10 }} />
               {listSessions.map((session, i) => (
                 <Row
                   key={session.id}
@@ -333,6 +334,7 @@ export default function RecordsScreen() {
                   </View>
                 </Row>
               ))}
+              <Text style={styles.hint}>Hold a conversation for more options</Text>
               {listHasMore ? (
                 <Button
                   variant="secondary"
@@ -391,6 +393,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderWidth: 1,
     borderColor: colors.divider,
+    borderRadius: radius.pastel,
     overflow: 'hidden',
   },
   modeOpt: {
@@ -410,8 +413,7 @@ const styles = StyleSheet.create({
   monthRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    marginTop: 4,
+    marginTop: 18,
   },
   monthArrow: {
     minHeight: 44,
@@ -421,6 +423,9 @@ const styles = StyleSheet.create({
   },
   title: {
     ...h2,
+    fontSize: 24,
+    lineHeight: 27,
+    flex: 1,
     textAlign: 'center',
   },
   todayButton: {
@@ -442,6 +447,7 @@ const styles = StyleSheet.create({
   },
   weekday: {
     flex: 1,
+    textAlign: 'center',
     fontFamily: font.semibold,
     fontSize: 9,
     lineHeight: 12,
@@ -457,7 +463,7 @@ const styles = StyleSheet.create({
   },
   dayCell: {
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     paddingTop: 6,
     paddingHorizontal: 4,
     paddingBottom: 5,
@@ -470,12 +476,14 @@ const styles = StyleSheet.create({
     fontFamily: font.semibold,
     fontSize: 14,
     lineHeight: 18,
+    textAlign: 'center',
   },
   dots: {
     fontFamily: font.regular,
     fontSize: 12,
     lineHeight: 12,
     letterSpacing: 2,
+    textAlign: 'center',
   },
   selectedHead: {
     flexDirection: 'row',
@@ -531,5 +539,13 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     color: colors.neutral600,
     marginTop: 12,
+  },
+  hint: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    color: colors.neutral600,
+    marginTop: 2,
+    marginBottom: 4,
+    textAlign: 'center',
   },
 });
