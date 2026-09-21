@@ -14,18 +14,6 @@ import { previewVoice } from '@/services/voicePreview';
 import { colors, font, radius } from '@/theme';
 import type { AiVoice } from '@/types/database';
 
-// What language the AI answers in. Speech is always understood in whatever
-// language is spoken -- this only steers the reply (and the voice preview).
-type Locale = 'auto' | 'ko' | 'en';
-const LANGUAGE_OPTIONS: { locale: Locale; label: string; color: string }[] = [
-  { locale: 'auto', label: 'Auto', color: colors.pastelYellow },
-  { locale: 'ko', label: '한국어', color: colors.pastelGreen },
-  { locale: 'en', label: 'English', color: colors.pastelBlue },
-];
-function localeOf(profile: Profile): Locale {
-  return profile.locale === 'ko' || profile.locale === 'en' ? profile.locale : 'auto';
-}
-
 const VOICE_OPTIONS: { voice: AiVoice; label: string; color: string }[] = [
   { voice: 'echo', label: 'Male voice 1', color: colors.pastelBlue },
   { voice: 'onyx', label: 'Male voice 2', color: colors.pastelLavender },
@@ -82,21 +70,7 @@ function AiSettingsForm({
   const [honorific, setHonorific] = useState(profile.user_honorific ?? '');
   const [savingNames, setSavingNames] = useState(false);
   const [savingVoice, setSavingVoice] = useState<AiVoice | null>(null);
-  const [savingLocale, setSavingLocale] = useState<Locale | null>(null);
   const [previewing, setPreviewing] = useState<AiVoice | null>(null);
-
-  const chooseLocale = async (locale: Locale) => {
-    if (savingLocale) return;
-    setSavingLocale(locale);
-    try {
-      const updated = await updateProfile(userId, { locale });
-      onSaved(updated);
-    } catch (e) {
-      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
-    } finally {
-      setSavingLocale(null);
-    }
-  };
 
   const namesDirty = aiName !== (profile.ai_name ?? '') || honorific !== (profile.user_honorific ?? '');
 
@@ -146,7 +120,7 @@ function AiSettingsForm({
     if (previewing) return;
     setPreviewing(voice);
     try {
-      const audioBase64 = await previewVoice(voice, localeOf(profile));
+      const audioBase64 = await previewVoice(voice);
       const file = new File(Paths.cache, `voice-preview-${voice}.mp3`);
       file.write(audioBase64, { encoding: 'base64' });
       releasePreviewPlayer();
@@ -167,28 +141,6 @@ function AiSettingsForm({
 
   return (
     <View>
-      <View style={styles.card}>
-        <Kicker style={{ color: colors.neutral600, marginBottom: 10 }}>AI replies in</Kicker>
-        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
-          {LANGUAGE_OPTIONS.map(({ locale, label, color }) => {
-            const selected = localeOf(profile) === locale;
-            return (
-              <Button
-                key={locale}
-                label={savingLocale === locale ? '...' : label}
-                disabled={selected || savingLocale !== null}
-                onPress={() => chooseLocale(locale)}
-                style={[styles.localeButton, { backgroundColor: color }, selected && styles.localeButtonSelected]}
-                textStyle={{ color: colors.text }}
-              />
-            );
-          })}
-        </View>
-        <Text style={styles.fieldHint}>
-          You can always speak in any language — Auto answers in the language you just used.
-        </Text>
-      </View>
-
       <View style={styles.card}>
         <Text style={styles.fieldLabel}>AI name (what you call the AI)</Text>
         <TextInput
@@ -287,23 +239,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
     borderRadius: radius.pastel,
     marginBottom: 12,
-  },
-  fieldHint: {
-    fontFamily: font.regular,
-    fontSize: 12,
-    lineHeight: 17,
-    color: colors.neutral600,
-  },
-  localeButton: {
-    flex: 1,
-    minHeight: 44,
-    borderRadius: radius.pastel,
-    justifyContent: 'center',
-  },
-  localeButtonSelected: {
-    borderWidth: 2,
-    borderColor: colors.accent800,
-    opacity: 1,
   },
   voiceRow: {
     flexDirection: 'row',
