@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
 import {
@@ -11,7 +12,7 @@ import {
   View,
 } from 'react-native';
 
-import { MicIcon } from '@/components/Icon';
+import { MicIcon, SpeakerIcon, SpeakerMuteIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { useVoiceSearch } from '@/hooks/useVoiceSearch';
@@ -36,6 +37,8 @@ const INTERRUPTION_TEXT: Record<string, string> = {
   'recorder-error': 'The recording stopped unexpectedly.',
 };
 
+const MUTE_STORAGE_KEY = 'mindrecord.search.answer_muted';
+
 export default function SearchScreen() {
   const router = useRouter();
   const [query, setQuery] = useState('');
@@ -57,7 +60,23 @@ export default function SearchScreen() {
     setHistory((h) => [...h, { question: result.question, answer: result.answer }].slice(-5));
   };
 
-  const voice = useVoiceSearch(recordTurn, history);
+  // Whether spoken answers play out loud, remembered across visits to this
+  // screen (and across app restarts) so the user only has to set it once.
+  const [muted, setMuted] = useState(false);
+  useEffect(() => {
+    AsyncStorage.getItem(MUTE_STORAGE_KEY)
+      .then((v) => setMuted(v === '1'))
+      .catch(() => {});
+  }, []);
+  const toggleMuted = () => {
+    setMuted((m) => {
+      const next = !m;
+      AsyncStorage.setItem(MUTE_STORAGE_KEY, next ? '1' : '0').catch(() => {});
+      return next;
+    });
+  };
+
+  const voice = useVoiceSearch(recordTurn, history, muted);
 
   // Debounced server search: every keystroke would otherwise be a round
   // trip, and results for an older query could land after a newer one.
@@ -134,10 +153,29 @@ export default function SearchScreen() {
           in the same position it sat at below the small "Search" kicker
           this used to show. */}
       <View style={{ height: 15 }} />
-      <Text style={styles.title}>Ask my memory</Text>
+      <View style={styles.titleRow}>
+        <Text style={styles.title}>Ask my memory</Text>
+        <Button
+          variant="ghost"
+          accessibilityLabel={muted ? 'Unmute spoken answers' : 'Mute spoken answers'}
+          icon={
+            muted ? (
+              <SpeakerMuteIcon size={20} color={colors.neutral600} />
+            ) : (
+              <SpeakerIcon size={20} color={colors.accent} />
+            )
+          }
+          onPress={toggleMuted}
+          style={styles.muteButton}
+        />
+      </View>
 
       <RuleThick />
 
+      <KeyboardAvoidingView
+        style={styles.flexArea}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
       <ScrollView style={styles.results} keyboardShouldPersistTaps="handled">
         {answer ? (
           <View style={styles.answerCard}>
@@ -226,13 +264,17 @@ export default function SearchScreen() {
       {voice.interruption ? (
         <Text style={styles.interruptionText}>{INTERRUPTION_TEXT[voice.interruption] ?? 'Stopped.'}</Text>
       ) : voice.state === 'recording' ? (
-        <Text style={styles.interruptionText}>Listening… tap the mic again when you&apos;re done.</Text>
+        <View style={styles.listeningRow}>
+          <View style={styles.listeningDot} />
+          <Text style={styles.listeningText}>Listening… tap the mic again when you&apos;re done.</Text>
+        </View>
       ) : voice.state === 'thinking' ? (
         <Text style={styles.interruptionText}>Thinking…</Text>
+      ) : voice.state === 'speaking' ? (
+        <Text style={styles.interruptionText}>Playing the answer… tap the mic to stop.</Text>
       ) : null}
 
-      {/* The input is pinned at the bottom; iOS never resizes for the keyboard on its own. */}
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.askRow}>
+      <View style={styles.askRow}>
         <TextInput
           style={styles.input}
           value={query}
@@ -263,16 +305,31 @@ export default function SearchScreen() {
           }
           style={[styles.voiceButton, voice.state === 'recording' && styles.voiceButtonActive]}
         />
+      </View>
       </KeyboardAvoidingView>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  titleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   title: {
     ...h2,
     marginTop: 6,
     marginBottom: 14,
+  },
+  muteButton: {
+    minHeight: 36,
+    minWidth: 36,
+    paddingHorizontal: 0,
+    justifyContent: 'center',
+  },
+  flexArea: {
+    flex: 1,
   },
   results: {
     flex: 1,
@@ -359,6 +416,23 @@ const styles = StyleSheet.create({
     color: colors.neutral600,
     marginTop: 8,
   },
+  listeningRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+  },
+  listeningDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.accent,
+  },
+  listeningText: {
+    fontFamily: font.semibold,
+    fontSize: 12,
+    color: colors.accent700,
+  },
   askRow: {
     flexDirection: 'row',
     gap: 8,
@@ -367,7 +441,7 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     minHeight: 48,
-    paddingHorizontal: 10,
+    paddingHorizontal: 14,
     paddingVertical: 6,
     fontFamily: font.regular,
     fontSize: 14,
@@ -375,12 +449,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.divider,
+    borderRadius: radius.pastel,
   },
   voiceButton: {
     minHeight: 48,
     minWidth: 48,
     paddingHorizontal: 0,
     justifyContent: 'center',
+    borderRadius: 24,
   },
   voiceButtonActive: {
     backgroundColor: colors.accent700,

@@ -205,6 +205,26 @@ export function CheckIcon(props: IconProps) {
   );
 }
 
+export function SpeakerIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Path d="M11 5 6 9H2v6h4l5 4Z" />
+      <Path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+      <Path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+    </Stroke>
+  );
+}
+
+export function SpeakerMuteIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Path d="M11 5 6 9H2v6h4l5 4Z" />
+      <Line x1="22" x2="16" y1="9" y2="15" />
+      <Line x1="16" x2="22" y1="9" y2="15" />
+    </Stroke>
+  );
+}
+
 export function AppleIcon({ size = 20, color = colors.bg }: IconProps) {
   return (
     <Svg width={size} height={size} viewBox="0 0 24 24" fill={color}>

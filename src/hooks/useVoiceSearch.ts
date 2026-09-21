@@ -35,7 +35,11 @@ export type VoiceSearchState = 'idle' | 'recording' | 'thinking' | 'speaking';
 // too soon after starting can throw or leave a corrupt file.
 const MIN_RECORDING_MS = 800;
 
-export function useVoiceSearch(onResult: (result: SearchAnswerResult) => void, history: SearchTurn[]) {
+export function useVoiceSearch(
+  onResult: (result: SearchAnswerResult) => void,
+  history: SearchTurn[],
+  muted = false
+) {
   const { user } = useAuth();
   const [state, setState] = useState<VoiceSearchState>('idle');
   const [interruption, setInterruption] = useState<InterruptionReason | null>(null);
@@ -46,6 +50,8 @@ export function useVoiceSearch(onResult: (result: SearchAnswerResult) => void, h
   historyRef.current = history;
   const stateRef = useRef<VoiceSearchState>('idle');
   stateRef.current = state;
+  const mutedRef = useRef(muted);
+  mutedRef.current = muted;
 
   const recorder = useAudioRecorder(SPEECH_RECORDING_OPTIONS);
   const player = useAudioPlayer(null);
@@ -101,7 +107,7 @@ export function useVoiceSearch(onResult: (result: SearchAnswerResult) => void, h
       const storagePath = await uploadSearchQuestionAudio(user.id, uri);
       const result = await askSearchQuestion({ storagePath, history: historyRef.current });
       onResult(result);
-      if (result.audioBase64) {
+      if (result.audioBase64 && !mutedRef.current) {
         const file = new File(Paths.cache, `search-answer-${Date.now()}.mp3`);
         file.write(result.audioBase64, { encoding: 'base64' });
         player.replace(file.uri);
