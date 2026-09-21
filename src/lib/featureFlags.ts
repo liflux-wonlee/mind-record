@@ -17,7 +17,7 @@
  * is larger than DIRECT_AUDIO_MAX_BYTES -- this only controls whether the
  * direct path is ever attempted at all.
  */
-export const DIRECT_AUDIO_UPLOAD_ENABLED = true;
+export const DIRECT_AUDIO_UPLOAD_ENABLED = false;
 
 /**
  * Above this size, a turn always falls back to the Storage-upload path

@@ -104,6 +104,7 @@ export function useVoiceSearch(
     const perf = currentTurnRef.current;
     perf?.mark('stop_requested');
     let audioPath: 'direct' | 'storage' = 'storage';
+    let audioBytes: number | undefined;
     try {
       const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
       if (elapsed < MIN_RECORDING_MS) {
@@ -127,6 +128,7 @@ export function useVoiceSearch(
       let result: SearchAnswerResult | undefined;
       if (DIRECT_AUDIO_UPLOAD_ENABLED) {
         const { base64, byteLength } = await readRecordingBase64(uri);
+        audioBytes = byteLength;
         if (byteLength > 0 && byteLength <= DIRECT_AUDIO_MAX_BYTES) {
           perf?.mark('audio_read');
           audioPath = 'direct';
@@ -163,7 +165,15 @@ export function useVoiceSearch(
     } catch (e) {
       Alert.alert('Could not answer that', friendlyMessage(e, 'Please try again.'));
       setState('idle');
-      perf?.finish({ audioPath, error: true });
+      // Raw error + name, not just friendlyMessage -- see
+      // useConversationSession.ts's own version of this for why.
+      perf?.finish({
+        audioPath,
+        audioBytes,
+        error: true,
+        errorMessage: e instanceof Error ? e.message : String(e),
+        errorName: e instanceof Error ? e.name : undefined,
+      });
       currentTurnRef.current = null;
     }
   }, [user, recorder, player, onResult]);

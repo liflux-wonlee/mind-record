@@ -326,6 +326,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
 
       const run = async () => {
         let audioPath: 'direct' | 'storage' = 'storage';
+        let audioBytes: number | undefined;
         try {
           const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
           if (elapsed < MIN_RECORDING_MS) {
@@ -362,6 +363,7 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
           let result;
           if (DIRECT_AUDIO_UPLOAD_ENABLED) {
             const { base64, byteLength } = await readRecordingBase64(uri);
+            audioBytes = byteLength;
             if (byteLength > 0 && byteLength <= DIRECT_AUDIO_MAX_BYTES) {
               throwIfAborted();
               perf?.mark('audio_read');
@@ -417,7 +419,21 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
               ' What you just said may not have been saved.'
           );
           setState('idle');
-          perf?.finish({ trigger, audioPath, error: true });
+          // The raw error (not the user-facing friendlyMessage) so a
+          // real-device failure is diagnosable straight from this one log
+          // line, without needing the on-screen alert text or dashboard
+          // digging -- see the byte size too, since a request that never
+          // reaches converse's own logging (no matching turnId server-side)
+          // most likely means it was rejected before Supabase's gateway
+          // ever logged it, e.g. a body-size limit.
+          perf?.finish({
+            trigger,
+            audioPath,
+            audioBytes,
+            error: true,
+            errorMessage: e instanceof Error ? e.message : String(e),
+            errorName: e instanceof Error ? e.name : undefined,
+          });
           currentTurnRef.current = null;
         } finally {
           stoppingRef.current = false;
