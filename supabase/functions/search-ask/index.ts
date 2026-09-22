@@ -230,14 +230,16 @@ Deno.serve(async (req) => {
     perf.mark('interpret_done');
 
     const keywords = splitKeywords(interpretation.keywords || question);
+    const timezone = profile?.timezone || 'UTC';
     const hits: SearchHit[] = await searchRecords(callerClient, keywords, {
       dateFrom: interpretation.date_from,
       dateTo: interpretation.date_to,
       limit: 25,
+      timezone,
     });
     perf.mark('search_done');
 
-    const result = await answer(question, history, hits, aiName, userHonorific, locale);
+    const result = await answer(question, history, hits, timezone, aiName, userHonorific, locale);
     perf.mark('answer_done');
     // Combined into one usage row for the whole question (interpret + answer
     // are two GPT calls behind the scenes, but the user only sees "asked one
@@ -380,11 +382,12 @@ async function answer(
   question: string,
   history: Turn[],
   hits: SearchHit[],
+  timezone: string,
   aiName: string | null,
   userHonorific: string | null,
   locale: string | null
 ): Promise<{ answer: string; inputTokens: number; outputTokens: number }> {
-  const recordsBlock = formatHits(hits);
+  const recordsBlock = formatHits(hits, timezone);
 
   let system = `You answer questions about a user's own past voice-journal records inside Mind Record, using ONLY the numbered records below. This is read aloud by text-to-speech sometimes, so write the way a person actually talks -- no markdown, no bullet points.
 

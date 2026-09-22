@@ -121,6 +121,8 @@ export type Database = {
           role: MessageRole;
           content: string;
           position: number;
+          /** The client's turnId for a Conversation-mode turn (see converse) -- lets a retried turn replay instead of re-running. */
+          client_turn_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -131,6 +133,7 @@ export type Database = {
           content: string;
           // Auto-filled by the set_messages_position trigger when omitted.
           position?: number;
+          client_turn_id?: string | null;
           created_at?: string;
         };
         Update: Partial<Database['public']['Tables']['messages']['Insert']>;

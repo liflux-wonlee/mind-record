@@ -18,6 +18,7 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 import { errorMessage } from '../_shared/errorMessage.ts';
+import { parseActionRecord, type ActionRecord } from '../_shared/actionLog.ts';
 import { findSimilarName } from '../_shared/nameMatch.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
@@ -45,6 +46,8 @@ type ListRow = { id: string; name: string };
 type ExtractedTask = {
   title: string;
   priority?: 'low' | 'normal' | 'high';
+  /** YYYY-MM-DD, only when the speaker stated a deadline. */
+  due_date?: string | null;
   topic_name?: string | null;
   topic_parent_name?: string | null;
   topic_confidence?: number;
@@ -190,6 +193,11 @@ Deno.serve(async (req) => {
     let detectedLanguage: string | null = null;
 
     let transcript: string;
+    // For a conversation, what the analysis reads is the whole exchange,
+    // labelled (see below) -- raw_transcript, shown on Summary, stays the
+    // user's own words only.
+    let analysisInput: string | null = null;
+    const actionRecords: ActionRecord[] = [];
     if (existingMessages && existingMessages.length > 0) {
       const conversationTranscript = existingMessages
         .filter((m) => m.role === 'user')
@@ -228,6 +236,27 @@ Deno.serve(async (req) => {
       }
 
       transcript = leftoverTranscript ? `${conversationTranscript}\n\n${leftoverTranscript}` : conversationTranscript;
+
+      // The AI's replies, and the changes it made in the app when asked
+      // (converse's tools -- see _shared/actionLog.ts), are context for
+      // reading the user's words, not content: a turn like "오늘 할 일
+      // 뭐야?" or "카메라 설치 할 일로 넣어줘" was an instruction to the app
+      // that was already handled.
+      const lines: string[] = [];
+      for (const m of existingMessages) {
+        if (m.role === 'user') lines.push(`User: ${m.content}`);
+        else if (m.role === 'assistant') lines.push(`AI: ${m.content}`);
+        else {
+          const record = parseActionRecord(m);
+          if (!record) continue;
+          actionRecords.push(record);
+          lines.push(`[App did: ${record.label}${record.undone ? ' -- then UNDONE at the user\'s request' : ''}]`);
+        }
+      }
+      if (leftoverTranscript) {
+        for (const part of leftoverTranscript.split('\n\n')) lines.push(`User: ${part}`);
+      }
+      analysisInput = lines.join('\n');
     } else {
       const { data: attachments, error: attachmentsError } = await db
         .from('attachments')
@@ -308,11 +337,41 @@ Deno.serve(async (req) => {
     if (existingTasksError) throw existingTasksError;
     const existingTaskTitles = (existingSessionTasks ?? []).map((t) => t.title as string);
 
+    // What the user had the voice assistant do live, and what they then
+    // undid -- saving the conversation must neither redo the undone nor
+    // lose the done.
+    const undone = actionRecords.filter((r) => r.undone);
+    const live = actionRecords.filter((r) => !r.undone);
+    const undoneTaskTitles = new Set(undone.filter((r) => r.type === 'task_created').map((r) => normalizeTaskTitle(r.subject)));
+    // A topic the user created by voice and then undid: never re-create it.
+    const undoneCreatedTopicNames = new Set(
+      undone.filter((r) => r.topic_ids.length > 0).flatMap((r) => topicNameVariants(r.subject))
+    );
+    // A filing the user undid: don't file the conversation there after all.
+    const undoneFiledTopicNames = new Set(
+      undone.filter((r) => r.type === 'topic_filed').flatMap((r) => topicNameVariants(r.subject))
+    );
+    const undoneFiledTopicIds = new Set(
+      undone.filter((r) => r.type === 'topic_filed' && r.linked_topic_id).map((r) => r.linked_topic_id as string)
+    );
+    const liveFiledTopicIds = live
+      .filter((r) => r.type === 'topic_filed')
+      .map((r) => r.linked_topic_id ?? findTopicByDisplay(topics, r.subject)?.id ?? null)
+      .filter((id): id is string => !!id);
+
+    const { data: profileRow } = await db.from('profiles').select('timezone').eq('id', user.id).maybeSingle();
+    const today = localToday(profileRow?.timezone);
+
     const {
       extraction,
       inputTokens: analysisInputTokens,
       outputTokens: analysisOutputTokens,
-    } = await analyzeTranscript(transcript, topics, lists, existingTaskTitles, detectedLanguage);
+    } = await analyzeTranscript(analysisInput ?? transcript, topics, lists, existingTaskTitles, detectedLanguage, {
+      isConversation: analysisInput !== null,
+      today,
+      liveChanges: live.map((r) => r.label),
+      undoneChanges: undone.map((r) => r.label),
+    });
     if (analysisInputTokens > 0 || analysisOutputTokens > 0) {
       await recordUsage(db, {
         userId: user.id,
@@ -333,6 +392,7 @@ Deno.serve(async (req) => {
       const name = requested.name?.trim();
       if (!name) continue;
       const parentName = requested.parent_name?.trim() || null;
+      if (undoneCreatedTopicNames.has(normalizeTopicKey(name))) continue;
       if (!parentName && !topLevelExactMatch(topics, name) && findSimilarTopic(topics, name)) {
         // A bare "make a topic called X" instruction has no task/idea
         // attached to it to hang a confirmation card off of (see
@@ -352,16 +412,25 @@ Deno.serve(async (req) => {
     // Tasks also resolve a list the same way -- a separate, flat concept
     // from topics (see ListRow/resolveList).
     const alreadyExisting = new Set(existingTaskTitles.map(normalizeTaskTitle));
-    const newTasks = extraction.tasks.filter((t) => !alreadyExisting.has(normalizeTaskTitle(t.title)));
+    const newTasks = extraction.tasks.filter((t) => {
+      const key = normalizeTaskTitle(t.title);
+      return !alreadyExisting.has(key) && !undoneTaskTitles.has(key);
+    });
+    // Never let an item re-create a topic the user undid creating.
+    const withoutUndoneTopic = <T extends { topic_name?: string | null; topic_parent_name?: string | null }>(item: T): T =>
+      item.topic_name && undoneCreatedTopicNames.has(normalizeTopicKey(item.topic_name))
+        ? { ...item, topic_name: null, topic_parent_name: null }
+        : item;
     const resolvedTasks = [];
     for (const t of newTasks) {
-      const resolvedTopic = await resolveTopic(db, user.id, topics, t);
+      const resolvedTopic = await resolveTopic(db, user.id, topics, withoutUndoneTopic(t));
       const resolvedList = await resolveList(db, user.id, lists, t);
       resolvedTasks.push({
         user_id: user.id,
         source_session_id: sessionId,
         title: t.title,
         priority: t.priority ?? 'normal',
+        due_date: t.due_date ?? null,
         topic_id: resolvedTopic.topicId,
         topic_suggestion: resolvedTopic.suggestion,
         list_id: resolvedList.listId,
@@ -371,7 +440,7 @@ Deno.serve(async (req) => {
 
     const resolvedMemories = [];
     for (const m of extraction.memories) {
-      const resolved = await resolveTopic(db, user.id, topics, m);
+      const resolved = await resolveTopic(db, user.id, topics, withoutUndoneTopic(m));
       resolvedMemories.push({
         user_id: user.id,
         source_session_id: sessionId,
@@ -404,13 +473,35 @@ Deno.serve(async (req) => {
     // and lets the user change/confirm one section at a time from there.
     const resolvedOutline = [];
     for (const section of extraction.outline) {
-      const resolved = await resolveTopic(db, user.id, topics, section);
+      let item = withoutUndoneTopic(section);
+      if (item.topic_name && undoneFiledTopicNames.has(normalizeTopicKey(item.topic_name))) {
+        item = { ...item, topic_name: null, topic_parent_name: null };
+      }
+      const resolved = await resolveTopic(db, user.id, topics, item);
+      const topicId = resolved.topicId && undoneFiledTopicIds.has(resolved.topicId) ? null : resolved.topicId;
       resolvedOutline.push({
         heading: section.heading,
         bullets: section.bullets,
-        topic_id: resolved.topicId,
-        topic_suggestion: resolved.suggestion,
+        topic_id: topicId,
+        topic_suggestion: topicId ? null : resolved.suggestion,
       });
+    }
+
+    // A topic the user filed this conversation under by voice must end up
+    // on a section -- Summary treats sections as the source of truth for
+    // which topics a recording is under, and would otherwise drop the link
+    // the first time the user changes any section's topic.
+    for (const topicId of liveFiledTopicIds) {
+      const referenced =
+        resolvedOutline.some((s) => s.topic_id === topicId) ||
+        resolvedTasks.some((t) => t.topic_id === topicId) ||
+        resolvedMemories.some((m) => m.topic_id === topicId);
+      if (referenced) continue;
+      const unfiled = resolvedOutline.find((s) => !s.topic_id);
+      if (unfiled) {
+        unfiled.topic_id = topicId;
+        unfiled.topic_suggestion = null;
+      }
     }
 
     // session_topics: a rollup of every topic actually resolved above,
@@ -549,6 +640,37 @@ function topLevelExactMatch(topics: TopicRow[], name: string): boolean {
   return topics.some((t) => t.parent_topic_id === null && t.name.toLowerCase() === target);
 }
 
+/** The forms a topic display name can be referred to by: "Business · Liflux" -> the full form and "liflux". */
+function topicNameVariants(display: string): string[] {
+  const parts = display.split('·').map((p) => normalizeTopicKey(p)).filter(Boolean);
+  return [normalizeTopicKey(display), ...(parts.length > 1 ? [parts[parts.length - 1]] : [])];
+}
+
+function normalizeTopicKey(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function findTopicByDisplay(topics: TopicRow[], display: string): TopicRow | undefined {
+  const parts = display.split('·').map((p) => p.trim());
+  if (parts.length > 1) {
+    const parent = topics.find((t) => !t.parent_topic_id && sameTopicName(t.name, parts[0]));
+    return parent ? topics.find((t) => t.parent_topic_id === parent.id && sameTopicName(t.name, parts[1])) : undefined;
+  }
+  return topics.find((t) => !t.parent_topic_id && sameTopicName(t.name, display));
+}
+
+function sameTopicName(a: string, b: string): boolean {
+  return normalizeTopicKey(a) === normalizeTopicKey(b);
+}
+
+function localToday(timezone: string | null | undefined): string {
+  try {
+    return new Date().toLocaleDateString('en-CA', { timeZone: timezone || 'UTC' });
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
 /** Case/spacing/punctuation-insensitive form of a task title, for spotting a re-extracted duplicate. */
 function normalizeTaskTitle(title: string): string {
   return title.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
@@ -669,7 +791,13 @@ async function analyzeTranscript(
   topics: TopicRow[],
   lists: ListRow[],
   existingTaskTitles: string[],
-  detectedLanguage: string | null
+  detectedLanguage: string | null,
+  context: { isConversation: boolean; today: string; liveChanges: string[]; undoneChanges: string[] } = {
+    isConversation: false,
+    today: new Date().toISOString().slice(0, 10),
+    liveChanges: [],
+    undoneChanges: [],
+  }
 ): Promise<{ extraction: Extraction; inputTokens: number; outputTokens: number }> {
   if (!transcript.trim()) {
     return {
@@ -690,7 +818,29 @@ async function analyzeTranscript(
     ? `CRITICAL: The transcript's spoken language was detected as "${detectedLanguage}" by the transcription system. Write EVERY string you output -- "summary" included, not just "outline" -- in that language. Never translate or switch to a different language, no matter what language any example text elsewhere in these instructions happens to be written in -- those examples illustrate FORMAT only, not the language to use.`
     : `CRITICAL: Detect the transcript's own language and write EVERY string you output -- "summary" included, not just "outline" -- in that same language. A Korean transcript gets a Korean "summary", Korean "outline" headings/bullets, Korean "title"/"content" for tasks and memories. Never default to English or translate; match the transcript exactly. Example text elsewhere in these instructions illustrates FORMAT only, not the language to use.`;
 
-  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.
+  const conversationNote = context.isConversation
+    ? `
+
+This transcript is a spoken CONVERSATION between the user and the app's voice assistant, one line per turn. "User:" lines are the user -- they are the journal content. "AI:" lines are the assistant's replies: context for understanding the user, never content to summarize, quote, or extract tasks/ideas from. "[App did: ...]" lines are changes the assistant already made in the app at the user's request. User lines that were only instructions or questions to the app -- adding a task, filing under a topic, making a topic, asking what topics/tasks exist, searching their past, asking to save/end -- are NOT journal content: leave them out of "summary", "outline" and "notable_quotes", and never output them again as tasks, ideas or requested_topics (they were already handled).`
+    : '';
+  const undoneNote =
+    context.undoneChanges.length > 0
+      ? `
+
+The user UNDID these changes during the conversation. Do NOT create, file under, or extract any of them again in any form:
+${context.undoneChanges.map((c) => `- ${c}`).join('\n')}`
+      : '';
+  const liveNote =
+    context.liveChanges.length > 0
+      ? `
+
+Already done live during the conversation (don't request them again):
+${context.liveChanges.map((c) => `- ${c}`).join('\n')}`
+      : '';
+
+  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.${conversationNote}${undoneNote}${liveNote}
+
+Today is ${context.today} in the speaker's timezone.
 
 ${languageInstruction}
 
@@ -739,7 +889,8 @@ Respond with strict JSON matching this shape:
     "topic_parent_name": string or null (only if topic_name is/should be a sub-topic; must name a TOP-LEVEL topic),
     "topic_confidence": number between 0 and 1,
     "list_name": string or null (which task list, as described above -- separate from topic_name),
-    "list_confidence": number between 0 and 1
+    "list_confidence": number between 0 and 1,
+    "due_date": "YYYY-MM-DD" or null (ONLY if the speaker stated a deadline or day for it, e.g. "내일까지", "by Friday" -- resolved against today's date above; null otherwise)
   }],
   "memories": [{
     "content": string,
@@ -859,7 +1010,14 @@ function sanitizeTask(raw: unknown): ExtractedTask | null {
     topic_confidence: clampConfidence(t.topic_confidence),
     list_name: optionalString(t.list_name),
     list_confidence: clampConfidence(t.list_confidence),
+    due_date: validYmd(t.due_date),
   };
+}
+function validYmd(v: unknown): string | null {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return null;
+  const [y, m, d] = v.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d ? v : null;
 }
 function sanitizeOutlineSection(raw: unknown): OutlineSection | null {
   if (!raw || typeof raw !== 'object') return null;

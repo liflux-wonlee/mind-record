@@ -135,7 +135,15 @@ export default function TalkScreen() {
       dismissToTabs();
       return;
     }
-    Alert.alert('Discard this conversation?', 'What you said so far will not be saved.', [
+    // Changes the AI already made in the app by voice (tasks added, topics
+    // filed or created) are real rows, not part of the conversation --
+    // discarding the conversation doesn't take them back.
+    const voiceChanges = conversation.turns.reduce((n, t) => n + (t.actions?.length ?? 0), 0);
+    const discardMessage =
+      voiceChanges > 0
+        ? `What you said so far will not be saved. The ${voiceChanges === 1 ? 'change' : `${voiceChanges} changes`} the AI made for you (shown with a check mark) will be kept.`
+        : 'What you said so far will not be saved.';
+    Alert.alert('Discard this conversation?', discardMessage, [
       { text: 'Keep talking', style: 'cancel' },
       {
         text: 'Discard',

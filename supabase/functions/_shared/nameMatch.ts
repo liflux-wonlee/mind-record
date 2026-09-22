@@ -39,8 +39,14 @@ export function findSimilarName<T extends { name: string }>(candidates: T[], nam
   for (const c of candidates) {
     const candidate = normalizeName(c.name);
     if (candidate === target) continue;
+    // Containment counts for names of 3+ characters, and also for 2-character
+    // names (common in Korean: "가족" / "가족여행") when the shorter one is at
+    // least half the longer one.
+    const shorter = Math.min(candidate.length, target.length);
+    const longer = Math.max(candidate.length, target.length);
     const contains =
-      candidate.length > 2 && target.length > 2 && (candidate.includes(target) || target.includes(candidate));
+      (shorter >= 3 || (shorter === 2 && shorter / longer >= 0.5)) &&
+      (candidate.includes(target) || target.includes(candidate));
     const distance = levenshtein(candidate, target);
     const maxLen = Math.max(candidate.length, target.length);
     const closeEnough = contains || (maxLen > 0 && distance / maxLen <= 0.3);
@@ -50,4 +56,25 @@ export function findSimilarName<T extends { name: string }>(candidates: T[], nam
     }
   }
   return best;
+}
+
+/**
+ * Up to `limit` candidates loosely resembling `name`, closest first -- for
+ * "did you mean ...?" follow-ups. Looser than findSimilarName: this only
+ * offers options to ask about, it never decides anything by itself.
+ */
+export function closestNames<T extends { name: string }>(candidates: T[], name: string, limit = 3): T[] {
+  const target = normalizeName(name);
+  return candidates
+    .map((c) => {
+      const candidate = normalizeName(c.name);
+      const distance = levenshtein(candidate, target);
+      const maxLen = Math.max(candidate.length, target.length) || 1;
+      const contains = candidate.includes(target) || target.includes(candidate);
+      return { c, score: contains ? 0 : distance / maxLen };
+    })
+    .filter((x) => x.score <= 0.5)
+    .sort((a, b) => a.score - b.score)
+    .slice(0, limit)
+    .map((x) => x.c);
 }

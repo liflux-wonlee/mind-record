@@ -47,7 +47,7 @@ import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCapture
 import { DIRECT_AUDIO_MAX_BYTES, DIRECT_AUDIO_UPLOAD_ENABLED } from '@/lib/featureFlags';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { isNetworkError } from '@/lib/functionsError';
-import { startPerfTurn, type PerfTurn } from '@/lib/perfLog';
+import { newTurnId, startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn, type ConverseResult } from '@/services/conversation';
@@ -343,6 +343,10 @@ export function useConversationSession(
       setTurnBusy(true);
       const perf = currentTurnRef.current;
       perf?.mark('stop_requested');
+      // Sent with the request (and reused by its one retry) so converse can
+      // recognize a retried turn and replay it instead of running any
+      // app changes it made -- like adding a task -- a second time.
+      const turnId = perf?.turnId ?? newTurnId();
       const throwIfAborted = () => {
         if (abortedRef.current) throw new TurnAbortedError();
       };
@@ -392,7 +396,7 @@ export function useConversationSession(
               perf?.mark('audio_read');
               audioPath = 'direct';
               result = await withOneRetry(() =>
-                converseTurn(sessionId, { uri, mimeType: 'audio/m4a' }, perf?.turnId)
+                converseTurn(sessionId, { uri, mimeType: 'audio/m4a' }, turnId)
               );
             }
           }
@@ -405,7 +409,7 @@ export function useConversationSession(
             // just the transcribe+reply call costs nothing extra on a
             // transient network hiccup instead of losing the turn outright.
             result = await withOneRetry(() =>
-              converseTurn(sessionId, { storagePath: attachment.storage_path }, perf?.turnId)
+              converseTurn(sessionId, { storagePath: attachment.storage_path }, turnId)
             );
           }
           throwIfAborted();
@@ -422,6 +426,17 @@ export function useConversationSession(
             return next;
           });
           pendingEndRef.current = result.shouldEnd;
+
+          if (!result.audioBase64) {
+            // The server made a change in the app but couldn't voice the
+            // reply -- its text and chips are on screen. Carry on as if the
+            // reply had just finished playing (listen again, or end).
+            lastTurnMetaRef.current = { trigger, audioPath };
+            stateRef.current = 'speaking';
+            setState('speaking');
+            onReplyFinishedRef.current();
+            return;
+          }
 
           const replyFile = new File(Paths.cache, `mind-record-reply-${Date.now()}.mp3`);
           replyFile.write(result.audioBase64, { encoding: 'base64' });

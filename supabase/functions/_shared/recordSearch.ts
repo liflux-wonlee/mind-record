@@ -42,11 +42,22 @@ export function splitKeywords(raw: string | string[]): string[] {
   return out;
 }
 
+/** The calendar date (YYYY-MM-DD) a timestamp falls on in `timezone` -- not its UTC date, which for a
+ *  Korean morning recording is still the previous day. */
+export function localDateOf(isoTimestamp: string, timezone: string): string {
+  try {
+    return new Date(isoTimestamp).toLocaleDateString('en-CA', { timeZone: timezone });
+  } catch {
+    return isoTimestamp.slice(0, 10);
+  }
+}
+
 export async function searchRecords(
   callerClient: SupabaseClient,
   keywords: string[],
-  opts: { dateFrom?: string | null; dateTo?: string | null; limit?: number } = {}
+  opts: { dateFrom?: string | null; dateTo?: string | null; limit?: number; timezone?: string } = {}
 ): Promise<SearchHit[]> {
+  const timezone = opts.timezone ?? 'UTC';
   if (keywords.length === 0) return [];
 
   const perKeyword = await Promise.all(
@@ -68,10 +79,10 @@ export async function searchRecords(
   }
 
   let ranked = [...merged.values()];
-  if (opts.dateFrom) ranked = ranked.filter((r) => r.hit.happened_at >= opts.dateFrom!);
-  // happened_at is a full timestamp; dateTo is a bare date, so allow
-  // through the end of that day rather than truncating it to midnight.
-  if (opts.dateTo) ranked = ranked.filter((r) => r.hit.happened_at < `${opts.dateTo}T23:59:59.999Z`);
+  // dateFrom/dateTo are the user's own calendar dates, so compare against
+  // each hit's LOCAL date rather than its UTC timestamp.
+  if (opts.dateFrom) ranked = ranked.filter((r) => localDateOf(r.hit.happened_at, timezone) >= opts.dateFrom!);
+  if (opts.dateTo) ranked = ranked.filter((r) => localDateOf(r.hit.happened_at, timezone) <= opts.dateTo!);
 
   ranked.sort((a, b) => {
     if (b.matches !== a.matches) return b.matches - a.matches;
@@ -81,11 +92,11 @@ export async function searchRecords(
 }
 
 /** One line per hit, the format both search-ask and converse feed to the model. */
-export function formatHits(hits: SearchHit[]): string {
+export function formatHits(hits: SearchHit[], timezone = 'UTC'): string {
   if (hits.length === 0) return '(no matching records)';
   return hits
     .map((h, i) => {
-      const date = h.happened_at.slice(0, 10);
+      const date = localDateOf(h.happened_at, timezone);
       const label = h.kind === 'session' ? 'Recording' : h.kind === 'task' ? 'Task' : 'Idea';
       return `${i + 1}. [${label}] ${date} -- ${h.title}${h.snippet && h.snippet !== h.title ? `: ${h.snippet}` : ''}`;
     })
