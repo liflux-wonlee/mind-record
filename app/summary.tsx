@@ -18,6 +18,7 @@ import {
   confirmTopicSuggestion,
   createTopic,
   listTopics,
+  listVoiceFiledTopicIds,
   syncSessionTopicLinks,
   type Topic,
 } from '@/services/topics';
@@ -522,7 +523,16 @@ export default function SummaryScreen() {
       const nextTaskTopicIds = tasks.map((t) => (t.id === entry.id ? topicId : t.topic_id)).filter((id): id is string => !!id);
       const nextMemoryTopicIds = memories.map((m) => (m.id === entry.id ? topicId : m.topic_id)).filter((id): id is string => !!id);
       const sectionTopicIds = (session?.outline ?? []).map((s) => s.topic_id).filter((id): id is string => !!id);
-      await syncSessionTopicLinks(sessionId, [...sectionTopicIds, ...nextTaskTopicIds, ...nextMemoryTopicIds], entry.topicId);
+      // Moving one task/idea never un-files the recording from a topic the
+      // user filed it under by voice (re-topicking a section still can --
+      // that's an explicit override of the filing itself).
+      const voiceFiled = entry.topicId ? await listVoiceFiledTopicIds(sessionId) : undefined;
+      await syncSessionTopicLinks(
+        sessionId,
+        [...sectionTopicIds, ...nextTaskTopicIds, ...nextMemoryTopicIds],
+        entry.topicId,
+        voiceFiled
+      );
       setPicking(null);
     } catch {
       // Leave the suggestion in place -- the user can just try again.

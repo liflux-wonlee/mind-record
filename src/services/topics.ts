@@ -217,7 +217,9 @@ export async function listSessionsUnclassifiedPage(
  * several topics, one per outline section. Adds a link for every topic in
  * `topicIds` (everything the recording's sections/tasks/ideas now use), and
  * removes `replacedTopicId`'s link -- the topic that assignment used to
- * hold -- only if nothing in `topicIds` still uses it.
+ * hold -- only if nothing in `topicIds` still uses it and it isn't in
+ * `keepTopicIds` (voice filings, when a task/idea changed -- see
+ * listVoiceFiledTopicIds).
  *
  * Nothing else is removed: a link no section/task/idea holds can only have
  * come from filing the conversation under a topic by voice (converse's
@@ -226,7 +228,8 @@ export async function listSessionsUnclassifiedPage(
 export async function syncSessionTopicLinks(
   sessionId: string,
   topicIds: string[],
-  replacedTopicId: string | null
+  replacedTopicId: string | null,
+  keepTopicIds?: Set<string>
 ): Promise<void> {
   const wanted = [...new Set(topicIds)];
   const { data: existing, error: existingError } = await supabase
@@ -236,7 +239,12 @@ export async function syncSessionTopicLinks(
   if (existingError) throw existingError;
   const existingIds = new Set((existing ?? []).map((r) => r.topic_id));
 
-  if (replacedTopicId && existingIds.has(replacedTopicId) && !wanted.includes(replacedTopicId)) {
+  if (
+    replacedTopicId &&
+    existingIds.has(replacedTopicId) &&
+    !wanted.includes(replacedTopicId) &&
+    !keepTopicIds?.has(replacedTopicId)
+  ) {
     const { error } = await supabase
       .from('session_topics')
       .delete()
@@ -252,6 +260,36 @@ export async function syncSessionTopicLinks(
       .insert(toAdd.map((topic_id) => ({ session_id: sessionId, topic_id })));
     if (error) throw error;
   }
+}
+
+/**
+ * Topics this recording was filed under BY VOICE during a Conversation and
+ * not undone -- read from converse's action log ('[action] ' system rows in
+ * `messages`, see supabase/functions/_shared/actionLog.ts). An explicit
+ * instruction for the whole recording: re-topicking one task or idea on
+ * Summary must not remove it.
+ */
+export async function listVoiceFiledTopicIds(sessionId: string): Promise<Set<string>> {
+  const { data, error } = await supabase
+    .from('messages')
+    .select('content')
+    .eq('session_id', sessionId)
+    .eq('role', 'system')
+    .like('content', '[action] %');
+  if (error) throw error;
+  const ids = new Set<string>();
+  for (const row of data ?? []) {
+    try {
+      const record = JSON.parse(row.content.slice('[action] '.length));
+      if (record?.v !== 1 || record.type !== 'topic_filed' || record.undone) continue;
+      const topicIds: unknown[] = Array.isArray(record.topic_ids) ? record.topic_ids : [];
+      const id = record.linked_topic_id ?? topicIds[topicIds.length - 1];
+      if (typeof id === 'string') ids.add(id);
+    } catch {
+      // Not a readable action record -- skip it.
+    }
+  }
+  return ids;
 }
 
 export async function listSessionTopics(sessionId: string): Promise<Topic[]> {

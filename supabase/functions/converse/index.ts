@@ -915,6 +915,11 @@ const FALLBACK_REPLY: Record<Lang, string> = {
   ko: '죄송해요, 방금은 제대로 처리하지 못했어요. 다시 한 번 말씀해 주시겠어요?',
   en: "Sorry, I couldn't quite handle that one. Could you say it again?",
 };
+// Said when the time guard refused a change after others in the turn went through.
+const OUT_OF_TIME_RETRY: Record<Lang, string> = {
+  ko: '나머지는 시간이 부족해서 못 했어요. 다시 말해 주세요.',
+  en: 'I ran out of time for the rest -- please say it again.',
+};
 const CANNED_CLOSING: Record<Lang, string> = {
   ko: '네, 여기까지 저장할게요.',
   en: "Okay, I'll save it here.",
@@ -994,9 +999,17 @@ async function generateReply(
   let end = false;
   let closingLine = '';
   let reply = '';
-  // What's owed without a usable model reply: what changed, plus the goodbye if the turn ends.
+  let writeRefused = false;
+  // What's owed without a usable model reply: what changed, that the rest
+  // didn't happen (if the time guard refused some), and the goodbye if the turn ends.
   const confirmAndClose = () =>
-    [spoken.map((c) => c[lang]).join(' '), end ? closingLine || CANNED_CLOSING[lang] : ''].filter(Boolean).join(' ');
+    [
+      spoken.map((c) => c[lang]).join(' '),
+      writeRefused ? OUT_OF_TIME_RETRY[lang] : '',
+      end && !writeRefused ? closingLine || CANNED_CLOSING[lang] : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const toolsAllowed = round < MAX_TOOL_ROUNDS;
@@ -1063,6 +1076,7 @@ async function generateReply(
         });
         everyCallCompletedAWrite = false;
         questionPending = true;
+        writeRefused = true;
         continue;
       }
       const outcome = await executeTool(toolContext, name, call.function?.arguments, actions);
@@ -1099,6 +1113,12 @@ async function generateReply(
       messages.push({ role: 'tool', tool_call_id: endCall.id, content: JSON.stringify(result) });
     });
     perf.mark(`tools_round_${round}`);
+
+    // Out of time: no further round could run, so say what happened now.
+    if (writeRefused && spoken.length > 0) {
+      reply = confirmAndClose();
+      break;
+    }
 
     if (everyCallCompletedAWrite && roundSpoken.length > 0) {
       const closing = end ? closingLine || CANNED_CLOSING[lang] : '';
