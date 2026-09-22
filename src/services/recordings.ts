@@ -18,37 +18,41 @@ export function localRecordingSize(fileUri: string): number {
 }
 
 /**
- * Appends a local file to a `FormData` as a real `Blob` part -- reading it
- * through `fetch(fileUri).blob()`, the RN-idiomatic way to turn a local
- * file into an upload-ready Blob (rather than RN's `{ uri, name, type }`
- * FormData shortcut, a separate native code path that turned out to fail
- * outright on a real device with a generic "Network request failed" --
- * see git history). `response.arrayBuffer()` then `new Blob([arrayBuffer])`
- * was tried first and ALSO failed on-device: React Native's Blob polyfill
- * (unlike a browser/Node/Deno's) doesn't support constructing a Blob from
- * an ArrayBuffer/ArrayBufferView at all ("Creating blobs from 'ArrayBuffer'
- * and 'ArrayBufferView' are not supported"). `response.blob()` sidesteps
- * this entirely -- RN's fetch already hands back a natively-backed Blob
- * for a local file read, with no ArrayBuffer round trip needed.
+ * Appends a local file to a `FormData` using RN's own `{ uri, name, type }`
+ * shortcut -- confirmed correct (not assumed) by reading React Native's own
+ * source rather than guessing again after two wrong fixes in a row:
  *
- * A local file:// read has no server to send a Content-Type header, so the
- * resulting Blob's own `.type` often comes back empty -- and FormData's
- * multipart part uses exactly that (`blob.type`), not anything passed to
- * `.append()`, as the part's Content-Type. `.slice()` re-tags it without
- * copying the underlying data, so the server actually sees `audio/m4a`
- * instead of Whisper trying to guess the format from nothing.
+ * - `Libraries/Network/FormData.js`'s own value type is
+ *   `string | { uri: string, name?, type? }` -- a real `Blob` was never a
+ *   supported part value in the first place.
+ * - `ReactAndroid/.../NetworkingModule.kt#constructMultipartBody` (the code
+ *   that actually runs on the test device, per its adb-logcat platform)
+ *   only recognizes a part with a `"string"` key or a `"uri"` key; anything
+ *   else falls into its `else` branch and is rejected as "Unrecognized
+ *   FormData part." A real `Blob` instance spread into a part by
+ *   `FormData.getParts()`'s `{...value, headers, fieldName}` only copies
+ *   `Blob`'s own enumerable property (`_data` -- `data`/`size`/`type` are
+ *   prototype getters, not own properties, so the spread drops them), so
+ *   the resulting part has neither `string` nor `uri` -- it hits exactly
+ *   that "Unrecognized FormData part" branch. That's the previous fix
+ *   (`response.blob()` + `.slice()`), and it's why it needed to be reverted
+ *   here, not because of an on-device retest yet, but because reading the
+ *   native source shows it cannot have worked.
+ * - The `uri`-keyed branch reads the file via
+ *   `RequestBodyUtil.getFileInputStream()` -> `ContentResolver.openInputStream()`,
+ *   a real, separate native path from the Storage-upload fallback's
+ *   `fetch(fileUri)` (that one fetches the `file://` URL as the request
+ *   target, not as a body part) -- so, unlike the last two attempts, this
+ *   one is not just "should be fine by analogy," it's read directly from
+ *   the code that runs. What's still NOT verified: why this exact shape
+ *   failed with "No connection..." on-device earlier this session. The
+ *   content-type header (needed by the same Kotlin branch) was already
+ *   being set correctly from `type`, so that wasn't it. Flagging this
+ *   openly rather than re-asserting confidence -- if this fails again, the
+ *   underlying error (surfaced via functionsError.ts) is the next real lead.
  */
-export async function appendFilePart(
-  form: FormData,
-  field: string,
-  fileUri: string,
-  name: string,
-  mimeType: string
-): Promise<void> {
-  const response = await fetch(fileUri);
-  const blob = await response.blob();
-  const typedBlob = blob.type === mimeType ? blob : blob.slice(0, blob.size, mimeType);
-  form.append(field, typedBlob, name);
+export function appendFilePart(form: FormData, field: string, fileUri: string, name: string, mimeType: string): void {
+  form.append(field, { uri: fileUri, name, type: mimeType } as unknown as Blob);
 }
 
 /**
