@@ -1,5 +1,6 @@
 import { describeFunctionError } from '@/lib/functionsError';
 import { supabase } from '@/lib/supabase';
+import { deviceTimeZone } from '@/lib/timezone';
 import { appendFilePart } from '@/services/recordings';
 
 export type SearchTurn = { question: string; answer: string };
@@ -41,15 +42,18 @@ export async function askSearchQuestion(
     | { storagePath: string; history?: SearchTurn[] }
     | { uri: string; mimeType: string; turnId?: string; history?: SearchTurn[] }
 ): Promise<SearchAnswerResult> {
-  let body: FormData | typeof input;
+  // What "last week" / "9월" mean for this user (see src/lib/timezone.ts).
+  const timezone = deviceTimeZone();
+  let body: FormData | (typeof input & { timezone?: string });
   if ('uri' in input) {
     const form = new FormData();
     await appendFilePart(form, 'audio', input.uri, 'query.m4a', input.mimeType);
     if (input.turnId) form.append('turnId', input.turnId);
     if (input.history) form.append('history', JSON.stringify(input.history));
+    if (timezone) form.append('timezone', timezone);
     body = form;
   } else {
-    body = input;
+    body = { ...input, timezone };
   }
   const { data, error } = await supabase.functions.invoke('search-ask', { body });
   if (error) throw await describeFunctionError(error, 'Could not answer that.');

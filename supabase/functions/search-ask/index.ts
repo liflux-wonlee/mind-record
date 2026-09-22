@@ -33,6 +33,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 import { errorMessage } from '../_shared/errorMessage.ts';
 import { PerfTurn, scheduleBackground } from '../_shared/perf.ts';
 import { formatHits, searchRecords, splitKeywords, type SearchHit } from '../_shared/recordSearch.ts';
+import { resolveUserTimeZone } from '../_shared/timezone.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -67,6 +68,7 @@ Deno.serve(async (req) => {
   let storagePath: string | undefined;
   let audioFile: File | null = null;
   let clientTurnId: string | undefined;
+  let deviceTimezone: string | undefined;
   let history: Turn[] = [];
   const parseHistory = (raw: unknown): Turn[] =>
     Array.isArray(raw)
@@ -84,6 +86,8 @@ Deno.serve(async (req) => {
       const form = await req.formData();
       const tid = form.get('turnId');
       clientTurnId = typeof tid === 'string' ? tid : undefined;
+      const tz = form.get('timezone');
+      deviceTimezone = typeof tz === 'string' ? tz : undefined;
       const audio = form.get('audio');
       if (audio instanceof File) audioFile = audio;
       const historyRaw = form.get('history');
@@ -99,6 +103,7 @@ Deno.serve(async (req) => {
       question = typeof body.question === 'string' ? body.question : undefined;
       storagePath = typeof body.storagePath === 'string' ? body.storagePath : undefined;
       clientTurnId = typeof body.turnId === 'string' ? body.turnId : undefined;
+      deviceTimezone = typeof body.timezone === 'string' ? body.timezone : undefined;
       history = parseHistory(body.history);
     }
   } catch {
@@ -144,6 +149,9 @@ Deno.serve(async (req) => {
     const userHonorific = profile?.user_honorific?.trim() || null;
     const locale = profile?.locale ?? null;
     const voice = profile?.ai_voice && ALLOWED_VOICES.has(profile.ai_voice) ? profile.ai_voice : DEFAULT_VOICE;
+    // What "last week" / "9월" mean -- the device's zone when it sent one (see _shared/timezone.ts).
+    const { timezone, save: saveTimezone } = resolveUserTimeZone(db, user.id, deviceTimezone, profile?.timezone);
+    if (saveTimezone) background.push(saveTimezone);
     perf.mark('profile_fetched');
 
     let isVoice = false;
@@ -226,11 +234,10 @@ Deno.serve(async (req) => {
     }
     question = question.trim();
 
-    const interpretation = await interpret(question, history, profile?.timezone ?? null);
+    const interpretation = await interpret(question, history, timezone);
     perf.mark('interpret_done');
 
     const keywords = splitKeywords(interpretation.keywords || question);
-    const timezone = profile?.timezone || 'UTC';
     const hits: SearchHit[] = await searchRecords(callerClient, keywords, {
       dateFrom: interpretation.date_from,
       dateTo: interpretation.date_to,

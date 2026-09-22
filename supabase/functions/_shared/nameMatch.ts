@@ -32,20 +32,25 @@ export function levenshtein(a: string, b: string): number {
  * other, or within 30% edit distance -- but NOT the same name (an exact
  * match is the caller's job to handle, by reusing it outright).
  */
-export function findSimilarName<T extends { name: string }>(candidates: T[], name: string): T | null {
+export function findSimilarName<T extends { name: string }>(
+  candidates: T[],
+  name: string,
+  opts: { shortNames?: boolean } = {}
+): T | null {
   const target = normalizeName(name);
   let best: T | null = null;
   let bestDistance = Infinity;
   for (const c of candidates) {
     const candidate = normalizeName(c.name);
     if (candidate === target) continue;
-    // Containment counts for names of 3+ characters, and also for 2-character
-    // names (common in Korean: "가족" / "가족여행") when the shorter one is at
-    // least half the longer one.
+    // Containment counts for names of 3+ characters. With `shortNames`, also
+    // for 2-character names (common in Korean: "가족" / "가족여행") when the
+    // shorter one is at least half the longer one -- only for callers that
+    // ASK the user about a match rather than silently skipping on one.
     const shorter = Math.min(candidate.length, target.length);
     const longer = Math.max(candidate.length, target.length);
     const contains =
-      (shorter >= 3 || (shorter === 2 && shorter / longer >= 0.5)) &&
+      (shorter >= 3 || (opts.shortNames === true && shorter === 2 && shorter / longer >= 0.5)) &&
       (candidate.includes(target) || target.includes(candidate));
     const distance = levenshtein(candidate, target);
     const maxLen = Math.max(candidate.length, target.length);

@@ -8,7 +8,11 @@ import { Waveform } from '@/components/Waveform';
 import { Button, Kicker } from '@/components/ui';
 import type { InterruptionReason } from '@/hooks/useAudioInterruption';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
-import { DEFAULT_SILENCE_DURATION_MS, useConversationSession } from '@/hooks/useConversationSession';
+import {
+  DEFAULT_SILENCE_DURATION_MS,
+  useConversationSession,
+  type ConversationTurn,
+} from '@/hooks/useConversationSession';
 import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
@@ -135,13 +139,10 @@ export default function TalkScreen() {
       dismissToTabs();
       return;
     }
-    // Changes the AI already made in the app by voice (tasks added, topics
-    // filed or created) are real rows, not part of the conversation --
-    // discarding the conversation doesn't take them back.
-    const voiceChanges = conversation.turns.reduce((n, t) => n + (t.actions?.length ?? 0), 0);
+    const kept = keptVoiceChanges(conversation.turns);
     const discardMessage =
-      voiceChanges > 0
-        ? `What you said so far will not be saved. The ${voiceChanges === 1 ? 'change' : `${voiceChanges} changes`} the AI made for you (shown with a check mark) will be kept.`
+      kept > 0
+        ? `What you said so far will not be saved. ${kept === 1 ? 'The task or topic' : `The ${kept} tasks and topics`} the AI added for you (shown with a check mark) will be kept.`
         : 'What you said so far will not be saved.';
     Alert.alert('Discard this conversation?', discardMessage, [
       { text: 'Keep talking', style: 'cancel' },
@@ -206,6 +207,34 @@ export default function TalkScreen() {
       )}
     </Screen>
   );
+}
+
+/**
+ * How many changes the AI made by voice outlive discarding the conversation:
+ * tasks it added and topics it created. Filing into an existing topic is a
+ * link to this conversation, so it goes with it; anything undone later
+ * doesn't count.
+ */
+function keptVoiceChanges(turns: ConversationTurn[]): number {
+  const actions = turns.flatMap((t) => t.actions ?? []);
+  const undone = new Map<string, number>();
+  for (const a of actions) {
+    if (a.type !== 'undone') continue;
+    const label = a.label.replace(/^Undone: /, '');
+    undone.set(label, (undone.get(label) ?? 0) + 1);
+  }
+  let kept = 0;
+  for (const a of actions) {
+    const lasting = a.type === 'task_created' || a.type === 'topic_created' || (a.type === 'topic_filed' && a.newTopic === true);
+    if (!lasting) continue;
+    const undoneCount = undone.get(a.label) ?? 0;
+    if (undoneCount > 0) {
+      undone.set(a.label, undoneCount - 1);
+      continue;
+    }
+    kept += 1;
+  }
+  return kept;
 }
 
 function CapturePanel({
@@ -402,10 +431,10 @@ function ConversationPanel({
                 {turn.role === 'user' ? 'You' : aiName ?? 'AI'}
               </Kicker>
               <Text style={styles.turnText}>{turn.content}</Text>
-              {turn.actions?.map((label, j) => (
+              {turn.actions?.map((action, j) => (
                 <View key={j} style={styles.actionChip}>
                   <CheckIcon size={13} color={colors.accent800} />
-                  <Text style={styles.actionChipText}>{label}</Text>
+                  <Text style={styles.actionChipText}>{action.label}</Text>
                 </View>
               ))}
             </View>

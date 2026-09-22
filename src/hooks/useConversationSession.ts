@@ -50,13 +50,13 @@ import { isNetworkError } from '@/lib/functionsError';
 import { newTurnId, startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
-import { converseTurn, type ConverseResult } from '@/services/conversation';
+import { converseTurn, type ConverseAction, type ConverseResult } from '@/services/conversation';
 import { processSession } from '@/services/processing';
 import { localRecordingSize, uploadRecording } from '@/services/recordings';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
 /** `actions` (assistant turns only): what the AI actually did in the app that turn, shown as confirmation chips. */
-export type ConversationTurn = { role: 'user' | 'assistant'; content: string; actions?: string[] };
+export type ConversationTurn = { role: 'user' | 'assistant'; content: string; actions?: ConverseAction[] };
 export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 
 // Metering is in dBFS (0 = loudest, more negative = quieter). On Android
@@ -95,6 +95,12 @@ const FLOOR_RISE_DB_PER_TICK = 0.25;
 // become the floor, or every later reading would look like speech.
 const NO_SIGNAL_DB = -100;
 const FLOOR_MIN_DB = -70;
+// Played instead of the spoken reply when converse made a change in the app
+// but couldn't synthesize the reply (the text is on screen) -- so a driver
+// still hears that the turn went through before the mic reopens.
+const CONFIRM_SOUND = require('../../assets/sounds/confirm.wav');
+// If the sound never reports finishing (failed to load), move on anyway.
+const CONFIRM_SOUND_FALLBACK_MS = 3000;
 // Stopping the native recorder within roughly the first second of starting
 // it can throw and/or leave a corrupt, zero-duration file behind (a known
 // Android MediaRecorder quirk) -- always pad a stop out to at least this long.
@@ -217,7 +223,10 @@ export function useConversationSession(
   // and byte counts.
   const currentTurnRef = useRef<PerfTurn | null>(null);
   const firstPlayMarkedRef = useRef(false);
-  const lastTurnMetaRef = useRef<{ trigger: string; audioPath: 'direct' | 'storage' } | null>(null);
+  const lastTurnMetaRef = useRef<{ trigger: string; audioPath: 'direct' | 'storage'; noVoice?: boolean } | null>(null);
+  // Bumped whenever a reply finishes, so a stale fallback timer (see
+  // CONFIRM_SOUND_FALLBACK_MS) can tell its turn is already over.
+  const replySeqRef = useRef(0);
 
   // Metering has to be switched on HERE, in the construction-time options,
   // not passed to prepareToRecordAsync() later: expo-audio's
@@ -351,9 +360,31 @@ export function useConversationSession(
         if (abortedRef.current) throw new TurnAbortedError();
       };
 
+      // The reply came back but can't be voiced: its text (and chips) are on
+      // screen already, so play the confirmation sound and carry on as if
+      // the reply had just finished playing (listen again, or end).
+      const finishWithoutVoice = (meta: { trigger: string; audioPath: 'direct' | 'storage' }) => {
+        lastTurnMetaRef.current = { ...meta, noVoice: true };
+        stateRef.current = 'speaking';
+        setState('speaking');
+        const seq = replySeqRef.current;
+        setTimeout(() => {
+          if (replySeqRef.current === seq) onReplyFinishedRef.current();
+        }, CONFIRM_SOUND_FALLBACK_MS);
+        try {
+          player.replace(CONFIRM_SOUND);
+          player.play();
+        } catch {
+          onReplyFinishedRef.current();
+        }
+      };
+
       const run = async () => {
         let audioPath: 'direct' | 'storage' = 'storage';
         let audioBytes: number | undefined;
+        // Once the server has answered, the turn happened -- including any
+        // change the AI made -- whatever goes wrong locally afterwards.
+        let answered = false;
         try {
           const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
           if (elapsed < MIN_RECORDING_MS) {
@@ -412,29 +443,31 @@ export function useConversationSession(
               converseTurn(sessionId, { storagePath: attachment.storage_path }, turnId)
             );
           }
-          throwIfAborted();
+          answered = true;
           perf?.mark('function_call_done');
 
-          setTurns((prev) => {
-            const next = [...prev];
-            if (result.userText) next.push({ role: 'user', content: result.userText });
-            next.push({
-              role: 'assistant',
-              content: result.assistantText,
-              actions: result.actions?.length ? result.actions.map((a) => a.label) : undefined,
+          // Shown even if the turn was interrupted meanwhile (a call came in,
+          // the app went to the background) -- the reply may confirm a change
+          // the AI already made. Not after Cancel or leaving the screen,
+          // though: that conversation is gone.
+          const answer = result;
+          if (sessionIdRef.current === sessionId) {
+            setTurns((prev) => {
+              const next = [...prev];
+              if (answer.userText) next.push({ role: 'user', content: answer.userText });
+              next.push({
+                role: 'assistant',
+                content: answer.assistantText,
+                actions: answer.actions?.length ? answer.actions : undefined,
+              });
+              return next;
             });
-            return next;
-          });
+          }
+          throwIfAborted();
           pendingEndRef.current = result.shouldEnd;
 
           if (!result.audioBase64) {
-            // The server made a change in the app but couldn't voice the
-            // reply -- its text and chips are on screen. Carry on as if the
-            // reply had just finished playing (listen again, or end).
-            lastTurnMetaRef.current = { trigger, audioPath };
-            stateRef.current = 'speaking';
-            setState('speaking');
-            onReplyFinishedRef.current();
+            finishWithoutVoice({ trigger, audioPath });
             return;
           }
 
@@ -451,8 +484,15 @@ export function useConversationSession(
             // An interruption aborts a 'thinking' turn without touching state
             // itself (see useAudioInterruption below) -- land it in idle here.
             if (stateRef.current === 'thinking') setState('idle');
-            perf?.finish({ trigger, audioPath, aborted: true });
+            perf?.finish({ trigger, audioPath, aborted: true, answered });
             currentTurnRef.current = null;
+            return;
+          }
+          if (answered) {
+            // Only playing the reply failed (e.g. writing the audio file) --
+            // it's on screen, and it was saved server-side.
+            console.warn('conversation reply playback failed:', e instanceof Error ? e.message : String(e));
+            finishWithoutVoice({ trigger, audioPath });
             return;
           }
           Alert.alert(
@@ -567,6 +607,8 @@ export function useConversationSession(
   const onReplyFinishedRef = useRef<() => void>(() => {});
   onReplyFinishedRef.current = () => {
     if (stateRef.current !== 'speaking') return;
+    stateRef.current = 'idle';
+    replySeqRef.current += 1;
     const turn = currentTurnRef.current;
     turn?.mark('reply_finished');
     turn?.finish({

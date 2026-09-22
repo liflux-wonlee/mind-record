@@ -12,23 +12,31 @@
 // the user's task lists / tasks (their topic tree and list names are in the
 // prompt), search their past records, and -- immediately, confirmed back by
 // voice -- add a task, file this conversation under a topic, create a
-// topic, or undo the previous turn's changes. Each change is logged to
+// topic, or undo an earlier turn's changes. Each change is logged to
 // `messages` (role 'system') so later turns know about it, undo can revert
 // it and process-session respects it, and is returned as `actions` for the
 // client's on-screen confirmation chips.
 //
-// Every row a turn writes is tagged with the client's turnId, so a request
-// the client retries after a dropped connection replays the stored reply
-// instead of running the tools (and adding the task) a second time.
+// Retries: every row a turn writes is tagged with the client's turnId, and
+// a request the client retries after a dropped connection must never run
+// the tools (and add the task) a second time. So a request that finds its
+// turn already started:
+//   - replays the stored reply if there is one;
+//   - otherwise waits while the request that saved the user's words may
+//     still be working (a lease: TURN_LEASE_MS from that row, comfortably
+//     past REPLY_DEADLINE_MS);
+//   - once that lapses, confirms whatever that request already changed
+//     (from its action-log rows, without running anything again), or --
+//     if it changed nothing -- produces the reply itself.
 //
 // Invoked by the app via a multipart request (fields: sessionId, turnId,
 // timezone, and an `audio` file part -- see src/services/conversation.ts) once per
 // turn (see src/hooks/useConversationSession.ts). Or, for an oversized
 // recording / if DIRECT_AUDIO_UPLOAD_ENABLED is off (see
 // src/lib/featureFlags.ts), a plain JSON body of
-// { sessionId, storagePath } against an already-uploaded attachment -- the
-// original flow, kept as a fallback. The transcript left behind in
-// `messages` is reused as the session's raw_transcript when
+// { sessionId, storagePath, turnId, timezone } against an already-uploaded
+// attachment -- the original flow, kept as a fallback. The transcript left
+// behind in `messages` is reused as the session's raw_transcript when
 // `process-session` runs at the end of the conversation, instead of
 // re-transcribing the same audio a second time (see process-session/index.ts).
 //
@@ -41,26 +49,34 @@
 // JS string first -- a base64-in-JSON version of this was tried first and
 // the request never even reached Supabase on a real device, so this is
 // multipart now), and keeps a backup copy in Storage by writing it in
-// PARALLEL with the Whisper call rather than blocking on it -- see the
-// perf marks below and the accompanying report for what is and isn't been
-// verified on a real device from here.
+// PARALLEL with the Whisper call rather than blocking on it.
 //
 // OPENAI_API_KEY / SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
 // are the same Edge Function secrets process-session already relies on.
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
+import {
+  insertMessageRow,
+  parseActionRecord,
+  parseTurnMeta,
+  parseUndoRecord,
+  TURN_META_PREFIX,
+  type ActionRecord,
+  type TurnMeta,
+  type UndoRecord,
+} from '../_shared/actionLog.ts';
 import { errorMessage } from '../_shared/errorMessage.ts';
 import { PerfTurn, scheduleBackground } from '../_shared/perf.ts';
+import { resolveUserTimeZone } from '../_shared/timezone.ts';
 import { recordUsage } from '../_shared/usage.ts';
 import {
   describeActionLog,
   describeUserCatalog,
   executeTool,
   localToday,
-  parseActionRecord,
+  spokenForRecords,
   TOOL_DEFINITIONS,
-  TURN_END_MARKER,
   type ConverseAction,
   type SpokenConfirmation,
   type ToolContext,
@@ -89,6 +105,61 @@ const NOTHING_HEARD_REPLY: Record<string, string> = {
 const ALLOWED_VOICES = new Set(['alloy', 'echo', 'onyx', 'nova', 'shimmer']);
 const DEFAULT_VOICE = 'alloy';
 
+// ── time budget ────────────────────────────────────────────────────────
+// An Edge Function has to answer within 150s of the request; everything
+// below is budgeted to finish inside REQUEST_BUDGET_MS, with margin.
+const REQUEST_BUDGET_MS = 135_000;
+const TRANSCRIBE_TIMEOUT_MS = 45_000;
+// GPT rounds and tools, from the moment the user's words are saved. Past it,
+// whatever was already changed is confirmed (a turn that changed nothing fails).
+const REPLY_DEADLINE_MS = 40_000;
+const TTS_TIMEOUT_MS = 15_000;
+// Kept free after the reply for saving it and synthesizing speech.
+const TTS_RESERVE_MS = 20_000;
+// How long, after a turn's user row was written, the request that wrote it
+// is presumed to still be working on the reply: REPLY_DEADLINE_MS plus slack
+// for the tool that was running at the deadline and for clock skew between
+// this function and the database. Only after it does a retry take over.
+const TURN_LEASE_MS = 65_000;
+const TURN_POLL_MS = 1_000;
+// A retry stops waiting early enough to still produce a reply in budget.
+const TAKEOVER_RESERVE_MS = REPLY_DEADLINE_MS + TTS_RESERVE_MS + 5_000;
+
+type ParsedRequest = {
+  sessionId: string | undefined;
+  storagePath: string | undefined;
+  audioFile: File | null;
+  turnId: string | undefined;
+  timezone: string | undefined;
+};
+
+async function parseRequest(req: Request): Promise<ParsedRequest> {
+  const parsed: ParsedRequest = { sessionId: undefined, storagePath: undefined, audioFile: null, turnId: undefined, timezone: undefined };
+  const field = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  try {
+    const contentType = req.headers.get('content-type') ?? '';
+    if (contentType.includes('multipart/form-data')) {
+      // The direct-send path (see src/lib/featureFlags.ts): the client
+      // streams the turn's audio straight from its local file.
+      const form = await req.formData();
+      parsed.sessionId = field(form.get('sessionId'));
+      parsed.turnId = field(form.get('turnId'));
+      parsed.timezone = field(form.get('timezone'));
+      const audio = form.get('audio');
+      if (audio instanceof File) parsed.audioFile = audio;
+    } else {
+      const body = await req.json();
+      parsed.sessionId = field(body?.sessionId);
+      parsed.storagePath = field(body?.storagePath);
+      parsed.turnId = field(body?.turnId);
+      parsed.timezone = field(body?.timezone);
+    }
+  } catch {
+    // handled by the caller's checks
+  }
+  return parsed;
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -98,42 +169,18 @@ Deno.serve(async (req) => {
     return json({ error: 'OPENAI_API_KEY is not configured on this project.' }, 500);
   }
 
-  let sessionId: string | undefined;
-  let storagePath: string | undefined;
-  let audioFile: File | null = null;
-  let clientTurnId: string | undefined;
-  let clientTimezone: string | undefined;
-  try {
-    const contentType = req.headers.get('content-type') ?? '';
-    if (contentType.includes('multipart/form-data')) {
-      // The direct-send path (see src/lib/featureFlags.ts): the client
-      // streams the turn's audio straight from its local file instead of
-      // inlining it as base64 in a JSON body -- a base64-in-JSON version
-      // of this was tried first and the request never even reached
-      // Supabase on a real device, so this is multipart now instead.
-      const form = await req.formData();
-      const sid = form.get('sessionId');
-      sessionId = typeof sid === 'string' ? sid : undefined;
-      const tid = form.get('turnId');
-      clientTurnId = typeof tid === 'string' ? tid : undefined;
-      const tz = form.get('timezone');
-      clientTimezone = typeof tz === 'string' ? tz : undefined;
-      const audio = form.get('audio');
-      if (audio instanceof File) audioFile = audio;
-    } else {
-      const body = await req.json();
-      ({ sessionId, storagePath, turnId: clientTurnId } = body);
-      clientTimezone = typeof body.timezone === 'string' ? body.timezone : undefined;
-    }
-  } catch {
-    // handled by the checks below
-  }
-  if (!sessionId || (!storagePath && !audioFile)) {
+  const startedAt = Date.now();
+  const hardDeadline = startedAt + REQUEST_BUDGET_MS;
+  const request = await parseRequest(req);
+  const { storagePath, audioFile, turnId: clientTurnId } = request;
+  if (!request.sessionId || (!storagePath && !audioFile)) {
     return json({ error: 'sessionId and (storagePath or audio) are required.' }, 400);
   }
+  const sessionId = request.sessionId;
 
   const perf = new PerfTurn('converse', clientTurnId ?? crypto.randomUUID());
   perf.mark('request_received');
+  const pathTag = audioFile ? 'direct' : 'storage';
 
   const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
@@ -145,6 +192,7 @@ Deno.serve(async (req) => {
   if (authError || !user) {
     return json({ error: 'Not authenticated.' }, 401);
   }
+  const userId = user.id;
   perf.mark('auth_done');
 
   const db = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -155,87 +203,109 @@ Deno.serve(async (req) => {
     .eq('id', sessionId)
     .maybeSingle();
   if (sessionError) return json({ error: errorMessage(sessionError, 'Could not load this session.') }, 500);
-  if (!session || session.user_id !== user.id) {
+  if (!session || session.user_id !== userId) {
     return json({ error: 'Session not found.' }, 404);
   }
   // The audio is downloaded with the service role below (bypassing Storage
   // RLS), so a client-supplied path must be pinned to this user's own
   // session -- a client-supplied audio file part has no path to check, but
   // is itself scoped to this authenticated user's own request.
-  if (storagePath && !storagePath.startsWith(`${user.id}/${sessionId}/`)) {
+  if (storagePath && !storagePath.startsWith(`${userId}/${sessionId}/`)) {
     return json({ error: 'Recording not found.' }, 404);
   }
 
   // Work that must happen eventually but that nothing in the response the
-  // user is waiting on actually depends on -- scheduled with
-  // EdgeRuntime.waitUntil below (right before the response is returned)
-  // instead of awaited inline, so it runs after the reply is already on
-  // its way back instead of adding to the time before the user hears it.
-  // recordUsage is already best-effort/non-throwing internally; wrapping
-  // discardAudio's own try/catch the same way keeps this list uniform.
+  // user is waiting on actually depends on -- handed to
+  // EdgeRuntime.waitUntil (scheduleBackground) when the response is
+  // returned, instead of awaited inline. recordUsage and discardAudio are
+  // both non-throwing.
   const background: Promise<unknown>[] = [];
 
   try {
     const { data: profile, error: profileError } = await db
       .from('profiles')
       .select('ai_name, user_honorific, ai_voice, locale, timezone')
-      .eq('id', user.id)
+      .eq('id', userId)
       .maybeSingle();
     if (profileError) throw profileError;
     const aiName = profile?.ai_name?.trim() || null;
     const userHonorific = profile?.user_honorific?.trim() || null;
     const voice = profile?.ai_voice && ALLOWED_VOICES.has(profile.ai_voice) ? profile.ai_voice : DEFAULT_VOICE;
     // The device's own timezone decides what "today"/"tomorrow" mean for the
-    // tools below. profiles.timezone was never set by the app (it stays the
-    // 'UTC' default), so the device value wins when valid -- and is saved
-    // back, which also fixes search-ask's date handling (it reads the
-    // profile's value).
-    const deviceTimezone = canonicalTimeZone(clientTimezone);
-    const timezone = deviceTimezone ?? canonicalTimeZone(profile?.timezone) ?? 'UTC';
-    if (deviceTimezone && deviceTimezone !== profile?.timezone) {
-      background.push(
-        Promise.resolve(db.from('profiles').update({ timezone: deviceTimezone }).eq('id', user.id)).then(
-          ({ error }) => {
-            if (error) console.warn('could not save profile timezone', error.code ?? '', error.message ?? '');
-          },
-          (e) => console.warn('could not save profile timezone', e instanceof Error ? e.message : '')
-        )
-      );
-    }
+    // tools below (see _shared/timezone.ts).
+    const { timezone, save: saveTimezone } = resolveUserTimeZone(db, userId, request.timezone, profile?.timezone);
+    if (saveTimezone) background.push(saveTimezone);
     perf.mark('profile_fetched');
 
-    // A request retried after a dropped connection (the client's
-    // withOneRetry) may have been processed already -- including tool
-    // writes like adding a task. Replay its stored reply instead of running
-    // the turn a second time.
-    let priorUserText: string | null = null;
+    const speak = async (text: string): Promise<string> => {
+      const audio = await synthesizeWithRetry(text, voice, hardDeadline);
+      background.push(
+        recordUsage(db, { userId, eventType: 'tts_synthesize', source: 'converse', sessionId, ttsCharacters: text.length })
+      );
+      return audio;
+    };
+
+    const replay = async (turn: StoredTurn): Promise<Response> => {
+      const assistantText = turn.assistantText ?? '';
+      let audioBase64 = '';
+      try {
+        audioBase64 = await speak(assistantText);
+      } catch (e) {
+        logError('converse replay TTS failed:', e);
+      }
+      perf.mark('replay_ready');
+      scheduleBackground(background, () => perf.finish({ path: pathTag, replayed: true }));
+      return json({
+        userText: turn.userText ?? '',
+        assistantText,
+        shouldEnd: turn.meta?.end ?? false,
+        audioBase64,
+        turnId: perf.turnId,
+        actions: storedActions(turn),
+        replayed: true,
+      });
+    };
+
+    // A retried request's turn may already be under way (see the header).
+    // Returns a finished response, what to carry on with, or null if this
+    // turn hasn't saved anything yet.
+    type Carry = { userText: string; finishFrom: StoredTurn | null };
+    const takeOverTurn = async (turnId: string): Promise<Response | Carry | null> => {
+      const settled = await settleTurn(db, sessionId, turnId, hardDeadline - TAKEOVER_RESERVE_MS);
+      switch (settled.kind) {
+        case 'fresh':
+          return null;
+        case 'replay':
+          return await replay(settled.turn);
+        case 'busy':
+          scheduleBackground(background, () => perf.finish({ path: pathTag, busy: true }));
+          return json({ error: 'This turn is still being handled -- try again in a moment.' }, 409);
+        case 'finish':
+          return { userText: settled.turn.userText ?? '', finishFrom: settled.turn };
+        case 'resume':
+          return { userText: settled.turn.userText ?? '', finishFrom: null };
+      }
+    };
+
+    let carry: Carry | null = null;
     if (clientTurnId) {
-      let prior = await loadTurn(db, sessionId, clientTurnId);
-      if (prior.userText !== null && prior.assistantText === null) {
-        // The original may still be running; give it a moment to finish.
-        prior = await waitForTurnReply(db, sessionId, clientTurnId);
-      }
-      if (prior.assistantText !== null) {
+      const taken = await takeOverTurn(clientTurnId);
+      if (taken instanceof Response) {
         if (storagePath) background.push(discardAudio(db, storagePath));
-        const response = await replayTurn(prior, voice, perf);
-        scheduleBackground(background, () => perf.finish({ path: audioFile ? 'direct' : 'storage', replayed: true }));
-        return response;
+        return taken;
       }
-      // The original saved the user's words and then died -- carry on from there.
-      priorUserText = prior.userText;
+      carry = taken;
+      // The transcript is already on record, so the uploaded audio is redundant.
+      if (carry && storagePath) background.push(discardAudio(db, storagePath));
     }
 
-    let userText: string;
-    let backupStoragePath: string | null = null;
-    if (priorUserText !== null) {
-      userText = priorUserText;
-      if (storagePath) background.push(discardAudio(db, storagePath));
-    } else {
+    if (!carry) {
       let transcribed: TranscribeResult;
+      let backupStoragePath: string;
       if (audioFile) {
         const contentType = audioFile.type || 'audio/m4a';
-        const backupPath = `${user.id}/${sessionId}/${Date.now()}.m4a`;
-        backupStoragePath = backupPath;
+        backupStoragePath = `${userId}/${sessionId}/${Date.now()}.m4a`;
+        const backupPath = backupStoragePath;
         // The backup write and the transcription run concurrently -- the
         // backup is a safety net for the window between "we have the audio"
         // and "the transcript is durably saved" (see the discardAudio calls
@@ -246,9 +316,9 @@ Deno.serve(async (req) => {
           .from('recordings')
           .upload(backupPath, audioFile, { contentType })
           .then(({ error }) => {
-            if (error) console.warn('could not write turn audio backup', backupPath, error);
+            if (error) logError(`could not write turn audio backup ${backupPath}`, error);
           })
-          .catch((e) => console.warn('could not write turn audio backup', backupPath, e));
+          .catch((e) => logError(`could not write turn audio backup ${backupPath}`, e));
         [transcribed] = await Promise.all([transcribeAudio(audioFile, 'segment.m4a'), backupWrite]);
       } else {
         const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath!);
@@ -257,11 +327,10 @@ Deno.serve(async (req) => {
         backupStoragePath = storagePath!;
       }
       perf.mark('transcribe_done');
-      userText = transcribed.text.trim();
       if (transcribed.durationSeconds > 0 || transcribed.bytes > 0) {
         background.push(
           recordUsage(db, {
-            userId: user.id,
+            userId,
             eventType: 'transcribe',
             source: 'converse',
             sessionId,
@@ -270,42 +339,58 @@ Deno.serve(async (req) => {
           })
         );
       }
-    }
 
-    let assistantText: string;
-    let shouldEnd = false;
-    const actions: ConverseAction[] = [];
-    if (!userText) {
-      // Nothing was actually said -- there's no transcript to lose, so the
-      // audio is safe to discard right away (in the background -- nothing
-      // about the reply depends on the backup copy being gone yet).
-      if (backupStoragePath) background.push(discardAudio(db, backupStoragePath));
-      assistantText = NOTHING_HEARD_REPLY[profile?.locale === 'ko' ? 'ko' : 'en'];
-    } else {
-      if (priorUserText === null) {
-        // The user's own words are saved BEFORE the audio is discarded, not
-        // after: only once the transcript is durably on record is the audio
-        // actually redundant, and even then discarding it is deferred to the
-        // background (see `background` above).
-        const inserted = await insertMessage(db, sessionId, user.id, 'user', userText, clientTurnId ?? null);
-        if (inserted === 'duplicate' && clientTurnId) {
-          // Another request for this same turn got here first -- let it
-          // finish and replay its reply rather than running the turn twice.
-          if (backupStoragePath) background.push(discardAudio(db, backupStoragePath));
-          const other = await waitForTurnReply(db, sessionId, clientTurnId);
-          if (other.assistantText === null) throw new Error('This turn is already being handled -- try again in a moment.');
-          const response = await replayTurn(other, voice, perf);
-          scheduleBackground(background, () => perf.finish({ path: audioFile ? 'direct' : 'storage', replayed: true }));
-          return response;
-        }
-        if (backupStoragePath) background.push(discardAudio(db, backupStoragePath));
-        perf.mark('user_message_saved');
+      const userText = transcribed.text.trim();
+      if (!userText) {
+        // Nothing was actually said -- there's no transcript to lose, so the
+        // audio is safe to discard right away.
+        background.push(discardAudio(db, backupStoragePath));
+        const assistantText = NOTHING_HEARD_REPLY[profile?.locale === 'ko' ? 'ko' : 'en'];
+        const audioBase64 = await speak(assistantText);
+        perf.mark('tts_done');
+        scheduleBackground(background, () => perf.finish({ path: pathTag, nothingHeard: true }));
+        return json({ userText: '', assistantText, shouldEnd: false, audioBase64, turnId: perf.turnId, actions: [] });
       }
 
+      // The user's own words are saved BEFORE the audio is discarded: only
+      // once the transcript is durably on record is the audio redundant.
+      const inserted = await insertMessageRow(db, {
+        session_id: sessionId,
+        user_id: userId,
+        role: 'user',
+        content: userText,
+        client_turn_id: clientTurnId ?? null,
+      });
+      // Either way the words are on record now (ours, or the other request's).
+      background.push(discardAudio(db, backupStoragePath));
+      if (inserted === 'duplicate') {
+        // Another request for this same turn saved them first (only
+        // possible with a turnId -- that's the index that collided).
+        const taken = clientTurnId ? await takeOverTurn(clientTurnId) : null;
+        if (taken instanceof Response) return taken;
+        if (!taken) throw new Error('This turn is already being handled -- try again in a moment.');
+        carry = taken;
+      } else {
+        carry = { userText, finishFrom: null };
+        perf.mark('user_message_saved');
+      }
+    }
+
+    const actions: ConverseAction[] = [];
+    let assistantText: string;
+    let shouldEnd = false;
+    if (carry.finishFrom) {
+      // The request that ran this turn's tools died before replying. Confirm
+      // what it changed instead of running anything a second time.
+      const lang = replyLang(profile?.locale, [{ role: 'user', content: carry.userText }]);
+      assistantText = spokenForStoredTurn(carry.finishFrom, lang);
+      actions.push(...storedActions(carry.finishFrom));
+      perf.mark('finished_from_records');
+    } else {
       const toolContext: ToolContext = {
         db,
         callerClient,
-        userId: user.id,
+        userId,
         sessionId,
         timezone,
         turnId: perf.turnId,
@@ -318,59 +403,75 @@ Deno.serve(async (req) => {
       if (historyResult.error) throw historyResult.error;
       perf.mark('history_fetched');
 
-      const reply = await generateReply(
-        historyResult.data ?? [],
-        { aiName, userHonorific, locale: profile?.locale, timezone },
-        catalog,
-        toolContext,
-        actions,
-        perf
-      );
-      perf.mark('gpt_done');
-      assistantText = reply.reply;
-      shouldEnd = reply.end;
-      await insertMessage(db, sessionId, user.id, 'assistant', assistantText, clientTurnId ?? null);
-      if (shouldEnd) await insertMessage(db, sessionId, user.id, 'system', TURN_END_MARKER, clientTurnId ?? null);
-      if (reply.inputTokens > 0 || reply.outputTokens > 0) {
-        background.push(
-          recordUsage(db, {
-            userId: user.id,
-            eventType: 'gpt_completion',
-            source: 'converse',
-            sessionId,
-            inputTokens: reply.inputTokens,
-            outputTokens: reply.outputTokens,
-          })
+      const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
+      try {
+        const reply = await generateReply(
+          historyResult.data ?? [],
+          { aiName, userHonorific, locale: profile?.locale, timezone },
+          catalog,
+          toolContext,
+          actions,
+          usage,
+          Math.min(Date.now() + REPLY_DEADLINE_MS, hardDeadline - TTS_RESERVE_MS),
+          perf
         );
+        assistantText = reply.reply;
+        shouldEnd = reply.end;
+      } finally {
+        // Spent even when the turn then fails.
+        if (usage.inputTokens > 0 || usage.outputTokens > 0) {
+          background.push(
+            recordUsage(db, {
+              userId,
+              eventType: 'gpt_completion',
+              source: 'converse',
+              sessionId,
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+            })
+          );
+        }
       }
+      perf.mark('gpt_done');
     }
 
-    let audioBase64Reply: string;
     try {
-      audioBase64Reply = await synthesizeWithRetry(assistantText, voice);
+      const saved = await saveReply(db, {
+        sessionId,
+        userId,
+        turnId: clientTurnId ?? null,
+        text: assistantText,
+        meta: { v: 1, end: shouldEnd, actions },
+      });
+      if (saved === 'duplicate' && clientTurnId) {
+        if (actions.length === 0) {
+          // Another request for this turn finished first -- answer with what it stored.
+          return await replay(await loadTurn(db, sessionId, clientTurnId));
+        }
+        // Both ran (the other outlived its lease); this one's changes did
+        // happen, so report them rather than the other's reply.
+        console.warn('converse: two requests completed the same turn', perf.turnId);
+      }
     } catch (e) {
-      // Once something was actually changed, the turn must not fail: the
-      // user would repeat the command and add it twice. Return the reply
-      // text and the actions without audio -- the client moves on silently.
+      // Once something was changed, the turn must not fail: the user would
+      // repeat the command and do it twice.
       if (actions.length === 0) throw e;
-      console.error('converse TTS failed after a write:', e instanceof Error ? e.message : '');
-      audioBase64Reply = '';
+      logError('converse could not save the reply after a change:', e);
+    }
+
+    let audioBase64Reply = '';
+    try {
+      audioBase64Reply = await speak(assistantText);
+    } catch (e) {
+      // Same rule -- after a change, return the reply text and the actions
+      // without audio (the client plays a short confirmation sound instead).
+      if (actions.length === 0) throw e;
+      logError('converse TTS failed after a change:', e);
     }
     perf.mark('tts_done');
-    if (audioBase64Reply) {
-      background.push(
-        recordUsage(db, {
-          userId: user.id,
-          eventType: 'tts_synthesize',
-          source: 'converse',
-          sessionId,
-          ttsCharacters: assistantText.length,
-        })
-      );
-    }
 
     const response = json({
-      userText,
+      userText: carry.userText,
       assistantText,
       shouldEnd,
       audioBase64: audioBase64Reply,
@@ -379,103 +480,184 @@ Deno.serve(async (req) => {
     });
     perf.mark('response_ready');
     scheduleBackground(background, () =>
-      perf.finish({ path: audioFile ? 'direct' : 'storage', toolActions: actions.map((a) => a.type) })
+      perf.finish({ path: pathTag, toolActions: actions.map((a) => a.type), finishedFromRecords: !!carry?.finishFrom })
     );
     return response;
   } catch (e) {
-    console.error('converse failed:', e instanceof Error ? e.message.slice(0, 500) : '');
-    perf.finish({ path: audioFile ? 'direct' : 'storage', error: true });
+    logError('converse failed:', e);
+    scheduleBackground(background, () => perf.finish({ path: pathTag, error: true }));
     return json({ error: errorMessage(e, 'Something went wrong while talking to the AI.') }, 500);
   }
 });
+
+/** Code and message only -- never the user's words. */
+function logError(what: string, e: unknown): void {
+  const err = e as { code?: unknown; message?: unknown } | null;
+  const message = typeof err?.message === 'string' ? err.message.slice(0, 500) : '';
+  console.error(what, err?.code ?? '', message);
+}
 
 async function discardAudio(db: SupabaseClient, storagePath: string): Promise<void> {
   try {
     await db.storage.from('recordings').remove([storagePath]);
     await db.from('attachments').delete().eq('storage_path', storagePath);
   } catch (e) {
-    console.warn('could not discard turn audio', storagePath, e);
+    logError(`could not discard turn audio ${storagePath}`, e);
   }
 }
 
-/** Inserts one message row. 'duplicate' = this turn already has a row of that role (see messages_session_turn_role_idx). */
-async function insertMessage(
-  db: SupabaseClient,
-  sessionId: string,
-  userId: string,
-  role: 'user' | 'assistant' | 'system',
-  content: string,
-  clientTurnId: string | null
-): Promise<'inserted' | 'duplicate'> {
-  const { error } = await db
-    .from('messages')
-    .insert({ session_id: sessionId, user_id: userId, role, content, client_turn_id: clientTurnId });
-  if (!error) return 'inserted';
-  if (error.code === '23505' && clientTurnId && role !== 'system') return 'duplicate';
-  throw error;
-}
+// ── turn state (retries) ───────────────────────────────────────────────
 
 type StoredTurn = {
   userText: string | null;
+  /** When the user row was written (ms since the epoch) -- the start of the lease. */
+  userAt: number;
   assistantText: string | null;
-  end: boolean;
-  actions: ConverseAction[];
+  meta: TurnMeta | null;
+  /** The changes this turn made, oldest first. */
+  records: ActionRecord[];
+  undos: UndoRecord[];
 };
 
 /** What a turn (by its client turnId) already left in `messages`. */
-async function loadTurn(db: SupabaseClient, sessionId: string, clientTurnId: string): Promise<StoredTurn> {
+async function loadTurn(db: SupabaseClient, sessionId: string, turnId: string): Promise<StoredTurn> {
   const { data, error } = await db
     .from('messages')
-    .select('role, content')
+    .select('role, content, created_at')
     .eq('session_id', sessionId)
-    .eq('client_turn_id', clientTurnId)
+    .eq('client_turn_id', turnId)
     .order('position', { ascending: true });
   if (error) throw error;
-  const turn: StoredTurn = { userText: null, assistantText: null, end: false, actions: [] };
+  const turn: StoredTurn = { userText: null, userAt: 0, assistantText: null, meta: null, records: [], undos: [] };
   for (const row of data ?? []) {
-    if (row.role === 'user' && turn.userText === null) turn.userText = row.content;
-    else if (row.role === 'assistant' && turn.assistantText === null) turn.assistantText = row.content;
-    else if (row.role === 'system' && row.content === TURN_END_MARKER) turn.end = true;
-    else {
-      const record = parseActionRecord(row);
-      if (record) turn.actions.push({ type: record.type, label: record.label });
+    if (row.role === 'user') {
+      if (turn.userText === null) {
+        turn.userText = row.content;
+        const at = Date.parse(row.created_at);
+        // Unreadable: treat it as just written -- waiting too long is safe,
+        // taking over too early is not.
+        turn.userAt = Number.isFinite(at) ? at : Date.now();
+      }
+      continue;
+    }
+    if (row.role === 'assistant') {
+      if (turn.assistantText === null) turn.assistantText = row.content;
+      continue;
+    }
+    const meta = parseTurnMeta(row);
+    if (meta) {
+      turn.meta = meta;
+      continue;
+    }
+    const record = parseActionRecord(row);
+    if (record) {
+      turn.records.push(record);
+      continue;
+    }
+    const undo = parseUndoRecord(row);
+    if (undo) turn.undos.push(undo);
+  }
+  return turn;
+}
+
+type Settled =
+  | { kind: 'fresh' }
+  | { kind: 'busy' }
+  | { kind: 'replay' | 'finish' | 'resume'; turn: StoredTurn };
+
+/**
+ * Where a turn stands, waiting while another request may still be
+ * producing its reply: 'fresh' (nothing saved yet), 'replay' (reply
+ * stored), 'finish' (that request made changes and then died -- confirm
+ * them), 'resume' (it died having changed nothing -- reply from its saved
+ * words), or 'busy' (its lease hadn't lapsed by `giveUpAt`).
+ */
+async function settleTurn(db: SupabaseClient, sessionId: string, turnId: string, giveUpAt: number): Promise<Settled> {
+  let turn = await loadTurn(db, sessionId, turnId);
+  while (turn.userText !== null && turn.assistantText === null) {
+    const leaseEnd = turn.userAt + TURN_LEASE_MS;
+    const now = Date.now();
+    if (now >= leaseEnd) break;
+    if (now >= giveUpAt) return { kind: 'busy' };
+    await sleep(Math.min(TURN_POLL_MS, leaseEnd - now, giveUpAt - now));
+    turn = await loadTurn(db, sessionId, turnId);
+  }
+  if (turn.assistantText !== null) return { kind: 'replay', turn };
+  if (turn.userText === null) return { kind: 'fresh' };
+  if (turn.records.length > 0 || turn.undos.length > 0) return { kind: 'finish', turn };
+  return { kind: 'resume', turn };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+}
+
+/** The confirmation chips for a stored turn. */
+function storedActions(turn: StoredTurn): ConverseAction[] {
+  if (turn.meta) return turn.meta.actions;
+  return [
+    ...turn.undos.flatMap((u) => u.labels.map((label) => ({ type: 'undone', label }))),
+    ...turn.records
+      .filter((r) => !r.undone)
+      .map((r) =>
+        r.type === 'topic_filed' && r.topic_ids.length > 0
+          ? { type: r.type, label: r.label, newTopic: true }
+          : { type: r.type, label: r.label }
+      ),
+  ];
+}
+
+/** A spoken confirmation of what a stored turn changed (undo can only come before a turn's other changes). */
+function spokenForStoredTurn(turn: StoredTurn, lang: Lang): string {
+  const parts = [
+    ...turn.undos.map((u) => u.spoken?.[lang] || (lang === 'ko' ? '취소했어요.' : 'Done, I undid that.')),
+    spokenForRecords(turn.records.filter((r) => !r.undone))[lang],
+  ].filter(Boolean);
+  return parts.join(' ') || FALLBACK_REPLY[lang];
+}
+
+/**
+ * Saves the reply: first a '[turn-meta]' row (whether the turn ended the
+ * conversation, and its chips -- so a replay is exact), then the assistant
+ * row. 'duplicate' = another request already saved this turn's reply; this
+ * request's meta row is removed again.
+ */
+async function saveReply(
+  db: SupabaseClient,
+  row: { sessionId: string; userId: string; turnId: string | null; text: string; meta: TurnMeta }
+): Promise<'saved' | 'duplicate'> {
+  let metaId: string | null = null;
+  if (row.turnId) {
+    try {
+      const inserted = await insertMessageRow(db, {
+        session_id: row.sessionId,
+        user_id: row.userId,
+        role: 'system',
+        content: TURN_META_PREFIX + JSON.stringify(row.meta),
+        client_turn_id: row.turnId,
+      });
+      if (inserted !== 'duplicate') metaId = inserted.id;
+    } catch (e) {
+      // Only costs an exact replay (it falls back to the action log).
+      logError('converse could not save turn meta:', e);
     }
   }
-  return turn;
-}
-
-const TURN_WAIT_MS = 20_000;
-const TURN_POLL_MS = 1_000;
-
-/** Polls for another in-flight request for the same turn to store its reply. */
-async function waitForTurnReply(db: SupabaseClient, sessionId: string, clientTurnId: string): Promise<StoredTurn> {
-  let turn = await loadTurn(db, sessionId, clientTurnId);
-  for (let waited = 0; turn.assistantText === null && waited < TURN_WAIT_MS; waited += TURN_POLL_MS) {
-    await new Promise((resolve) => setTimeout(resolve, TURN_POLL_MS));
-    turn = await loadTurn(db, sessionId, clientTurnId);
-  }
-  return turn;
-}
-
-async function replayTurn(turn: StoredTurn, voice: string, perf: PerfTurn): Promise<Response> {
-  const assistantText = turn.assistantText ?? '';
-  let audioBase64 = '';
-  try {
-    audioBase64 = await synthesizeWithRetry(assistantText, voice);
-  } catch (e) {
-    console.error('converse replay TTS failed:', e instanceof Error ? e.message : '');
-  }
-  perf.mark('replay_ready');
-  return json({
-    userText: turn.userText ?? '',
-    assistantText,
-    shouldEnd: turn.end,
-    audioBase64,
-    turnId: perf.turnId,
-    actions: turn.actions,
-    replayed: true,
+  const inserted = await insertMessageRow(db, {
+    session_id: row.sessionId,
+    user_id: row.userId,
+    role: 'assistant',
+    content: row.text,
+    client_turn_id: row.turnId,
   });
+  if (inserted !== 'duplicate') return 'saved';
+  if (metaId) {
+    const { error } = await db.from('messages').delete().eq('id', metaId);
+    if (error) logError('converse could not remove a superseded turn meta:', error);
+  }
+  return 'duplicate';
 }
+
+// ── speech in / out ────────────────────────────────────────────────────
 
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
 
@@ -490,11 +672,12 @@ async function transcribeAudio(file: Blob, fileNameHint: string): Promise<Transc
   // actual duration, for usage measurement (see _shared/usage.ts).
   form.append('response_format', 'verbose_json');
 
-  const res = await fetch('https://api.openai.com/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${OPENAI_API_KEY}` },
-    body: form,
-  });
+  const res = await fetchWithTimeout(
+    'https://api.openai.com/v1/audio/transcriptions',
+    { method: 'POST', headers: { Authorization: `Bearer ${OPENAI_API_KEY}` }, body: form },
+    TRANSCRIBE_TIMEOUT_MS,
+    'Whisper transcription failed (timed out)'
+  );
   if (!res.ok) {
     const bodyText = await res.text();
     // A turn that got cut essentially right as it started reads to Whisper
@@ -505,7 +688,7 @@ async function transcribeAudio(file: Blob, fileNameHint: string): Promise<Transc
     if (res.status === 400 && /invalid file format|could not be decoded/i.test(bodyText)) {
       return { text: '', durationSeconds: 0, bytes: file.size };
     }
-    throw new Error(`Whisper transcription failed (${res.status}): ${bodyText}`);
+    throw new Error(`Whisper transcription failed (${res.status}): ${bodyText.slice(0, 300)}`);
   }
   const data = await res.json();
   return {
@@ -514,6 +697,65 @@ async function transcribeAudio(file: Blob, fileNameHint: string): Promise<Transc
     bytes: file.size,
   };
 }
+
+/** Tries twice, never past `deadline`. */
+async function synthesizeWithRetry(text: string, voice: string, deadline: number): Promise<string> {
+  try {
+    return await synthesizeSpeech(text, voice, Math.min(TTS_TIMEOUT_MS, deadline - Date.now()));
+  } catch (e) {
+    const left = deadline - Date.now();
+    if (left < 4_000) throw e;
+    return await synthesizeSpeech(text, voice, Math.min(TTS_TIMEOUT_MS, left));
+  }
+}
+
+async function synthesizeSpeech(text: string, voice: string, timeoutMs: number): Promise<string> {
+  if (timeoutMs < 1_000) throw new Error('Speech synthesis failed (no time left)');
+  const res = await fetchWithTimeout(
+    'https://api.openai.com/v1/audio/speech',
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'tts-1', voice, input: text, response_format: 'mp3' }),
+    },
+    timeoutMs,
+    'Speech synthesis failed (timed out)'
+  );
+  if (!res.ok) {
+    throw new Error(`Speech synthesis failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  }
+  const buffer = await res.arrayBuffer();
+  return arrayBufferToBase64(buffer);
+}
+
+/** fetch, aborted after `timeoutMs` -- including reading the body. */
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number, timeoutMessage: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    // Buffer the body inside the timeout too, so a stalled stream can't hang the turn.
+    const body = await res.arrayBuffer();
+    return new Response(body, { status: res.status, headers: res.headers });
+  } catch (e) {
+    if (controller.signal.aborted) throw new Error(timeoutMessage);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function arrayBufferToBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+// ── the reply ──────────────────────────────────────────────────────────
 
 // profiles.locale: 'auto' (default -- answer in whatever language the user
 // just spoke), or 'ko' / 'en' to always answer in that language.
@@ -550,7 +792,7 @@ Use a tool whenever the user asks about their tasks or anything they said or rec
 
 Names: always pass the EXACT existing topic or list name from the lists below, mapping how the user said it (a Korean rendering like "패밀리" for "Family", a near-spelling, a translation) to that exact name. Only ask for a NEW topic or list (create_new / create_new_list) when the user explicitly asked for a new one. If they ask for a new topic without saying its name ("새 토픽 만들어서 Business 아래에 넣어줘"), suggest a short name and ask before creating anything.
 
-After a change, confirm in ONE short sentence exactly what was done, so the user can simply say "취소해" if you misheard -- then call undo_last_action. Only claim something was done if the tool said so. Only undo when they clearly ask to cancel or undo.
+After a change, confirm in ONE short sentence exactly what was done. If the user then asks to cancel or undo it (e.g. "취소해"), call undo_last_action. Only claim something was done if the tool said so. Only undo when they clearly ask to cancel or undo.
 If a tool returns needs_confirmation or not_found, ask one short question (e.g. "Family 말씀이세요, 아니면 '패밀리'라는 새 토픽을 만들까요?") and do nothing else until they answer; then call the tool again with the existing name, or with the create_new / force flag the tool describes.
 When reading tasks or search results aloud, remember they may be driving: say how many there are and mention at most three, then offer to go on. Never read out long lists.
 For search_records: answer ONLY from what it returned, mentioning dates naturally ("9월 12일에 ..."). If nothing relevant came back, say so plainly and suggest other words to try -- never invent a past entry.
@@ -588,6 +830,8 @@ ${catalog.lists}`;
 // spoken answer.
 const MAX_TOOL_ROUNDS = 3;
 const ROUND_TIMEOUT_MS = 25_000;
+// Don't start a GPT round with less time than this left before the deadline.
+const MIN_ROUND_MS = 3_000;
 // Plenty for 1-2 spoken sentences or a handful of tool calls; bounds a runaway round.
 const ROUND_MAX_TOKENS = 500;
 
@@ -597,6 +841,7 @@ type ChatMessage =
   | { role: 'tool'; tool_call_id: string; content: string };
 type ToolCall = { id: string; type: 'function'; function: { name: string; arguments: string } };
 type Lang = 'ko' | 'en';
+type TokenUsage = { inputTokens: number; outputTokens: number };
 
 const FALLBACK_REPLY: Record<Lang, string> = {
   ko: '죄송해요, 방금은 제대로 처리하지 못했어요. 다시 한 번 말씀해 주시겠어요?',
@@ -613,11 +858,10 @@ function replyLang(locale: string | null | undefined, history: { role: string; c
   return /[가-힣]/.test(lastUserText) ? 'ko' : 'en';
 }
 
-async function chatRound(messages: ChatMessage[], toolsAllowed: boolean): Promise<Record<string, any>> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ROUND_TIMEOUT_MS);
-  try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+async function chatRound(messages: ChatMessage[], toolsAllowed: boolean, timeoutMs: number): Promise<Record<string, any>> {
+  const res = await fetchWithTimeout(
+    'https://api.openai.com/v1/chat/completions',
+    {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
@@ -630,15 +874,14 @@ async function chatRound(messages: ChatMessage[], toolsAllowed: boolean): Promis
         tool_choice: toolsAllowed ? 'auto' : 'none',
         max_completion_tokens: ROUND_MAX_TOKENS,
       }),
-      signal: controller.signal,
-    });
-    if (!res.ok) {
-      throw new Error(`AI reply failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
-    }
-    return await res.json();
-  } finally {
-    clearTimeout(timer);
+    },
+    timeoutMs,
+    'AI reply failed (timed out)'
+  );
+  if (!res.ok) {
+    throw new Error(`AI reply failed (${res.status}): ${(await res.text()).slice(0, 300)}`);
   }
+  return await res.json();
 }
 
 const ASKS_USER = new Set(['needs_confirmation', 'not_found', 'not_possible']);
@@ -649,9 +892,11 @@ const ASKS_USER = new Set(['needs_confirmation', 'not_found', 'not_possible']);
  * use costs exactly one GPT call, as before. A round made up entirely of
  * completed writes is confirmed from server-side templates instead of a
  * second GPT call -- faster, and it can never claim something that didn't
- * happen. Once any write has succeeded, later failures fall back to those
- * templates rather than failing the turn (the user would otherwise repeat
- * the command and add it twice).
+ * happen. Once any write has succeeded, later failures (or running out of
+ * time) fall back to those templates rather than failing the turn -- the
+ * user would otherwise repeat the command and do it twice.
+ *
+ * `usage` is filled in as rounds complete, so it's accurate even if this throws.
  */
 async function generateReply(
   history: { role: string; content: string }[],
@@ -659,8 +904,10 @@ async function generateReply(
   catalog: { topics: string; lists: string },
   toolContext: ToolContext,
   actions: ConverseAction[],
+  usage: TokenUsage,
+  deadline: number,
   perf: PerfTurn
-): Promise<{ reply: string; end: boolean; inputTokens: number; outputTokens: number }> {
+): Promise<{ reply: string; end: boolean }> {
   const messages: ChatMessage[] = [
     { role: 'system', content: buildSystemPrompt(opts, describeActionLog(history), catalog) },
     ...history
@@ -671,24 +918,26 @@ async function generateReply(
   const spoken: SpokenConfirmation[] = [];
   const confirmAll = () => spoken.map((c) => c[lang]).join(' ');
 
-  let inputTokens = 0;
-  let outputTokens = 0;
   let end = false;
+  let closingLine = '';
   let reply = '';
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const toolsAllowed = round < MAX_TOOL_ROUNDS;
     let data: Record<string, any>;
     try {
-      data = await chatRound(messages, toolsAllowed);
+      const timeLeft = deadline - Date.now();
+      if (timeLeft < MIN_ROUND_MS) throw new Error('AI reply failed (timed out)');
+      data = await chatRound(messages, toolsAllowed, Math.min(ROUND_TIMEOUT_MS, timeLeft));
     } catch (e) {
-      if (spoken.length === 0) throw e;
-      console.error('converse GPT round failed after a write:', e instanceof Error ? e.message : '');
-      reply = confirmAll();
+      // Nothing changed and no goodbye owed: the turn fails and the user repeats it.
+      if (spoken.length === 0 && !end) throw e;
+      logError('converse GPT round failed after tools ran:', e);
+      reply = [confirmAll(), end ? closingLine || CANNED_CLOSING[lang] : ''].filter(Boolean).join(' ');
       break;
     }
-    inputTokens += typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0;
-    outputTokens += typeof data.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0;
+    usage.inputTokens += typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0;
+    usage.outputTokens += typeof data.usage?.completion_tokens === 'number' ? data.usage.completion_tokens : 0;
     perf.mark(`gpt_round_${round}`);
 
     const choice = data.choices?.[0];
@@ -703,24 +952,24 @@ async function generateReply(
       break;
     }
 
-    const endCall = toolCalls.find((c) => c.function?.name === 'end_conversation') ?? null;
+    const endCalls = toolCalls.filter((c) => c.function?.name === 'end_conversation');
     const otherCalls = toolCalls.filter((c) => c.function?.name !== 'end_conversation');
 
     // The most common ending: nothing else to do, so the closing line from
     // the call itself IS the reply -- no extra round.
-    if (endCall && otherCalls.length === 0) {
+    if (endCalls.length > 0 && otherCalls.length === 0) {
       end = true;
-      reply = parseClosingLine(endCall.function?.arguments) || content || CANNED_CLOSING[lang];
+      reply = parseClosingLine(endCalls[0].function?.arguments) || content || CANNED_CLOSING[lang];
       break;
     }
 
+    // Every tool call gets exactly one tool message back, or the next round is rejected.
     messages.push({ role: 'assistant', content: typeof message.content === 'string' ? message.content : null, tool_calls: toolCalls });
     const roundSpoken: SpokenConfirmation[] = [];
     let everyCallCompletedAWrite = true;
     let questionPending = false;
     const seen = new Set<string>();
-    for (const call of toolCalls) {
-      if (call === endCall) continue;
+    for (const call of otherCalls) {
       const name = call.function?.name ?? '';
       const dedupeKey = `${name}\u0000${call.function?.arguments ?? ''}`;
       if (seen.has(dedupeKey)) {
@@ -738,31 +987,33 @@ async function generateReply(
       }
       if (ASKS_USER.has(String(outcome.result.status)) || 'error' in outcome.result) questionPending = true;
     }
+    // A question keeps the conversation open, even if an earlier round agreed to end it.
+    if (questionPending) {
+      end = false;
+      closingLine = '';
+    }
 
-    if (endCall) {
-      if (questionPending) {
+    endCalls.forEach((endCall, i) => {
+      let result: Record<string, unknown>;
+      if (i > 0) {
+        result = { status: 'duplicate_ignored' };
+      } else if (questionPending) {
         // Ending now would ask a question the user never gets to answer.
-        messages.push({
-          role: 'tool',
-          tool_call_id: endCall.id,
-          content: JSON.stringify({
-            status: 'deferred',
-            reason: 'Another tool in this turn needs an answer from the user. Ask it; the conversation stays open, so do not say goodbye.',
-          }),
-        });
+        result = {
+          status: 'deferred',
+          reason: 'Another tool in this turn needs an answer from the user. Ask it; the conversation stays open, so do not say goodbye.',
+        };
       } else {
         end = true;
-        messages.push({
-          role: 'tool',
-          tool_call_id: endCall.id,
-          content: JSON.stringify({ status: 'ok', note: 'The conversation ends and is saved right after this reply.' }),
-        });
+        closingLine = parseClosingLine(endCall.function?.arguments);
+        result = { status: 'ok', note: 'The conversation ends and is saved right after this reply.' };
       }
-    }
+      messages.push({ role: 'tool', tool_call_id: endCall.id, content: JSON.stringify(result) });
+    });
     perf.mark(`tools_round_${round}`);
 
     if (everyCallCompletedAWrite && roundSpoken.length > 0) {
-      const closing = end && endCall ? parseClosingLine(endCall.function?.arguments) || CANNED_CLOSING[lang] : '';
+      const closing = end ? closingLine || CANNED_CLOSING[lang] : '';
       reply = [roundSpoken.map((c) => c[lang]).join(' '), closing].filter(Boolean).join(' ');
       break;
     }
@@ -770,7 +1021,7 @@ async function generateReply(
 
   reply = unwrapJsonReply(reply);
   if (!reply) reply = spoken.length > 0 ? confirmAll() : end ? CANNED_CLOSING[lang] : FALLBACK_REPLY[lang];
-  return { reply, end, inputTokens, outputTokens };
+  return { reply, end };
 }
 
 function parseClosingLine(rawArgs: string | undefined): string {
@@ -792,51 +1043,6 @@ function unwrapJsonReply(text: string): string {
   } catch {
     return trimmed;
   }
-}
-
-/** The canonical IANA name for a timezone, or null. Only region names ("Asia/Seoul") and "UTC" -- no raw offsets. */
-function canonicalTimeZone(tz: unknown): string | null {
-  if (typeof tz !== 'string' || !tz || tz.length > 64) return null;
-  try {
-    const resolved = new Intl.DateTimeFormat('en-US', { timeZone: tz }).resolvedOptions().timeZone;
-    return resolved === 'UTC' || resolved.includes('/') ? resolved : null;
-  } catch {
-    return null;
-  }
-}
-
-async function synthesizeWithRetry(text: string, voice: string): Promise<string> {
-  try {
-    return await synthesizeSpeech(text, voice);
-  } catch {
-    return await synthesizeSpeech(text, voice);
-  }
-}
-
-async function synthesizeSpeech(text: string, voice: string): Promise<string> {
-  const res = await fetch('https://api.openai.com/v1/audio/speech', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ model: 'tts-1', voice, input: text, response_format: 'mp3' }),
-  });
-  if (!res.ok) {
-    throw new Error(`Speech synthesis failed (${res.status}): ${await res.text()}`);
-  }
-  const buffer = await res.arrayBuffer();
-  return arrayBufferToBase64(buffer);
-}
-
-function arrayBufferToBase64(buffer: ArrayBuffer): string {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-  }
-  return btoa(binary);
 }
 
 function json(body: unknown, status = 200): Response {

@@ -19,7 +19,14 @@
 // create-on-no-match would pile up duplicates.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
-import { ACTION_PREFIX, parseActionRecord, type ActionRecord } from '../_shared/actionLog.ts';
+import {
+  ACTION_PREFIX,
+  insertMessageRow,
+  parseActionRecord,
+  UNDO_PREFIX,
+  type ActionRecord,
+  type UndoRecord,
+} from '../_shared/actionLog.ts';
 import { closestNames, findSimilarName } from '../_shared/nameMatch.ts';
 import { formatHits, searchRecords, splitKeywords } from '../_shared/recordSearch.ts';
 
@@ -36,8 +43,12 @@ export type ToolContext = {
   undoUsed: boolean;
 };
 
-/** A write the AI made this turn, for the client's on-screen confirmation chips. */
-export type ConverseAction = { type: string; label: string };
+/**
+ * A write the AI made this turn, for the client's on-screen confirmation
+ * chips. `newTopic`: a filing that also created the topic (which, unlike
+ * the filing itself, outlives discarding the conversation).
+ */
+export type ConverseAction = { type: string; label: string; newTopic?: boolean };
 
 /** What to say for a completed write when no further GPT round is needed. */
 export type SpokenConfirmation = { ko: string; en: string };
@@ -170,8 +181,8 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'undo_last_action',
       description:
-        'Undo the changes you made in the user\'s previous turn (tasks added, topics filed or created) -- only when they explicitly ask to cancel/undo it ("취소해", "방금 거 취소", "undo that"). confirm: true only after they confirmed undoing a change from further back that you asked them about.',
-      parameters: obj({ confirm: { type: 'boolean' } }),
+        'Undo a change you made earlier in this conversation (a task added, a topic filed or created) -- only when the user explicitly asks to cancel/undo it ("취소해", "방금 거 취소", "아까 Esther 토픽 취소해줘", "undo that"). With no target, it undoes the previous turn\'s changes. target: the task title or topic name they named, if they named one. confirm: true only after they confirmed undoing a change you asked them about.',
+      parameters: obj({ target: { type: 'string' }, confirm: { type: 'boolean' } }),
     },
   },
   {
@@ -184,8 +195,6 @@ export const TOOL_DEFINITIONS = [
     },
   },
 ];
-
-export { ACTION_PREFIX, TURN_END_MARKER, parseActionRecord } from '../_shared/actionLog.ts';
 
 export async function executeTool(
   ctx: ToolContext,
@@ -287,16 +296,24 @@ function spokenDue(due: string, today: string): SpokenConfirmation {
 
 async function recordAction(ctx: ToolContext, record: Omit<ActionRecord, 'v' | 'undone' | 'turn_id'>): Promise<void> {
   const full: ActionRecord = { v: 1, ...record, turn_id: ctx.turnId, undone: false };
-  const { error } = await ctx.db.from('messages').insert({
-    session_id: ctx.sessionId,
-    user_id: ctx.userId,
-    role: 'system',
-    content: ACTION_PREFIX + JSON.stringify(full),
-    client_turn_id: ctx.turnId,
-  });
-  // The write itself already succeeded -- report it as done either way; a
-  // missing log row only means undo/process-session can't see this one.
-  if (error) console.error('converse could not record action:', error.code ?? '', error.message ?? '');
+  try {
+    await insertMessageRow(ctx.db, {
+      session_id: ctx.sessionId,
+      user_id: ctx.userId,
+      role: 'system',
+      content: ACTION_PREFIX + JSON.stringify(full),
+      client_turn_id: ctx.turnId,
+    });
+  } catch (e) {
+    // The write itself already succeeded -- report it as done either way; a
+    // missing log row only means undo/process-session can't see this one.
+    logDbError('converse could not record action:', e);
+  }
+}
+
+function logDbError(what: string, e: unknown): void {
+  const err = e as { code?: unknown; message?: unknown } | null;
+  console.error(what, err?.code ?? '', typeof err?.message === 'string' ? err.message : '');
 }
 
 // ── reads ───────────────────────────────────────────────────────────────
@@ -385,17 +402,6 @@ async function listTasks(ctx: ToolContext, args: Record<string, unknown>) {
     return q;
   };
 
-  let query = base();
-  if (scope === 'today') query = query.lte('due_date', today);
-  else if (scope === 'overdue') query = query.lt('due_date', today);
-  else if (scope === 'upcoming') query = query.gte('due_date', today).lte('due_date', addDays(today, 7));
-  else if (scope === 'starred') query = query.eq('starred', true);
-  const { data, count, error } = await query
-    .order('due_date', { ascending: true, nullsFirst: false })
-    .order('created_at', { ascending: false })
-    .limit(MAX_TASKS_RETURNED);
-  if (error) throw error;
-
   const describeDue = (due: string | null): string | null => {
     if (!due) return null;
     if (due < today) return `overdue (was due ${due})`;
@@ -411,32 +417,61 @@ async function listTasks(ctx: ToolContext, args: Record<string, unknown>) {
       starred: t.starred === true,
     }));
 
+  if (scope === 'today') {
+    // Due today and overdue separately, today first -- ordered together,
+    // a backlog of old overdue tasks would push today's out of view.
+    const [dueToday, overdue] = await Promise.all([
+      base().eq('due_date', today).order('created_at', { ascending: false }).limit(5),
+      base().lt('due_date', today).order('due_date', { ascending: false }).limit(5),
+    ]);
+    if (dueToday.error) throw dueToday.error;
+    if (overdue.error) throw overdue.error;
+    const result: Record<string, unknown> = {
+      scope,
+      today,
+      due_today_total: dueToday.count ?? 0,
+      due_today: shape((dueToday.data ?? []) as TaskRowLite[]),
+      overdue_total: overdue.count ?? 0,
+      overdue: shape((overdue.data ?? []) as TaskRowLite[]),
+      note: "Lead with what's due today; mention overdue ones after that.",
+    };
+    // Most tasks come out of recordings without a due date, so "what's on
+    // for today?" would often be "nothing" -- offer what IS there.
+    if ((dueToday.count ?? 0) === 0 && (overdue.count ?? 0) === 0) {
+      const [starred, undated] = await Promise.all([
+        base().eq('starred', true).order('created_at', { ascending: false }).limit(3),
+        base().is('due_date', null).order('created_at', { ascending: false }).limit(3),
+      ]);
+      if (starred.error) throw starred.error;
+      if (undated.error) throw undated.error;
+      result.nothing_due_today = true;
+      result.starred = shape((starred.data ?? []) as TaskRowLite[]);
+      result.starred_total = starred.count ?? 0;
+      result.recent_without_due_date = shape((undated.data ?? []) as TaskRowLite[]);
+      result.without_due_date_total = undated.count ?? 0;
+      result.note = 'Nothing is due today. Say so, then mention the starred ones (if any) or offer the most recent open tasks.';
+    }
+    return result;
+  }
+
+  let query = base();
+  if (scope === 'overdue') query = query.lt('due_date', today);
+  else if (scope === 'upcoming') query = query.gte('due_date', today).lte('due_date', addDays(today, 7));
+  else if (scope === 'starred') query = query.eq('starred', true);
+  const { data, count, error } = await query
+    .order('due_date', { ascending: true, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .limit(MAX_TASKS_RETURNED);
+  if (error) throw error;
+
   const rows = (data ?? []) as TaskRowLite[];
-  const result: Record<string, unknown> = {
+  return {
     scope,
     today,
     total: count ?? rows.length,
     shown: rows.length,
     tasks: shape(rows),
   };
-
-  // Most tasks come out of recordings without a due date, so "what's on
-  // for today?" would nearly always be "nothing" -- offer what IS there.
-  if (scope === 'today' && rows.length === 0) {
-    const [starred, undated] = await Promise.all([
-      base().eq('starred', true).order('created_at', { ascending: false }).limit(3),
-      base().is('due_date', null).order('created_at', { ascending: false }).limit(3),
-    ]);
-    if (starred.error) throw starred.error;
-    if (undated.error) throw undated.error;
-    result.nothing_due_today = true;
-    result.starred = shape((starred.data ?? []) as TaskRowLite[]);
-    result.starred_total = starred.count ?? 0;
-    result.recent_without_due_date = shape((undated.data ?? []) as TaskRowLite[]);
-    result.without_due_date_total = undated.count ?? 0;
-    result.note = 'Nothing is due today. Say so, then mention the starred ones (if any) or offer the most recent open tasks.';
-  }
-  return result;
 }
 
 async function searchRecordsTool(ctx: ToolContext, args: Record<string, unknown>) {
@@ -510,7 +545,7 @@ async function resolveList(
     });
   }
   if (!forceNew) {
-    const similar = findSimilarName(lists, name);
+    const similar = findSimilarName(lists, name, { shortNames: true });
     if (similar) {
       return ask({
         status: 'needs_confirmation',
@@ -602,7 +637,7 @@ async function resolveTopic(
       });
     }
     if (!forceNew) {
-      const similar = findSimilarName(siblings, name);
+      const similar = findSimilarName(siblings, name, { shortNames: true });
       if (similar) return similarTopicAsk(`${parent.name} · ${name}`, `${parent.name} · ${similar.name}`);
     }
     const child = await insertTopic(ctx, name, parent.id);
@@ -613,10 +648,15 @@ async function resolveTopic(
   if (exactTop) return { status: 'ok', row: exactTop, display: exactTop.name, createdIds: [] };
 
   const childMatches = topics.filter((t) => t.parent_topic_id && sameName(t.name, name));
-  if (childMatches.length === 1) {
+  // Asked for a NEW top-level topic whose name a sub-topic already uses:
+  // check with the user first (force_new then creates it alongside).
+  if (childMatches.length > 0 && mayCreate && !forceNew) {
+    return similarTopicAsk(name, topicDisplay(childMatches[0], topics));
+  }
+  if (childMatches.length === 1 && !mayCreate) {
     return { status: 'ok', row: childMatches[0], display: topicDisplay(childMatches[0], topics), createdIds: [] };
   }
-  if (childMatches.length > 1) {
+  if (childMatches.length > 1 && !mayCreate) {
     return ask({
       status: 'needs_confirmation',
       reason: 'ambiguous_topic',
@@ -635,7 +675,7 @@ async function resolveTopic(
     });
   }
   if (!forceNew) {
-    const similar = findSimilarName(topics, name);
+    const similar = findSimilarName(topics, name, { shortNames: true });
     if (similar) return similarTopicAsk(name, topicDisplay(similar, topics));
   }
   const created = await insertTopic(ctx, name, null);
@@ -742,6 +782,17 @@ async function fileUnderTopic(ctx: ToolContext, args: Record<string, unknown>, a
     .eq('topic_id', resolved.row.id)
     .maybeSingle();
   if (linkLookupError) throw linkLookupError;
+  if (existingLink && resolved.createdIds.length === 0) {
+    // Nothing to change -- and nothing to log, so a later undo targets the
+    // turn that actually filed it.
+    return {
+      result: { status: 'already_filed', topic: resolved.display },
+      confirmation: {
+        ko: `이미 '${resolved.display}' 토픽에 들어가 있어요.`,
+        en: `This is already filed under ${resolved.display}.`,
+      },
+    };
+  }
   let linkAdded = false;
   if (!existingLink) {
     const { error: linkError } = await ctx.db
@@ -762,7 +813,7 @@ async function fileUnderTopic(ctx: ToolContext, args: Record<string, unknown>, a
     list_ids: [],
     linked_topic_id: linkAdded ? resolved.row.id : null,
   });
-  actions.push({ type: 'topic_filed', label });
+  actions.push(createdNew ? { type: 'topic_filed', label, newTopic: true } : { type: 'topic_filed', label });
   return {
     result: {
       status: 'filed',
@@ -859,57 +910,118 @@ async function revertRecord(ctx: ToolContext, record: ActionRecord): Promise<voi
   }
 }
 
+/** Spoken confirmation of changes already made -- for a turn finished without another GPT round. */
+export function spokenForRecords(records: ActionRecord[]): SpokenConfirmation {
+  const ko: string[] = [];
+  const en: string[] = [];
+  for (const r of records) {
+    if (r.type === 'task_created') {
+      ko.push(`'${r.subject}' 할 일로 추가했어요.`);
+      en.push(`Added '${r.subject}'.`);
+    } else if (r.type === 'topic_filed') {
+      ko.push(`'${r.subject}' 토픽에 넣었어요.`);
+      en.push(`Filed this under ${r.subject}.`);
+    } else {
+      ko.push(`'${r.subject}' 토픽을 만들었어요.`);
+      en.push(`Created the topic ${r.subject}.`);
+    }
+  }
+  return { ko: ko.join(' '), en: en.join(' ') };
+}
+
+function undoPhrases(records: ActionRecord[]): SpokenConfirmation {
+  const ko = records.map((r) =>
+    r.type === 'task_created' ? `'${r.subject}' 할 일` : r.type === 'topic_filed' ? `'${r.subject}' 토픽에 넣은 것` : `'${r.subject}' 토픽`
+  );
+  const en = records.map((r) =>
+    r.type === 'task_created' ? `the task '${r.subject}'` : r.type === 'topic_filed' ? `filing this under ${r.subject}` : `the topic ${r.subject}`
+  );
+  return { ko: `${ko.join(', ')} 취소했어요.`, en: `Undid ${en.join(' and ')}.` };
+}
+
+function subjectMatches(subject: string, target: string): boolean {
+  const a = subject.trim().toLowerCase();
+  const b = target.trim().toLowerCase();
+  return !!b && (a === b || a.includes(b) || b.includes(a) || a.split('·').some((part) => part.trim() === b));
+}
+
 /**
- * Reverts every change from the most recent EARLIER turn that made any
- * (never the current turn's own writes). Without confirmation this only
- * reaches back to the immediately previous turn -- older than that, it
- * describes what it would undo and lets the AI ask first.
+ * Reverts a change from an EARLIER turn of this conversation -- never the
+ * current turn's own writes, and never in a turn that has already made a
+ * change (that would silently take back something else). With no target,
+ * it's the most recent earlier turn that changed anything; with one, the
+ * most recent change matching it. Anything older than the previous turn
+ * needs the user's confirmation first.
  */
 async function undoLastAction(ctx: ToolContext, args: Record<string, unknown>, actions: ConverseAction[]): Promise<ToolOutcome> {
   if (ctx.undoUsed) return { result: { error: 'Already undid something this turn -- only one undo per turn.' } };
+  if (actions.some((a) => a.type !== 'undone')) {
+    return {
+      result: {
+        error:
+          'This turn already made a change, so undo is not available until the next turn. If the user wants that change taken back, they can say so next.',
+      },
+    };
+  }
 
   const { data: rows, error } = await ctx.db
     .from('messages')
-    .select('id, role, content, position, client_turn_id')
+    .select('id, role, content, position')
     .eq('session_id', ctx.sessionId)
     .eq('user_id', ctx.userId)
     .in('role', ['user', 'system'])
     .order('position', { ascending: false })
-    .limit(200);
+    .limit(300);
   if (error) throw error;
 
-  // Newest first. Find the latest not-undone action from an earlier turn,
-  // then gather every not-undone action of that same turn.
-  let targetTurn: string | null = null;
-  const group: { id: string; position: number; record: ActionRecord }[] = [];
+  // Newest first: every not-yet-undone change from an earlier turn.
+  const candidates: { id: string; position: number; record: ActionRecord }[] = [];
   for (const row of rows ?? []) {
     const record = parseActionRecord(row);
-    if (!record || record.undone || record.turn_id === ctx.turnId) continue;
-    if (targetTurn === null) targetTurn = record.turn_id;
-    if (record.turn_id === targetTurn) group.push({ id: row.id, position: row.position, record });
+    if (record && !record.undone && record.turn_id !== ctx.turnId) candidates.push({ id: row.id, position: row.position, record });
   }
-  if (group.length === 0) {
+  if (candidates.length === 0) {
     return { result: { status: 'nothing_to_undo', note: 'You have not changed anything earlier in this conversation.' } };
+  }
+
+  const target = str(args.target);
+  let group: typeof candidates;
+  if (target) {
+    const match = candidates.find((c) => subjectMatches(c.record.subject, target));
+    if (!match) {
+      return {
+        result: {
+          status: 'not_found',
+          requested: target,
+          recent_changes: candidates.slice(0, 3).map((c) => c.record.label),
+          instruction: 'Nothing was undone. Tell the user briefly which recent changes there are and ask which one they mean.',
+        },
+      };
+    }
+    group = candidates.filter((c) => c.record.turn_id === match.record.turn_id && subjectMatches(c.record.subject, target));
+  } else {
+    const latestTurn = candidates[0].record.turn_id;
+    group = candidates.filter((c) => c.record.turn_id === latestTurn);
   }
 
   const groupEnd = Math.max(...group.map((g) => g.position));
   const userTurnsSince = (rows ?? []).filter((r) => r.role === 'user' && r.position > groupEnd).length;
-  // 1 = only the current turn's own words came after it, i.e. it was the previous turn.
+  // 1 = only the current turn's own words came after it: it was the previous turn.
   if (userTurnsSince > 1 && args.confirm !== true) {
     return {
       result: {
         status: 'needs_confirmation',
-        reason: 'last_change_is_older',
-        last_change: group.map((g) => g.record.label),
+        reason: 'change_is_older',
+        would_undo: group.map((g) => g.record.label),
         turns_ago: userTurnsSince - 1,
         instruction:
-          'Nothing was undone. Tell the user what the most recent change was and ask if they want that undone; if yes, call undo_last_action again with confirm true.',
+          'Nothing was undone yet. Tell the user what would be undone and ask them to confirm; if they do, call undo_last_action again with the same target and confirm true.',
       },
     };
   }
 
   ctx.undoUsed = true;
-  // Oldest first within the turn is irrelevant for deletes; newest first is safest for topics.
+  // Newest first, so a sub-topic goes before a parent created alongside it.
   const ordered = [...group].sort((a, b) => b.position - a.position);
   for (const g of ordered) {
     await revertRecord(ctx, g.record);
@@ -920,10 +1032,26 @@ async function undoLastAction(ctx: ToolContext, args: Record<string, unknown>, a
     if (markError) throw markError;
   }
 
-  const labels = group.map((g) => g.record.label);
-  for (const l of labels) actions.push({ type: 'undone', label: `Undone: ${l}` });
+  const records = group.map((g) => g.record);
+  const undoneLabels = records.map((r) => `Undone: ${r.label}`);
+  const spoken = undoPhrases(records);
+  // Tag this turn as having undone something, so a retried request for it
+  // confirms this undo instead of undoing the next-older change as well.
+  const undoRecord: UndoRecord = { v: 1, turn_id: ctx.turnId, labels: undoneLabels, spoken };
+  try {
+    await insertMessageRow(ctx.db, {
+      session_id: ctx.sessionId,
+      user_id: ctx.userId,
+      role: 'system',
+      content: UNDO_PREFIX + JSON.stringify(undoRecord),
+      client_turn_id: ctx.turnId,
+    });
+  } catch (e) {
+    logDbError('converse could not record undo:', e);
+  }
+  for (const label of undoneLabels) actions.push({ type: 'undone', label });
   return {
-    result: { status: 'undone', what: labels },
-    confirmation: { ko: '방금 한 거 취소했어요.', en: 'Okay, I undid that.' },
+    result: { status: 'undone', what: records.map((r) => r.label) },
+    confirmation: spoken,
   };
 }

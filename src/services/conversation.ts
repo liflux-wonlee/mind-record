@@ -1,5 +1,6 @@
 import { describeFunctionError } from '@/lib/functionsError';
 import { supabase } from '@/lib/supabase';
+import { deviceTimeZone } from '@/lib/timezone';
 import { appendFilePart } from '@/services/recordings';
 
 export type ConverseResult = {
@@ -16,7 +17,11 @@ export type ConverseResult = {
   actions?: ConverseAction[];
 };
 
-export type ConverseAction = { type: string; label: string };
+/**
+ * type: 'task_created' | 'topic_filed' | 'topic_created' | 'undone'.
+ * newTopic: a topic_filed that also created the topic.
+ */
+export type ConverseAction = { type: string; label: string; newTopic?: boolean };
 
 /**
  * Sends one turn's audio to the `converse` Edge Function: it transcribes
@@ -24,8 +29,8 @@ export type ConverseAction = { type: string; label: string };
  * context, and synthesizes the reply as speech.
  *
  * `audio: { uri, mimeType }` sends the segment directly as multipart
- * (`FormData`, RN's `{ uri, name, type }` file part -- streamed from disk
- * by the native layer, never loaded into a JS string) so the function can
+ * (`FormData` with a Blob file part read from the local file -- see
+ * appendFilePart in src/services/recordings.ts) so the function can
  * start transcribing without a round trip to Storage and back first -- see
  * src/lib/featureFlags.ts. A giant base64 string inlined into a JSON body
  * was tried first and turned out to fail outright on-device (the request
@@ -34,15 +39,6 @@ export type ConverseAction = { type: string; label: string };
  * recording too large to inline or with the flag off (an attachment
  * already uploaded via src/services/recordings.ts's uploadRecording).
  */
-/** The device's IANA timezone (e.g. "America/New_York") -- converse needs it to know what "today" means for the user. */
-function deviceTimeZone(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function converseTurn(
   sessionId: string,
   audio: { storagePath: string } | { uri: string; mimeType: string },

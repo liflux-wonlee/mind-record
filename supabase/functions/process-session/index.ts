@@ -20,6 +20,7 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.1
 import { errorMessage } from '../_shared/errorMessage.ts';
 import { parseActionRecord, type ActionRecord } from '../_shared/actionLog.ts';
 import { findSimilarName } from '../_shared/nameMatch.ts';
+import { localDay, resolveUserTimeZone } from '../_shared/timezone.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -103,8 +104,11 @@ Deno.serve(async (req) => {
   }
 
   let sessionId: string | undefined;
+  // The device's IANA timezone (src/lib/timezone.ts) -- what "today" and
+  // "내일" meant when the recording was made.
+  let deviceTimezone: unknown;
   try {
-    ({ sessionId } = await req.json());
+    ({ sessionId, timezone: deviceTimezone } = await req.json());
   } catch {
     // handled by the missing-sessionId check below
   }
@@ -339,28 +343,56 @@ Deno.serve(async (req) => {
 
     // What the user had the voice assistant do live, and what they then
     // undid -- saving the conversation must neither redo the undone nor
-    // lose the done.
+    // lose the done. Something undone and then done again live counts as done.
     const undone = actionRecords.filter((r) => r.undone);
     const live = actionRecords.filter((r) => !r.undone);
-    const undoneTaskTitles = new Set(undone.filter((r) => r.type === 'task_created').map((r) => normalizeTaskTitle(r.subject)));
-    // A topic the user created by voice and then undid: never re-create it.
-    const undoneCreatedTopicNames = new Set(
-      undone.filter((r) => r.topic_ids.length > 0).flatMap((r) => topicNameVariants(r.subject))
+    const liveTaskTitles = new Set(live.filter((r) => r.type === 'task_created').map((r) => normalizeTaskTitle(r.subject)));
+    const liveTopicKeys = new Set(live.filter((r) => r.type !== 'task_created').map((r) => normalizeTopicKey(r.subject)));
+    const liveTopicIds = new Set(live.flatMap((r) => [...r.topic_ids, ...(r.linked_topic_id ? [r.linked_topic_id] : [])]));
+
+    const undoneTaskTitles = new Set(
+      undone
+        .filter((r) => r.type === 'task_created')
+        .map((r) => normalizeTaskTitle(r.subject))
+        .filter((key) => !liveTaskTitles.has(key))
     );
-    // A filing the user undid: don't file the conversation there after all.
-    const undoneFiledTopicNames = new Set(
-      undone.filter((r) => r.type === 'topic_filed').flatMap((r) => topicNameVariants(r.subject))
-    );
+    // Topics the user created by voice and then undid (undo deleted them):
+    // never re-create them. Keyed by full display name ("business · liflux"),
+    // plus the parent's own name when that record created the parent too.
+    const undoneCreatedTopics = new Set<string>();
+    for (const r of undone) {
+      if (r.topic_ids.length === 0) continue;
+      const key = normalizeTopicKey(r.subject);
+      if (!liveTopicKeys.has(key)) undoneCreatedTopics.add(key);
+      const parts = r.subject.split('·').map((p) => normalizeTopicKey(p));
+      if (parts.length > 1 && r.topic_ids.length > 1 && !liveTopicKeys.has(parts[0])) undoneCreatedTopics.add(parts[0]);
+    }
+    // Filings into a topic that still exists, which the user undid: don't
+    // file the conversation there after all (by id -- a same-named topic
+    // elsewhere in the tree is a different topic).
     const undoneFiledTopicIds = new Set(
-      undone.filter((r) => r.type === 'topic_filed' && r.linked_topic_id).map((r) => r.linked_topic_id as string)
+      undone
+        .filter((r) => r.type === 'topic_filed' && r.linked_topic_id && !liveTopicIds.has(r.linked_topic_id))
+        .map((r) => r.linked_topic_id as string)
     );
-    const liveFiledTopicIds = live
-      .filter((r) => r.type === 'topic_filed')
-      .map((r) => r.linked_topic_id ?? findTopicByDisplay(topics, r.subject)?.id ?? null)
-      .filter((id): id is string => !!id);
+    // Topics the user filed this conversation under by voice, and that still exist.
+    const liveFiledTopics: TopicRow[] = [];
+    for (const r of live) {
+      if (r.type !== 'topic_filed') continue;
+      const id = r.linked_topic_id ?? r.topic_ids[r.topic_ids.length - 1] ?? findTopicByDisplay(topics, r.subject)?.id ?? null;
+      const topic = id ? topics.find((t) => t.id === id) : undefined;
+      if (topic && !liveFiledTopics.includes(topic)) liveFiledTopics.push(topic);
+    }
 
     const { data: profileRow } = await db.from('profiles').select('timezone').eq('id', user.id).maybeSingle();
-    const today = localToday(profileRow?.timezone);
+    const userTimeZone = resolveUserTimeZone(db, user.id, deviceTimezone, profileRow?.timezone);
+    if (userTimeZone.save) await userTimeZone.save;
+    // The day the recording was made, not the day it's processed (a Retry
+    // can come days later) -- only when the timezone is actually known;
+    // otherwise relative dates like "내일" can't be resolved reliably.
+    const recordedOn = userTimeZone.known
+      ? localDay(new Date(session.started_at ?? session.created_at ?? Date.now()), userTimeZone.timezone)
+      : null;
 
     const {
       extraction,
@@ -368,9 +400,10 @@ Deno.serve(async (req) => {
       outputTokens: analysisOutputTokens,
     } = await analyzeTranscript(analysisInput ?? transcript, topics, lists, existingTaskTitles, detectedLanguage, {
       isConversation: analysisInput !== null,
-      today,
+      recordedOn,
       liveChanges: live.map((r) => r.label),
       undoneChanges: undone.map((r) => r.label),
+      liveFiledTopics: liveFiledTopics.map((t) => topicDisplayName(t, topics)),
     });
     if (analysisInputTokens > 0 || analysisOutputTokens > 0) {
       await recordUsage(db, {
@@ -384,6 +417,29 @@ Deno.serve(async (req) => {
       });
     }
 
+    // Would filing under this name bring back a topic the user created by
+    // voice and then undid? Only if it would actually be created again -- a
+    // topic that still exists (undo keeps one that's in use) is fine to use.
+    const recreatesUndoneTopic = (name: string, parentName: string | null): boolean => {
+      if (undoneCreatedTopics.size === 0) return false;
+      const nameKey = normalizeTopicKey(name);
+      if (parentName) {
+        const parentKey = normalizeTopicKey(parentName);
+        const fullKey = `${parentKey} · ${nameKey}`;
+        const parent = topics.find((t) => !t.parent_topic_id && sameTopicName(t.name, parentName));
+        if (!parent) return undoneCreatedTopics.has(parentKey) || undoneCreatedTopics.has(fullKey);
+        const exists = topics.some((t) => t.parent_topic_id === parent.id && sameTopicName(t.name, name));
+        return !exists && undoneCreatedTopics.has(fullKey);
+      }
+      if (topLevelExactMatch(topics, name)) return false;
+      // GPT may name an undone sub-topic without its parent.
+      return [...undoneCreatedTopics].some((key) => key === nameKey || key.split(' · ').pop() === nameKey);
+    };
+    const withoutUndoneTopic = <T extends { topic_name?: string | null; topic_parent_name?: string | null }>(item: T): T =>
+      item.topic_name && recreatesUndoneTopic(item.topic_name, item.topic_parent_name?.trim() || null)
+        ? { ...item, topic_name: null, topic_parent_name: null }
+        : item;
+
     // "Make a topic called X" is an instruction, not content -- honour it
     // even when nothing in the recording gets filed under X yet. Before
     // this, such a request only produced a topic if some task/idea happened
@@ -392,7 +448,7 @@ Deno.serve(async (req) => {
       const name = requested.name?.trim();
       if (!name) continue;
       const parentName = requested.parent_name?.trim() || null;
-      if (undoneCreatedTopicNames.has(normalizeTopicKey(name))) continue;
+      if (recreatesUndoneTopic(name, parentName)) continue;
       if (!parentName && !topLevelExactMatch(topics, name) && findSimilarTopic(topics, name)) {
         // A bare "make a topic called X" instruction has no task/idea
         // attached to it to hang a confirmation card off of (see
@@ -416,11 +472,6 @@ Deno.serve(async (req) => {
       const key = normalizeTaskTitle(t.title);
       return !alreadyExisting.has(key) && !undoneTaskTitles.has(key);
     });
-    // Never let an item re-create a topic the user undid creating.
-    const withoutUndoneTopic = <T extends { topic_name?: string | null; topic_parent_name?: string | null }>(item: T): T =>
-      item.topic_name && undoneCreatedTopicNames.has(normalizeTopicKey(item.topic_name))
-        ? { ...item, topic_name: null, topic_parent_name: null }
-        : item;
     const resolvedTasks = [];
     for (const t of newTasks) {
       const resolvedTopic = await resolveTopic(db, user.id, topics, withoutUndoneTopic(t));
@@ -471,36 +522,35 @@ Deno.serve(async (req) => {
     // above). `topic_id`/`topic_suggestion` land directly on the section
     // object written to `sessions.outline` below; the app (Summary) renders
     // and lets the user change/confirm one section at a time from there.
-    const resolvedOutline = [];
+    const resolvedOutline: { heading: string; bullets: string[]; topic_id: string | null; topic_suggestion: string | null }[] = [];
     for (const section of extraction.outline) {
-      let item = withoutUndoneTopic(section);
-      if (item.topic_name && undoneFiledTopicNames.has(normalizeTopicKey(item.topic_name))) {
-        item = { ...item, topic_name: null, topic_parent_name: null };
-      }
-      const resolved = await resolveTopic(db, user.id, topics, item);
-      const topicId = resolved.topicId && undoneFiledTopicIds.has(resolved.topicId) ? null : resolved.topicId;
+      const resolved = await resolveTopic(db, user.id, topics, withoutUndoneTopic(section));
+      const undoneFiling = !!resolved.topicId && undoneFiledTopicIds.has(resolved.topicId);
+      const topicId = undoneFiling ? null : resolved.topicId;
       resolvedOutline.push({
         heading: section.heading,
         bullets: section.bullets,
         topic_id: topicId,
-        topic_suggestion: topicId ? null : resolved.suggestion,
+        topic_suggestion: topicId || undoneFiling ? null : resolved.suggestion,
       });
     }
 
     // A topic the user filed this conversation under by voice must end up
-    // on a section -- Summary treats sections as the source of truth for
-    // which topics a recording is under, and would otherwise drop the link
-    // the first time the user changes any section's topic.
-    for (const topicId of liveFiledTopicIds) {
-      const referenced =
-        resolvedOutline.some((s) => s.topic_id === topicId) ||
-        resolvedTasks.some((t) => t.topic_id === topicId) ||
-        resolvedMemories.some((m) => m.topic_id === topicId);
-      if (referenced) continue;
-      const unfiled = resolvedOutline.find((s) => !s.topic_id);
-      if (unfiled) {
-        unfiled.topic_id = topicId;
-        unfiled.topic_suggestion = null;
+    // on a section -- Summary treats the sections (with the tasks/ideas) as
+    // the source of truth for which topics a recording is under, and would
+    // otherwise drop the link the first time the user changes any topic
+    // there. The analysis was told to put it on the right section; if it
+    // didn't, it goes on the first unfiled section, else the first section
+    // not already carrying a voice filing (usually the Overview) -- the
+    // user's explicit instruction outranks the AI's own guess.
+    const liveFiledIds = new Set(liveFiledTopics.map((t) => t.id));
+    for (const topic of liveFiledTopics) {
+      if (resolvedOutline.some((s) => s.topic_id === topic.id)) continue;
+      const target =
+        resolvedOutline.find((s) => !s.topic_id) ?? resolvedOutline.find((s) => !s.topic_id || !liveFiledIds.has(s.topic_id));
+      if (target) {
+        target.topic_id = topic.id;
+        target.topic_suggestion = null;
       }
     }
 
@@ -597,8 +647,9 @@ async function resolveTopic(
   // already exists -- falls back to a suggestion instead of silently
   // creating a near-duplicate topic; Summary's existing "AI thinks this
   // belongs under X" card already lets the user either confirm X as a new
-  // topic or pick the existing similar one instead.
-  if (!parentName && !topLevelExactMatch(topics, name) && findSimilarTopic(topics, name)) {
+  // topic or pick the existing similar one instead. Since the user is asked,
+  // even a 2-character near-match ("가족" vs "가족여행") counts here.
+  if (!parentName && !topLevelExactMatch(topics, name) && findSimilarTopic(topics, name, { shortNames: true })) {
     return { topicId: null, suggestion: name };
   }
   const topic = await findOrCreateTopic(db, userId, topics, name, parentName);
@@ -640,14 +691,14 @@ function topLevelExactMatch(topics: TopicRow[], name: string): boolean {
   return topics.some((t) => t.parent_topic_id === null && t.name.toLowerCase() === target);
 }
 
-/** The forms a topic display name can be referred to by: "Business · Liflux" -> the full form and "liflux". */
-function topicNameVariants(display: string): string[] {
-  const parts = display.split('·').map((p) => normalizeTopicKey(p)).filter(Boolean);
-  return [normalizeTopicKey(display), ...(parts.length > 1 ? [parts[parts.length - 1]] : [])];
-}
-
 function normalizeTopicKey(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/** "Business · Liflux" for a sub-topic -- the same form converse's action log uses. */
+function topicDisplayName(topic: TopicRow, topics: TopicRow[]): string {
+  const parent = topic.parent_topic_id ? topics.find((t) => t.id === topic.parent_topic_id) : undefined;
+  return parent ? `${parent.name} · ${topic.name}` : topic.name;
 }
 
 function findTopicByDisplay(topics: TopicRow[], display: string): TopicRow | undefined {
@@ -663,14 +714,6 @@ function sameTopicName(a: string, b: string): boolean {
   return normalizeTopicKey(a) === normalizeTopicKey(b);
 }
 
-function localToday(timezone: string | null | undefined): string {
-  try {
-    return new Date().toLocaleDateString('en-CA', { timeZone: timezone || 'UTC' });
-  } catch {
-    return new Date().toISOString().slice(0, 10);
-  }
-}
-
 /** Case/spacing/punctuation-insensitive form of a task title, for spotting a re-extracted duplicate. */
 function normalizeTaskTitle(title: string): string {
   return title.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
@@ -680,11 +723,14 @@ function normalizeTaskTitle(title: string): string {
  *  alongside it would likely be an unwanted near-duplicate ("Family" next
  *  to "Familys", "Health" next to "Health stuff") -- close, but not the
  *  same name (an exact match is handled separately, by reusing it outright).
- *  Same rule converse's live tools use (see _shared/nameMatch.ts). */
-function findSimilarTopic(topics: TopicRow[], name: string): TopicRow | null {
+ *  Same rule converse's live tools use (see _shared/nameMatch.ts);
+ *  `shortNames` only where a match leads to asking the user, not to
+ *  silently skipping the item. */
+function findSimilarTopic(topics: TopicRow[], name: string, opts: { shortNames?: boolean } = {}): TopicRow | null {
   return findSimilarName(
     topics.filter((t) => t.parent_topic_id === null),
-    name
+    name,
+    opts
   );
 }
 
@@ -792,11 +838,14 @@ async function analyzeTranscript(
   lists: ListRow[],
   existingTaskTitles: string[],
   detectedLanguage: string | null,
-  context: { isConversation: boolean; today: string; liveChanges: string[]; undoneChanges: string[] } = {
-    isConversation: false,
-    today: new Date().toISOString().slice(0, 10),
-    liveChanges: [],
-    undoneChanges: [],
+  context: {
+    isConversation: boolean;
+    /** The day the recording was made, in the speaker's timezone -- null when that timezone isn't known. */
+    recordedOn: { date: string; weekday: string } | null;
+    liveChanges: string[];
+    undoneChanges: string[];
+    /** Topics the user filed the conversation under by voice ("Business · Liflux"). */
+    liveFiledTopics: string[];
   }
 ): Promise<{ extraction: Extraction; inputTokens: number; outputTokens: number }> {
   if (!transcript.trim()) {
@@ -821,7 +870,9 @@ async function analyzeTranscript(
   const conversationNote = context.isConversation
     ? `
 
-This transcript is a spoken CONVERSATION between the user and the app's voice assistant, one line per turn. "User:" lines are the user -- they are the journal content. "AI:" lines are the assistant's replies: context for understanding the user, never content to summarize, quote, or extract tasks/ideas from. "[App did: ...]" lines are changes the assistant already made in the app at the user's request. User lines that were only instructions or questions to the app -- adding a task, filing under a topic, making a topic, asking what topics/tasks exist, searching their past, asking to save/end -- are NOT journal content: leave them out of "summary", "outline" and "notable_quotes", and never output them again as tasks, ideas or requested_topics (they were already handled).`
+This transcript is a spoken CONVERSATION between the user and the app's voice assistant, one line per turn. "User:" lines are the user -- they are the journal content. "AI:" lines are the assistant's replies: context for understanding the user, never content to summarize, quote, or extract tasks/ideas from. "[App did: ...]" lines are changes the assistant made in the app right then, at the user's request.
+User lines that were only questions or instructions to the app -- asking what topics/tasks exist, searching their past, asking to save/end, or asking to add a task, file under a topic or make a topic -- are not journal content: leave them out of "summary", "outline" and "notable_quotes".
+A request to add a task, file under a topic or make a topic was CARRIED OUT only if a matching "[App did: ...]" line follows it (right after it, or a turn or two later once the user answered a question about it) -- never output a carried-out request again as a task, idea or requested_topic. A request with no matching "[App did: ...]" line was NOT carried out (the assistant couldn't do it, or asked something back that was never settled): handle it exactly as you would in an ordinary recording -- extract the task, give the section it's about that topic_name, or add it to requested_topics.`
     : '';
   const undoneNote =
     context.undoneChanges.length > 0
@@ -837,10 +888,20 @@ ${context.undoneChanges.map((c) => `- ${c}`).join('\n')}`
 Already done live during the conversation (don't request them again):
 ${context.liveChanges.map((c) => `- ${c}`).join('\n')}`
       : '';
+  const filedNote =
+    context.liveFiledTopics.length > 0
+      ? `
 
-  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.${conversationNote}${undoneNote}${liveNote}
+The user explicitly filed this conversation under these topics by voice ("A · B" = sub-topic B under A). Each one MUST be the topic_name (with topic_parent_name for a sub-topic, and topic_confidence 1.0) of the outline section(s) it was about -- the Overview section if it was about the conversation as a whole:
+${context.liveFiledTopics.map((t) => `- ${t}`).join('\n')}`
+      : '';
+  const dateNote = context.recordedOn
+    ? `This was recorded on ${context.recordedOn.date} (${context.recordedOn.weekday}) in the speaker's timezone -- resolve relative dates ("내일", "금요일까지", "next week") against that day.`
+    : `The speaker's timezone isn't known, so relative dates ("내일", "금요일까지", "next week") can't be resolved reliably: set a task's due_date ONLY when they said an explicit calendar date ("9월 30일", "October 3rd"; assume the year ${new Date().getUTCFullYear()} unless they said otherwise), and leave it null otherwise.`;
 
-Today is ${context.today} in the speaker's timezone.
+  const system = `You read a raw voice-memo transcript from a personal journaling app and extract structure from it. This is a running journal of the speaker's day-to-day thoughts, said out loud like a diary -- most of it is casual and won't contain any task or idea worth filing anywhere, and that is completely normal and expected, not a failure of the recording.${conversationNote}${undoneNote}${liveNote}${filedNote}
+
+${dateNote}
 
 ${languageInstruction}
 
@@ -890,7 +951,7 @@ Respond with strict JSON matching this shape:
     "topic_confidence": number between 0 and 1,
     "list_name": string or null (which task list, as described above -- separate from topic_name),
     "list_confidence": number between 0 and 1,
-    "due_date": "YYYY-MM-DD" or null (ONLY if the speaker stated a deadline or day for it, e.g. "내일까지", "by Friday" -- resolved against today's date above; null otherwise)
+    "due_date": "YYYY-MM-DD" or null (ONLY if the speaker stated a deadline or day for it, e.g. "내일까지", "by Friday" -- resolved as described above; null otherwise)
   }],
   "memories": [{
     "content": string,
