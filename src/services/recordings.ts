@@ -18,41 +18,58 @@ export function localRecordingSize(fileUri: string): number {
 }
 
 /**
- * Appends a local file to a `FormData` using RN's own `{ uri, name, type }`
- * shortcut -- confirmed correct (not assumed) by reading React Native's own
- * source rather than guessing again after two wrong fixes in a row:
+ * Appends a local file to a `FormData` as a real `Blob` part. This was
+ * reverted to RN's `{ uri, name, type }` shortcut moments ago based on
+ * reading React Native's own native networking source (FormData.js,
+ * NetworkingModule.kt) -- that analysis, while accurate for those files,
+ * was of the WRONG layer: it turns out to be irrelevant here, and the very
+ * error text that RN analysis predicted correctly explains as *wrong* is
+ * exactly what came back on-device: "Unsupported FormDataPart
+ * implementation." That string doesn't even exist anywhere in
+ * react-native's source -- it's thrown by Expo's OWN fetch polyfill, which
+ * is what this app's global `fetch`/`FormData` actually are
+ * (`expo/src/winter/fetch`), never touching RN's native FormData/networking
+ * code at all. Traced this time, not assumed:
  *
- * - `Libraries/Network/FormData.js`'s own value type is
- *   `string | { uri: string, name?, type? }` -- a real `Blob` was never a
- *   supported part value in the first place.
- * - `ReactAndroid/.../NetworkingModule.kt#constructMultipartBody` (the code
- *   that actually runs on the test device, per its adb-logcat platform)
- *   only recognizes a part with a `"string"` key or a `"uri"` key; anything
- *   else falls into its `else` branch and is rejected as "Unrecognized
- *   FormData part." A real `Blob` instance spread into a part by
- *   `FormData.getParts()`'s `{...value, headers, fieldName}` only copies
- *   `Blob`'s own enumerable property (`_data` -- `data`/`size`/`type` are
- *   prototype getters, not own properties, so the spread drops them), so
- *   the resulting part has neither `string` nor `uri` -- it hits exactly
- *   that "Unrecognized FormData part" branch. That's the previous fix
- *   (`response.blob()` + `.slice()`), and it's why it needed to be reverted
- *   here, not because of an on-device retest yet, but because reading the
- *   native source shows it cannot have worked.
- * - The `uri`-keyed branch reads the file via
- *   `RequestBodyUtil.getFileInputStream()` -> `ContentResolver.openInputStream()`,
- *   a real, separate native path from the Storage-upload fallback's
- *   `fetch(fileUri)` (that one fetches the `file://` URL as the request
- *   target, not as a body part) -- so, unlike the last two attempts, this
- *   one is not just "should be fine by analogy," it's read directly from
- *   the code that runs. What's still NOT verified: why this exact shape
- *   failed with "No connection..." on-device earlier this session. The
- *   content-type header (needed by the same Kotlin branch) was already
- *   being set correctly from `type`, so that wasn't it. Flagging this
- *   openly rather than re-asserting confidence -- if this fails again, the
- *   underlying error (surfaced via functionsError.ts) is the next real lead.
+ * - `expo/src/winter/FormData.ts` monkey-patches RN's `FormData` class with
+ *   its own spec-compliant methods. Its `append()` -> `normalizeArgs()`
+ *   passes an object value through completely unchanged unless it's
+ *   `instanceof Blob` -- `{ uri, name, type }` is not recognized at all,
+ *   which is exactly why that shape threw immediately on-device.
+ * - `expo/src/winter/fetch/RequestUtils.ts` sends a `FormData` request body
+ *   through `convertFormDataAsync()` (`expo/src/winter/fetch/convertFormData.ts`),
+ *   which only knows how to serialize a `string` part or one that is
+ *   `instanceof Blob` (or has `.bytes()`) -- anything else hits its
+ *   `else { throw new Error('Unsupported FormDataPart implementation') }`,
+ *   which is the literal error seen on-device.
+ * - So a real `Blob` is required, and `fetch(fileUri).blob()`
+ *   (`expo/src/winter/fetch/FetchResponse.ts`) is how to get a working one:
+ *   it detects that this app's global `Blob` is still React Native's
+ *   (`expo-blob` isn't installed) and calls `createReactNativeBlobAsync()`,
+ *   which builds the Blob via `BlobManager.createFromOptions()` directly --
+ *   NOT via `new Blob([arrayBuffer])`, so it does not hit RN's "Creating
+ *   blobs from 'ArrayBuffer'..." limitation the attempt before this one
+ *   ran into by constructing a Blob that way directly.
+ *
+ * A local file:// read has no server to send a Content-Type header, so the
+ * resulting Blob's own `.type` often comes back empty -- and
+ * `convertFormData.ts`'s `getFormDataPartHeaders()` reads the part's
+ * `.type` to set the multipart part's Content-Type header. `.slice()`
+ * re-tags it without copying the underlying data, so the server actually
+ * sees `audio/m4a` instead of Whisper trying to guess the format from
+ * nothing.
  */
-export function appendFilePart(form: FormData, field: string, fileUri: string, name: string, mimeType: string): void {
-  form.append(field, { uri: fileUri, name, type: mimeType } as unknown as Blob);
+export async function appendFilePart(
+  form: FormData,
+  field: string,
+  fileUri: string,
+  name: string,
+  mimeType: string
+): Promise<void> {
+  const response = await fetch(fileUri);
+  const blob = await response.blob();
+  const typedBlob = blob.type === mimeType ? blob : blob.slice(0, blob.size, mimeType);
+  form.append(field, typedBlob, name);
 }
 
 /**
