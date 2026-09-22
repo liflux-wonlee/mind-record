@@ -44,7 +44,7 @@ export async function askSearchQuestion(
   let body: FormData | typeof input;
   if ('uri' in input) {
     const form = new FormData();
-    appendFilePart(form, 'audio', input.uri, 'query.m4a', input.mimeType);
+    await appendFilePart(form, 'audio', input.uri, 'query.m4a', input.mimeType);
     if (input.turnId) form.append('turnId', input.turnId);
     if (input.history) form.append('history', JSON.stringify(input.history));
     body = form;

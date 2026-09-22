@@ -18,17 +18,28 @@ export function localRecordingSize(fileUri: string): number {
 }
 
 /**
- * Appends a local file to a `FormData` as a multipart part, streamed from
- * disk by React Native's native networking layer rather than read into a
- * JS string first. RN's own FormData supports `{ uri, name, type }` as a
- * value (see its own type declaration,
- * react-native/Libraries/Network/FormData.js) -- TypeScript still resolves
- * `FormData`/`Blob` to the DOM lib's stricter version here (a known
- * friction point in Expo/RN + TS setups, not a runtime issue), hence the
- * cast.
+ * Appends a local file to a `FormData` as a real `Blob` part -- reading it
+ * through `fetch(fileUri)` first, the same mechanism uploadRecording()
+ * below already uses reliably in this app, rather than RN's `{ uri, name,
+ * type }` FormData shortcut (its own type declaration,
+ * react-native/Libraries/Network/FormData.js, does support it, but it's a
+ * separate native code path from a real Blob upload, and it's what turned
+ * out to fail outright on a real device with a generic "Network request
+ * failed" -- no HTTP request even reaching Supabase -- when this was first
+ * tried; see git history). A real Blob goes through FormData's ordinary,
+ * far more battle-tested multipart path instead.
  */
-export function appendFilePart(form: FormData, field: string, fileUri: string, name: string, mimeType: string): void {
-  form.append(field, { uri: fileUri, name, type: mimeType } as unknown as Blob);
+export async function appendFilePart(
+  form: FormData,
+  field: string,
+  fileUri: string,
+  name: string,
+  mimeType: string
+): Promise<void> {
+  const response = await fetch(fileUri);
+  const arrayBuffer = await response.arrayBuffer();
+  const blob = new Blob([arrayBuffer], { type: mimeType });
+  form.append(field, blob, name);
 }
 
 /**

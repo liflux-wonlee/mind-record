@@ -6,17 +6,17 @@
 
 /**
  * Send a conversation turn's / voice-search question's audio directly in
- * the Edge Function request (as multipart form data, streamed from the
- * local file -- see useConversationSession.ts / useVoiceSearch.ts and
- * converse/search-ask's multipart branch) instead of uploading it to
- * Storage first and passing a storagePath. Set false to revert to the
- * original upload-then-invoke flow for every turn, e.g. if this path turns
- * out to misbehave on some device/network combination in real testing.
+ * the Edge Function request (as multipart form data -- see
+ * useConversationSession.ts / useVoiceSearch.ts and converse/search-ask's
+ * multipart branch) instead of uploading it to Storage first and passing a
+ * storagePath. Set false to revert to the original upload-then-invoke flow
+ * for every turn, e.g. if this path turns out to misbehave on some device/
+ * network combination in real testing.
  *
- * A first version of this sent the audio as a base64 string inside the
- * JSON body instead -- that failed outright on a real device (the request
- * never reached Supabase's Invocations log at all, i.e. never left the
- * client successfully), which is why this is multipart now instead.
+ * Two earlier versions of this failed outright on a real device before
+ * landing here -- see src/services/recordings.ts's appendFilePart for what
+ * actually worked and why (base64-in-JSON, then RN's FormData `{uri,name,
+ * type}` shortcut, both never even reached Supabase's Invocations log).
  *
  * Either path is chosen per-turn regardless of this flag once a recording
  * is larger than DIRECT_AUDIO_MAX_BYTES -- this only controls whether the

@@ -42,7 +42,7 @@ export async function converseTurn(
     const form = new FormData();
     form.append('sessionId', sessionId);
     if (turnId) form.append('turnId', turnId);
-    appendFilePart(form, 'audio', audio.uri, 'segment.m4a', audio.mimeType);
+    await appendFilePart(form, 'audio', audio.uri, 'segment.m4a', audio.mimeType);
     body = form;
   }
   const { data, error } = await supabase.functions.invoke('converse', { body });
