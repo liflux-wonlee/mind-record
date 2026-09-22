@@ -20,8 +20,9 @@ export default function TalkScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { mode: initialMode } = useLocalSearchParams<{ mode?: string }>();
-  // No mode in the params (the plain mic button on Home, or "Keep talking" /
-  // Search's voice button) -> ask which one before touching the mic at all.
+  // No mode in the params (the plain mic button on Home, or Summary's "New
+  // recording" / Search's voice button) -> ask which one before touching
+  // the mic at all.
   // Once a mode is picked there is no way back -- switching mid-session
   // would orphan whichever recording already started, so this is a
   // one-time choice rather than a toggle.

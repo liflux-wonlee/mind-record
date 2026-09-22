@@ -531,7 +531,12 @@ export default function SummaryScreen() {
           />
         </View>
       ) : processing ? (
-        <ProcessingSteps status={session?.processing_status} />
+        <>
+          <ProcessingSteps status={session?.processing_status} />
+          <Text style={[styles.footnote, { textAlign: 'center' }]}>
+            You can leave this screen — it keeps processing in the background.
+          </Text>
+        </>
       ) : session?.processing_status === 'error' ? (
         <View style={[styles.summaryCard, { backgroundColor: colors.pastelPink }]}>
           <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t process this recording</Kicker>
@@ -724,7 +729,7 @@ export default function SummaryScreen() {
           textStyle={styles.pastelText}
         />
         <Button
-          label="Keep talking"
+          label="New recording"
           onPress={() => router.replace('/talk')}
           style={[styles.actionButton, { backgroundColor: colors.pastelLavender }]}
           textStyle={styles.pastelText}
