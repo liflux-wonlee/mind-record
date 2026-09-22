@@ -19,15 +19,24 @@ export function localRecordingSize(fileUri: string): number {
 
 /**
  * Appends a local file to a `FormData` as a real `Blob` part -- reading it
- * through `fetch(fileUri)` first, the same mechanism uploadRecording()
- * below already uses reliably in this app, rather than RN's `{ uri, name,
- * type }` FormData shortcut (its own type declaration,
- * react-native/Libraries/Network/FormData.js, does support it, but it's a
- * separate native code path from a real Blob upload, and it's what turned
- * out to fail outright on a real device with a generic "Network request
- * failed" -- no HTTP request even reaching Supabase -- when this was first
- * tried; see git history). A real Blob goes through FormData's ordinary,
- * far more battle-tested multipart path instead.
+ * through `fetch(fileUri).blob()`, the RN-idiomatic way to turn a local
+ * file into an upload-ready Blob (rather than RN's `{ uri, name, type }`
+ * FormData shortcut, a separate native code path that turned out to fail
+ * outright on a real device with a generic "Network request failed" --
+ * see git history). `response.arrayBuffer()` then `new Blob([arrayBuffer])`
+ * was tried first and ALSO failed on-device: React Native's Blob polyfill
+ * (unlike a browser/Node/Deno's) doesn't support constructing a Blob from
+ * an ArrayBuffer/ArrayBufferView at all ("Creating blobs from 'ArrayBuffer'
+ * and 'ArrayBufferView' are not supported"). `response.blob()` sidesteps
+ * this entirely -- RN's fetch already hands back a natively-backed Blob
+ * for a local file read, with no ArrayBuffer round trip needed.
+ *
+ * A local file:// read has no server to send a Content-Type header, so the
+ * resulting Blob's own `.type` often comes back empty -- and FormData's
+ * multipart part uses exactly that (`blob.type`), not anything passed to
+ * `.append()`, as the part's Content-Type. `.slice()` re-tags it without
+ * copying the underlying data, so the server actually sees `audio/m4a`
+ * instead of Whisper trying to guess the format from nothing.
  */
 export async function appendFilePart(
   form: FormData,
@@ -37,9 +46,9 @@ export async function appendFilePart(
   mimeType: string
 ): Promise<void> {
   const response = await fetch(fileUri);
-  const arrayBuffer = await response.arrayBuffer();
-  const blob = new Blob([arrayBuffer], { type: mimeType });
-  form.append(field, blob, name);
+  const blob = await response.blob();
+  const typedBlob = blob.type === mimeType ? blob : blob.slice(0, blob.size, mimeType);
+  form.append(field, typedBlob, name);
 }
 
 /**
