@@ -12,10 +12,12 @@
  *
  * The auto-stop-per-turn is a simple silence timer over the recorder's
  * metering (dB) level, not real voice-activity detection -- it's a
- * heuristic tuned for "a normal pause after finishing a sentence," and
- * may need the *_MARGIN_DB/SILENCE_DURATION_MS constants adjusted after
- * real-device testing (too eager: cuts off mid-thought; too lax: never
- * fires in a noisy room). Tapping the button always still ends the turn
+ * heuristic tuned for "a normal pause after finishing a sentence," and may
+ * need the *_MARGIN_DB constants adjusted after real-device testing (too
+ * eager: cuts off mid-thought; too lax: never fires in a noisy room). How
+ * long the pause has to last is the caller-supplied `silenceGapMs` (see
+ * below) -- user-configurable in Settings -> AI, since "a normal pause"
+ * varies by person/language. Tapping the button always still ends the turn
  * immediately as a manual override either way. The check itself runs on
  * its own setInterval rather than off a useEffect keyed on the metering
  * value -- during a real silence the metering level tends to settle on
@@ -63,7 +65,11 @@ export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 // sees "silence" at all. The detector is therefore relative: it tracks the
 // quietest level it has seen as a noise floor and looks for a drop back
 // toward that floor after speech, rather than for an absolute level.
-const SILENCE_DURATION_MS = 1500;
+//
+// How long that pause has to last before a turn ends is user-configurable
+// (Settings -> AI -> Pause before replying, profiles.silence_gap_ms) --
+// this is only the fallback for a signed-out/still-loading profile.
+export const DEFAULT_SILENCE_DURATION_MS = 1500;
 // Absolute cap on one turn's recording, regardless of what the silence
 // detector above sees -- a safety net for the case where metering itself
 // misbehaves (see the interval below), not a normal way for a turn to end.
@@ -141,8 +147,18 @@ class TurnAbortedError extends Error {
   }
 }
 
-/** @param onAutoEnded called when the AI itself detected a spoken "end and save" -- after the closing reply finishes playing and the session is already saved/queued for processing. */
-export function useConversationSession(onAutoEnded?: (sessionId: string | null) => void) {
+/**
+ * @param onAutoEnded called when the AI itself detected a spoken "end and
+ *   save" -- after the closing reply finishes playing and the session is
+ *   already saved/queued for processing.
+ * @param silenceGapMs how long a pause in speech has to last before a turn
+ *   auto-ends -- the caller's profile.silence_gap_ms; defaults to
+ *   DEFAULT_SILENCE_DURATION_MS if omitted (e.g. profile not loaded yet).
+ */
+export function useConversationSession(
+  onAutoEnded?: (sessionId: string | null) => void,
+  silenceGapMs: number = DEFAULT_SILENCE_DURATION_MS
+) {
   const { user } = useAuth();
   const [state, setState] = useState<ConversationState>('idle');
   const [turns, setTurns] = useState<ConversationTurn[]>([]);
@@ -504,12 +520,12 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
         silenceStartRef.current = Date.now();
         return;
       }
-      if (Date.now() - silenceStartRef.current >= SILENCE_DURATION_MS) {
+      if (Date.now() - silenceStartRef.current >= silenceGapMs) {
         stopTurn('silence');
       }
     }, 200);
     return () => clearInterval(timer);
-  }, [state, stopTurn]);
+  }, [state, stopTurn, silenceGapMs]);
 
   // A reply finishing playback either closes out the conversation (the
   // user just asked to end) or hands the turn back for another listen.

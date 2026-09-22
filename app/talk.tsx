@@ -8,7 +8,7 @@ import { Waveform } from '@/components/Waveform';
 import { Button, Kicker } from '@/components/ui';
 import type { InterruptionReason } from '@/hooks/useAudioInterruption';
 import { useCaptureSession } from '@/hooks/useCaptureSession';
-import { useConversationSession } from '@/hooks/useConversationSession';
+import { DEFAULT_SILENCE_DURATION_MS, useConversationSession } from '@/hooks/useConversationSession';
 import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
@@ -29,6 +29,7 @@ export default function TalkScreen() {
     initialMode === 'conv' ? 'conv' : initialMode === 'capture' ? 'capture' : null
   );
   const [aiName, setAiName] = useState<string | null>(null);
+  const [silenceGapMs, setSilenceGapMs] = useState(DEFAULT_SILENCE_DURATION_MS);
   // True only when `mode` arrived pre-set via the URL (a direct link, e.g.
   // Home's "talk with X instead") rather than through the in-screen picker
   // -- picking in the picker starts the mic itself (see pickMode), so this
@@ -38,16 +39,19 @@ export default function TalkScreen() {
   useEffect(() => {
     if (!user) return;
     getProfile(user.id)
-      .then((profile) => setAiName(profile?.ai_name?.trim() || null))
+      .then((profile) => {
+        setAiName(profile?.ai_name?.trim() || null);
+        if (profile?.silence_gap_ms) setSilenceGapMs(profile.silence_gap_ms);
+      })
       .catch(() => {
-        // The chat label just falls back to "AI" -- not worth blocking the screen over.
+        // The chat label/pause length just fall back to defaults -- not worth blocking the screen over.
       });
   }, [user]);
 
   const capture = useCaptureSession();
   const conversation = useConversationSession((sessionId) => {
     router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
-  });
+  }, silenceGapMs);
 
   const captureStarted = capture.everRecorded;
   const conversationStarted = conversation.turns.length > 0 || conversation.state !== 'idle';

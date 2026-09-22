@@ -7,6 +7,7 @@ import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'rea
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
 import { Button, Kicker } from '@/components/ui';
+import { DEFAULT_SILENCE_DURATION_MS } from '@/hooks/useConversationSession';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile, updateProfile, type Profile } from '@/services/profiles';
@@ -19,6 +20,15 @@ const VOICE_OPTIONS: { voice: AiVoice; label: string; color: string }[] = [
   { voice: 'onyx', label: 'Male voice 2', color: colors.pastelLavender },
   { voice: 'nova', label: 'Female voice 1', color: colors.pastelPeach },
   { voice: 'shimmer', label: 'Female voice 2', color: colors.pastelPink },
+];
+
+// How long a pause in speech has to last before Conversation mode treats
+// the user's turn as over and sends it to the AI -- see
+// useConversationSession.ts's silenceGapMs.
+const SILENCE_GAP_OPTIONS: { ms: number; label: string; color: string }[] = [
+  { ms: 1000, label: 'Quick', color: colors.pastelYellow },
+  { ms: 1500, label: 'Normal', color: colors.pastelGreen },
+  { ms: 2500, label: 'Relaxed', color: colors.pastelBlue },
 ];
 
 export default function AiSettingsScreen() {
@@ -71,6 +81,20 @@ function AiSettingsForm({
   const [savingNames, setSavingNames] = useState(false);
   const [savingVoice, setSavingVoice] = useState<AiVoice | null>(null);
   const [previewing, setPreviewing] = useState<AiVoice | null>(null);
+  const [savingSilenceGap, setSavingSilenceGap] = useState<number | null>(null);
+
+  const chooseSilenceGap = async (ms: number) => {
+    if (savingSilenceGap !== null) return;
+    setSavingSilenceGap(ms);
+    try {
+      const updated = await updateProfile(userId, { silence_gap_ms: ms });
+      onSaved(updated);
+    } catch (e) {
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSavingSilenceGap(null);
+    }
+  };
 
   const namesDirty = aiName !== (profile.ai_name ?? '') || honorific !== (profile.user_honorific ?? '');
 
@@ -211,6 +235,28 @@ function AiSettingsForm({
           })}
         </View>
       </View>
+
+      <View style={styles.card}>
+        <Kicker style={{ color: colors.neutral600, marginBottom: 10 }}>Pause before replying</Kicker>
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+          {SILENCE_GAP_OPTIONS.map(({ ms, label, color }) => {
+            const selected = (profile.silence_gap_ms ?? DEFAULT_SILENCE_DURATION_MS) === ms;
+            return (
+              <Button
+                key={ms}
+                label={savingSilenceGap === ms ? '...' : label}
+                disabled={selected || savingSilenceGap !== null}
+                onPress={() => chooseSilenceGap(ms)}
+                style={[styles.gapButton, { backgroundColor: color }, selected && styles.gapButtonSelected]}
+                textStyle={{ color: colors.text }}
+              />
+            );
+          })}
+        </View>
+        <Text style={styles.fieldHint}>
+          How long a silence in Conversation mode means you're done talking, before the AI replies.
+        </Text>
+      </View>
     </View>
   );
 }
@@ -252,5 +298,22 @@ const styles = StyleSheet.create({
     fontFamily: font.semibold,
     fontSize: 13,
     color: colors.text,
+  },
+  gapButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: radius.pastel,
+    justifyContent: 'center',
+  },
+  gapButtonSelected: {
+    borderWidth: 2,
+    borderColor: colors.accent800,
+    opacity: 1,
+  },
+  fieldHint: {
+    fontFamily: font.regular,
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.neutral600,
   },
 });

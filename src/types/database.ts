@@ -41,6 +41,8 @@ export type Database = {
           /** How the AI should address the user (e.g. "Won님") -- null means don't use one. */
           user_honorific: string | null;
           ai_voice: AiVoice;
+          /** How long a pause (ms) before Conversation mode treats the user's turn as over -- see useConversationSession.ts. */
+          silence_gap_ms: number;
           created_at: string;
           updated_at: string;
         };
@@ -53,6 +55,7 @@ export type Database = {
           ai_name?: string | null;
           user_honorific?: string | null;
           ai_voice?: AiVoice;
+          silence_gap_ms?: number;
           created_at?: string;
           updated_at?: string;
         };
