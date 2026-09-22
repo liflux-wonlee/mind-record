@@ -1,6 +1,6 @@
 import { describeFunctionError } from '@/lib/functionsError';
 import { supabase } from '@/lib/supabase';
-import { deviceTimeZone } from '@/lib/timezone';
+import { deviceTimeZone } from '@/lib/device';
 
 /**
  * Kicks off the `process-session` Edge Function (transcribe + AI extraction

@@ -499,8 +499,8 @@ export default function SummaryScreen() {
 
   // Every topic currently in play for this recording, across its outline
   // sections and its tasks/ideas -- what `session_topics` (used to browse
-  // sessions by topic) should reconcile to after any single assignment
-  // changes. `outline` is passed in rather than read from `session` so a
+  // sessions by topic) must include after any single assignment changes
+  // (see syncSessionTopicLinks for what it removes). `outline` is passed in rather than read from `session` so a
   // caller can sync against a just-computed next outline before the state
   // update depending on it has actually landed.
   const activeTopicIds = (outline: SessionOutlineSection[]): string[] => [
@@ -522,7 +522,7 @@ export default function SummaryScreen() {
       const nextTaskTopicIds = tasks.map((t) => (t.id === entry.id ? topicId : t.topic_id)).filter((id): id is string => !!id);
       const nextMemoryTopicIds = memories.map((m) => (m.id === entry.id ? topicId : m.topic_id)).filter((id): id is string => !!id);
       const sectionTopicIds = (session?.outline ?? []).map((s) => s.topic_id).filter((id): id is string => !!id);
-      await syncSessionTopicLinks(sessionId, [...sectionTopicIds, ...nextTaskTopicIds, ...nextMemoryTopicIds]);
+      await syncSessionTopicLinks(sessionId, [...sectionTopicIds, ...nextTaskTopicIds, ...nextMemoryTopicIds], entry.topicId);
       setPicking(null);
     } catch {
       // Leave the suggestion in place -- the user can just try again.
@@ -547,12 +547,13 @@ export default function SummaryScreen() {
     const busyKey = `section-${index}`;
     setBusyEntryId(busyKey);
     try {
+      const replaced = session.outline?.[index]?.topic_id ?? null;
       const nextOutline = (session.outline ?? []).map((s, i) =>
         i === index ? { ...s, topic_id: topicId, topic_suggestion: null } : s
       );
       await updateSessionOutline(sessionId, nextOutline);
       setSession((s) => (s ? { ...s, outline: nextOutline } : s));
-      await syncSessionTopicLinks(sessionId, activeTopicIds(nextOutline));
+      await syncSessionTopicLinks(sessionId, activeTopicIds(nextOutline), replaced);
       setPicking(null);
     } catch (e) {
       Alert.alert('Could not file this section', friendlyMessage(e, 'Please try again.'));

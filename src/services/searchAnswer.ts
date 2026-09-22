@@ -1,6 +1,6 @@
 import { describeFunctionError } from '@/lib/functionsError';
 import { supabase } from '@/lib/supabase';
-import { deviceTimeZone } from '@/lib/timezone';
+import { deviceLanguage, deviceTimeZone } from '@/lib/device';
 import { appendFilePart } from '@/services/recordings';
 
 export type SearchTurn = { question: string; answer: string };
@@ -42,18 +42,21 @@ export async function askSearchQuestion(
     | { storagePath: string; history?: SearchTurn[] }
     | { uri: string; mimeType: string; turnId?: string; history?: SearchTurn[] }
 ): Promise<SearchAnswerResult> {
-  // What "last week" / "9월" mean for this user (see src/lib/timezone.ts).
+  // What "last week" / "9월" mean for this user, and the language to fall
+  // back on if nothing was heard (see src/lib/device.ts).
   const timezone = deviceTimeZone();
-  let body: FormData | (typeof input & { timezone?: string });
+  const lang = deviceLanguage();
+  let body: FormData | (typeof input & { timezone?: string; lang?: string });
   if ('uri' in input) {
     const form = new FormData();
     await appendFilePart(form, 'audio', input.uri, 'query.m4a', input.mimeType);
     if (input.turnId) form.append('turnId', input.turnId);
     if (input.history) form.append('history', JSON.stringify(input.history));
     if (timezone) form.append('timezone', timezone);
+    if (lang) form.append('lang', lang);
     body = form;
   } else {
-    body = { ...input, timezone };
+    body = { ...input, timezone, lang };
   }
   const { data, error } = await supabase.functions.invoke('search-ask', { body });
   if (error) throw await describeFunctionError(error, 'Could not answer that.');

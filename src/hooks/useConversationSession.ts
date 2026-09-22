@@ -46,7 +46,7 @@ import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioI
 import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCaptureSession';
 import { DIRECT_AUDIO_MAX_BYTES, DIRECT_AUDIO_UPLOAD_ENABLED } from '@/lib/featureFlags';
 import { friendlyMessage } from '@/lib/friendlyError';
-import { isNetworkError } from '@/lib/functionsError';
+import { functionErrorCode, isNetworkError } from '@/lib/functionsError';
 import { newTurnId, startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
@@ -224,9 +224,18 @@ export function useConversationSession(
   const currentTurnRef = useRef<PerfTurn | null>(null);
   const firstPlayMarkedRef = useRef(false);
   const lastTurnMetaRef = useRef<{ trigger: string; audioPath: 'direct' | 'storage'; noVoice?: boolean } | null>(null);
-  // Bumped whenever a reply finishes, so a stale fallback timer (see
-  // CONFIRM_SOUND_FALLBACK_MS) can tell its turn is already over.
+  // Bumped whenever a reply's life ends (it finished, or the conversation
+  // was ended/cancelled/interrupted/left), so a pending confirm-sound
+  // fallback timer (see CONFIRM_SOUND_FALLBACK_MS) can't act on it later.
   const replySeqRef = useRef(0);
+  const replyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const invalidateReply = useCallback(() => {
+    replySeqRef.current += 1;
+    if (replyTimerRef.current !== null) {
+      clearTimeout(replyTimerRef.current);
+      replyTimerRef.current = null;
+    }
+  }, []);
 
   // Metering has to be switched on HERE, in the construction-time options,
   // not passed to prepareToRecordAsync() later: expo-audio's
@@ -253,6 +262,7 @@ export function useConversationSession(
    *  captured turn-by-turn instead of re-transcribing). Returns the
    *  session id (or null if the conversation never really started). */
   const endConversation = useCallback(async (): Promise<string | null> => {
+    invalidateReply();
     activeRef.current = false;
     // A turn that is mid-upload/transcription is the user's LAST words --
     // let it finish writing to `messages` first, or process-session's
@@ -282,13 +292,22 @@ export function useConversationSession(
       });
     }
     return sessionId;
-  }, [recorder, recorderState.isRecording, player]);
+  }, [recorder, recorderState.isRecording, player, invalidateReply]);
+
+  // The latest endConversation, for callers that outlive a render (the turn
+  // in flight, the player's finish event) -- a captured copy would hold a
+  // stale recorder state.
+  const autoEndRef = useRef<() => void>(() => {});
+  autoEndRef.current = () => {
+    endConversation().then((sessionId) => onAutoEnded?.(sessionId));
+  };
 
   /** Stops any in-flight turn/playback and discards the whole
    *  conversation -- no processing, the audio and any transcript captured
    *  so far are deleted. This is Cancel, not a quiet version of ending;
    *  use endConversation to actually keep what was said. */
   const cancelConversation = useCallback(async (): Promise<void> => {
+    invalidateReply();
     activeRef.current = false;
     abortedRef.current = true; // an in-flight turn bails at its next await instead of playing a reply into a dead screen
     if (recorderState.isRecording) {
@@ -307,7 +326,7 @@ export function useConversationSession(
         // Best-effort -- the user is already leaving the screen either way.
       }
     }
-  }, [recorder, recorderState.isRecording, player]);
+  }, [recorder, recorderState.isRecording, player, invalidateReply]);
 
   const startTurn = useCallback(async () => {
     if (state !== 'idle') return;
@@ -367,8 +386,10 @@ export function useConversationSession(
         lastTurnMetaRef.current = { ...meta, noVoice: true };
         stateRef.current = 'speaking';
         setState('speaking');
+        invalidateReply();
         const seq = replySeqRef.current;
-        setTimeout(() => {
+        replyTimerRef.current = setTimeout(() => {
+          replyTimerRef.current = null;
           if (replySeqRef.current === seq) onReplyFinishedRef.current();
         }, CONFIRM_SOUND_FALLBACK_MS);
         try {
@@ -379,12 +400,17 @@ export function useConversationSession(
         }
       };
 
+      // The user asked by voice to save and end, and the reply saying so is
+      // on screen, but an interruption stopped the turn before it played.
+      let endAfterAbort = false;
+
       const run = async () => {
         let audioPath: 'direct' | 'storage' = 'storage';
         let audioBytes: number | undefined;
         // Once the server has answered, the turn happened -- including any
         // change the AI made -- whatever goes wrong locally afterwards.
         let answered = false;
+        let endRequested = false;
         try {
           const elapsed = Date.now() - (recordingStartedAtRef.current ?? 0);
           if (elapsed < MIN_RECORDING_MS) {
@@ -444,6 +470,7 @@ export function useConversationSession(
             );
           }
           answered = true;
+          endRequested = result.shouldEnd;
           perf?.mark('function_call_done');
 
           // Shown even if the turn was interrupted meanwhile (a call came in,
@@ -484,6 +511,9 @@ export function useConversationSession(
             // An interruption aborts a 'thinking' turn without touching state
             // itself (see useAudioInterruption below) -- land it in idle here.
             if (stateRef.current === 'thinking') setState('idle');
+            // Not after Cancel or leaving the screen: those cleared the
+            // session and deal with it themselves.
+            if (answered && endRequested && sessionIdRef.current === sessionId) endAfterAbort = true;
             perf?.finish({ trigger, audioPath, aborted: true, answered });
             currentTurnRef.current = null;
             return;
@@ -495,10 +525,13 @@ export function useConversationSession(
             finishWithoutVoice({ trigger, audioPath });
             return;
           }
+          // 'turn_busy': a retry found this turn still running elsewhere --
+          // it may well have gone through, so don't suggest it was lost.
           Alert.alert(
             'Could not process that',
-            friendlyMessage(e, 'Please try again.') +
-              ' What you just said may not have been saved.'
+            functionErrorCode(e) === 'turn_busy'
+              ? friendlyMessage(e, 'Please check before trying again.')
+              : friendlyMessage(e, 'Please try again.') + ' What you just said may not have been saved.'
           );
           setState('idle');
           // The raw error (not the user-facing friendlyMessage) so a
@@ -526,8 +559,10 @@ export function useConversationSession(
       turnPromiseRef.current = promise;
       await promise;
       if (turnPromiseRef.current === promise) turnPromiseRef.current = null;
+      // Only now: endConversation waits for the in-flight turn, i.e. this one.
+      if (endAfterAbort) autoEndRef.current();
     },
-    [state, user, recorder, player]
+    [state, user, recorder, player, invalidateReply]
   );
 
   // Auto-ends the turn after a pause in speech, so the user doesn't have
@@ -607,8 +642,10 @@ export function useConversationSession(
   const onReplyFinishedRef = useRef<() => void>(() => {});
   onReplyFinishedRef.current = () => {
     if (stateRef.current !== 'speaking') return;
+    // Already ended or cancelled (a finish event queued before Save & end).
+    if (sessionIdRef.current === null) return;
     stateRef.current = 'idle';
-    replySeqRef.current += 1;
+    invalidateReply();
     const turn = currentTurnRef.current;
     turn?.mark('reply_finished');
     turn?.finish({
@@ -622,7 +659,7 @@ export function useConversationSession(
     if (pendingEndRef.current) {
       pendingEndRef.current = false;
       setState('idle');
-      endConversation().then((sessionId) => onAutoEnded?.(sessionId));
+      autoEndRef.current();
     } else {
       autoRestartRef.current = activeRef.current;
       setState('idle');
@@ -654,6 +691,7 @@ export function useConversationSession(
     const current = stateRef.current;
     if (current === 'idle') return;
     setInterruption(reason);
+    invalidateReply();
     activeRef.current = false;
     autoRestartRef.current = false;
     if (current === 'recording' || current === 'thinking') {
@@ -678,6 +716,7 @@ export function useConversationSession(
   // into `messages` is preserved instead of being deleted outright.
   useEffect(
     () => () => {
+      invalidateReply();
       abortedRef.current = true;
       const orphan = sessionIdRef.current;
       sessionIdRef.current = null;
@@ -703,7 +742,7 @@ export function useConversationSession(
         });
       })();
     },
-    [recorder, player]
+    [recorder, player, invalidateReply]
   );
 
   // Once idle actually commits (not just requested), auto-relisten if flagged.

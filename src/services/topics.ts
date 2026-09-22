@@ -212,15 +212,22 @@ export async function listSessionsUnclassifiedPage(
 }
 
 /**
- * Reconciles `session_topics` to exactly `topicIds` -- a recording can now
- * cover several distinct topics (one per outline section, see
- * app/summary.tsx), so this replaces the old single-topic
- * `assign_session_topic` RPC (which unlinked every other topic first) with
- * a diff against whatever topic ids are currently in play across the
- * recording's sections/tasks/ideas, adding what's missing and removing
- * what's no longer referenced by anything.
+ * Keeps `session_topics` in step after ONE topic assignment on Summary
+ * changed (a section's, a task's or an idea's) -- a recording can cover
+ * several topics, one per outline section. Adds a link for every topic in
+ * `topicIds` (everything the recording's sections/tasks/ideas now use), and
+ * removes `replacedTopicId`'s link -- the topic that assignment used to
+ * hold -- only if nothing in `topicIds` still uses it.
+ *
+ * Nothing else is removed: a link no section/task/idea holds can only have
+ * come from filing the conversation under a topic by voice (converse's
+ * file_under_topic), which an unrelated edit here must not undo.
  */
-export async function syncSessionTopicLinks(sessionId: string, topicIds: string[]): Promise<void> {
+export async function syncSessionTopicLinks(
+  sessionId: string,
+  topicIds: string[],
+  replacedTopicId: string | null
+): Promise<void> {
   const wanted = [...new Set(topicIds)];
   const { data: existing, error: existingError } = await supabase
     .from('session_topics')
@@ -229,13 +236,12 @@ export async function syncSessionTopicLinks(sessionId: string, topicIds: string[
   if (existingError) throw existingError;
   const existingIds = new Set((existing ?? []).map((r) => r.topic_id));
 
-  const toRemove = [...existingIds].filter((id) => !wanted.includes(id));
-  if (toRemove.length > 0) {
+  if (replacedTopicId && existingIds.has(replacedTopicId) && !wanted.includes(replacedTopicId)) {
     const { error } = await supabase
       .from('session_topics')
       .delete()
       .eq('session_id', sessionId)
-      .in('topic_id', toRemove);
+      .eq('topic_id', replacedTopicId);
     if (error) throw error;
   }
 

@@ -8,6 +8,12 @@ export function isNetworkError(e: unknown): boolean {
   return e instanceof Error && e.name === NETWORK_ERROR_NAME;
 }
 
+/** The machine-readable `code` an Edge Function put next to its `error` text (e.g. converse's 'turn_busy'), if any. */
+export function functionErrorCode(e: unknown): string | undefined {
+  const code = e instanceof Error ? (e as Error & { code?: unknown }).code : undefined;
+  return typeof code === 'string' ? code : undefined;
+}
+
 /**
  * supabase-js's FunctionsHttpError.message is just the generic "Edge
  * Function returned a non-2xx status code" -- the Edge Function's own JSON
@@ -39,7 +45,11 @@ export async function describeFunctionError(error: unknown, fallback: string): P
     const status = error.context.status;
     try {
       const body = await error.context.json();
-      if (typeof body?.error === 'string') return new Error(body.error);
+      if (typeof body?.error === 'string') {
+        const e: Error & { code?: string } = new Error(body.error);
+        if (typeof body.code === 'string') e.code = body.code;
+        return e;
+      }
       // Supabase's own gateway errors (e.g. 404 "Requested function was not
       // found" when a function was never deployed) use `message`, not `error`.
       if (typeof body?.message === 'string') return new Error(`${body.message} (HTTP ${status})`);

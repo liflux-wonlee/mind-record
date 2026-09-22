@@ -104,7 +104,7 @@ Deno.serve(async (req) => {
   }
 
   let sessionId: string | undefined;
-  // The device's IANA timezone (src/lib/timezone.ts) -- what "today" and
+  // The device's IANA timezone (src/lib/device.ts) -- what "today" and
   // "내일" meant when the recording was made.
   let deviceTimezone: unknown;
   try {
@@ -320,6 +320,10 @@ Deno.serve(async (req) => {
       .eq('user_id', user.id);
     if (topicsError) throw topicsError;
     const topics: TopicRow[] = existingTopics ?? [];
+    // Snapshot, so topics this run creates can be told apart (see the
+    // cleanup after the voice-filing placement below). A Retry re-snapshots,
+    // so an earlier attempt's topics count as pre-existing.
+    const preexistingTopicIds = new Set(topics.map((t) => t.id));
 
     const { data: existingLists, error: listsError } = await db
       .from('task_lists')
@@ -348,7 +352,6 @@ Deno.serve(async (req) => {
     const live = actionRecords.filter((r) => !r.undone);
     const liveTaskTitles = new Set(live.filter((r) => r.type === 'task_created').map((r) => normalizeTaskTitle(r.subject)));
     const liveTopicKeys = new Set(live.filter((r) => r.type !== 'task_created').map((r) => normalizeTopicKey(r.subject)));
-    const liveTopicIds = new Set(live.flatMap((r) => [...r.topic_ids, ...(r.linked_topic_id ? [r.linked_topic_id] : [])]));
 
     const undoneTaskTitles = new Set(
       undone
@@ -367,14 +370,6 @@ Deno.serve(async (req) => {
       const parts = r.subject.split('·').map((p) => normalizeTopicKey(p));
       if (parts.length > 1 && r.topic_ids.length > 1 && !liveTopicKeys.has(parts[0])) undoneCreatedTopics.add(parts[0]);
     }
-    // Filings into a topic that still exists, which the user undid: don't
-    // file the conversation there after all (by id -- a same-named topic
-    // elsewhere in the tree is a different topic).
-    const undoneFiledTopicIds = new Set(
-      undone
-        .filter((r) => r.type === 'topic_filed' && r.linked_topic_id && !liveTopicIds.has(r.linked_topic_id))
-        .map((r) => r.linked_topic_id as string)
-    );
     // Topics the user filed this conversation under by voice, and that still exist.
     const liveFiledTopics: TopicRow[] = [];
     for (const r of live) {
@@ -383,6 +378,16 @@ Deno.serve(async (req) => {
       const topic = id ? topics.find((t) => t.id === id) : undefined;
       if (topic && !liveFiledTopics.includes(topic)) liveFiledTopics.push(topic);
     }
+    const liveFiledIds = new Set(liveFiledTopics.map((t) => t.id));
+    // Filings into a topic that still exists, which the user undid: don't
+    // file the conversation there after all (by id -- a same-named topic
+    // elsewhere in the tree is a different topic) -- unless they filed it
+    // there again afterwards. A topic merely CREATED live isn't a filing.
+    const undoneFiledTopicIds = new Set(
+      undone
+        .filter((r) => r.type === 'topic_filed' && r.linked_topic_id && !liveFiledIds.has(r.linked_topic_id))
+        .map((r) => r.linked_topic_id as string)
+    );
 
     const { data: profileRow } = await db.from('profiles').select('timezone').eq('id', user.id).maybeSingle();
     const userTimeZone = resolveUserTimeZone(db, user.id, deviceTimezone, profileRow?.timezone);
@@ -403,7 +408,10 @@ Deno.serve(async (req) => {
       recordedOn,
       liveChanges: live.map((r) => r.label),
       undoneChanges: undone.map((r) => r.label),
-      liveFiledTopics: liveFiledTopics.map((t) => topicDisplayName(t, topics)),
+      liveFiledTopics: liveFiledTopics.map((t) => ({
+        name: t.name,
+        parent: t.parent_topic_id ? (topics.find((p) => p.id === t.parent_topic_id)?.name ?? null) : null,
+      })),
     });
     if (analysisInputTokens > 0 || analysisOutputTokens > 0) {
       await recordUsage(db, {
@@ -444,11 +452,17 @@ Deno.serve(async (req) => {
     // even when nothing in the recording gets filed under X yet. Before
     // this, such a request only produced a topic if some task/idea happened
     // to be assigned to it, so a bare "create this topic" was silently lost.
+    const requestedTopicIds = new Set<string>();
     for (const requested of extraction.requested_topics) {
       const name = requested.name?.trim();
       if (!name) continue;
       const parentName = requested.parent_name?.trim() || null;
       if (recreatesUndoneTopic(name, parentName)) continue;
+      // Already there as a sub-topic ("Liflux" under Business): nothing to create.
+      if (!parentName && !topLevelExactMatch(topics, name) && subTopicsNamed(topics, name).length > 0) continue;
+      // A parent that doesn't exist but looks like one that does ("Busines"
+      // next to "Business") -- likely a mishearing: same rule as below.
+      if (parentName && !topLevelExactMatch(topics, parentName) && findSimilarTopic(topics, parentName)) continue;
       if (!parentName && !topLevelExactMatch(topics, name) && findSimilarTopic(topics, name)) {
         // A bare "make a topic called X" instruction has no task/idea
         // attached to it to hang a confirmation card off of (see
@@ -459,7 +473,8 @@ Deno.serve(async (req) => {
         // would both be worse than doing nothing.
         continue;
       }
-      await findOrCreateTopic(db, user.id, topics, name, parentName);
+      const created = await findOrCreateTopic(db, user.id, topics, name, parentName);
+      requestedTopicIds.add(created.id);
     }
 
     // Resolve each item's topic (find-or-create) before inserting, so the
@@ -472,7 +487,17 @@ Deno.serve(async (req) => {
       const key = normalizeTaskTitle(t.title);
       return !alreadyExisting.has(key) && !undoneTaskTitles.has(key);
     });
-    const resolvedTasks = [];
+    const resolvedTasks: {
+      user_id: string;
+      source_session_id: string;
+      title: string;
+      priority: string;
+      due_date: string | null;
+      topic_id: string | null;
+      topic_suggestion: string | null;
+      list_id: string | null;
+      list_suggestion: string | null;
+    }[] = [];
     for (const t of newTasks) {
       const resolvedTopic = await resolveTopic(db, user.id, topics, withoutUndoneTopic(t));
       const resolvedList = await resolveList(db, user.id, lists, t);
@@ -489,7 +514,14 @@ Deno.serve(async (req) => {
       });
     }
 
-    const resolvedMemories = [];
+    const resolvedMemories: {
+      user_id: string;
+      source_session_id: string;
+      content: string;
+      category: string | null;
+      topic_id: string | null;
+      topic_suggestion: string | null;
+    }[] = [];
     for (const m of extraction.memories) {
       const resolved = await resolveTopic(db, user.id, topics, withoutUndoneTopic(m));
       resolvedMemories.push({
@@ -543,15 +575,53 @@ Deno.serve(async (req) => {
     // didn't, it goes on the first unfiled section, else the first section
     // not already carrying a voice filing (usually the Overview) -- the
     // user's explicit instruction outranks the AI's own guess.
-    const liveFiledIds = new Set(liveFiledTopics.map((t) => t.id));
+    const confidenceOf = (section: (typeof resolvedOutline)[number]) =>
+      extraction.outline[resolvedOutline.indexOf(section)]?.topic_confidence ?? 0;
+    const usedElsewhere = (id: string, except: (typeof resolvedOutline)[number]) =>
+      resolvedOutline.some((s) => s !== except && s.topic_id === id) ||
+      resolvedTasks.some((t) => t.topic_id === id) ||
+      resolvedMemories.some((m) => m.topic_id === id);
     for (const topic of liveFiledTopics) {
       if (resolvedOutline.some((s) => s.topic_id === topic.id)) continue;
+      const overridable = resolvedOutline.filter((s) => s.topic_id && !liveFiledIds.has(s.topic_id));
+      // Least harmful first: an unfiled section; then one whose topic stays
+      // in use elsewhere or already existed, and wasn't an explicit (~1.0)
+      // instruction; then any that wasn't explicit; then any at all.
       const target =
-        resolvedOutline.find((s) => !s.topic_id) ?? resolvedOutline.find((s) => !s.topic_id || !liveFiledIds.has(s.topic_id));
+        resolvedOutline.find((s) => !s.topic_id) ??
+        overridable.find(
+          (s) => confidenceOf(s) < 0.95 && (usedElsewhere(s.topic_id!, s) || preexistingTopicIds.has(s.topic_id!))
+        ) ??
+        overridable.find((s) => confidenceOf(s) < 0.95) ??
+        overridable[0];
       if (target) {
         target.topic_id = topic.id;
         target.topic_suggestion = null;
       }
+      // With no section left for it, the filing still keeps the
+      // session_topics link converse made -- Summary leaves links it
+      // doesn't own alone (see syncSessionTopicLinks).
+    }
+
+    // A topic this run created that nothing uses any more (the placement
+    // above replaced it) would sit empty in the Topics tab -- remove it.
+    // Requested topics stay, and so does the parent of anything in use.
+    const referencedTopicIds = new Set<string>(
+      [
+        ...resolvedOutline.map((s) => s.topic_id),
+        ...resolvedTasks.map((t) => t.topic_id),
+        ...resolvedMemories.map((m) => m.topic_id),
+        ...requestedTopicIds,
+      ].filter((id): id is string => !!id)
+    );
+    for (const id of [...referencedTopicIds]) {
+      const parentId = topics.find((t) => t.id === id)?.parent_topic_id;
+      if (parentId) referencedTopicIds.add(parentId);
+    }
+    const orphanedTopicIds = topics.filter((t) => !preexistingTopicIds.has(t.id) && !referencedTopicIds.has(t.id)).map((t) => t.id);
+    if (orphanedTopicIds.length > 0) {
+      const { error } = await db.from('topics').delete().in('id', orphanedTopicIds).eq('user_id', user.id);
+      if (error) throw error;
     }
 
     // session_topics: a rollup of every topic actually resolved above,
@@ -641,6 +711,21 @@ async function resolveTopic(
     return { topicId: null, suggestion: name ?? null };
   }
   const parentName = item.topic_parent_name?.trim() || null;
+  // A name that exists only as a sub-topic ("Liflux" under Business) is
+  // that sub-topic -- not a new top-level one (what converse does too).
+  if (!parentName && !topLevelExactMatch(topics, name)) {
+    const children = subTopicsNamed(topics, name);
+    if (children.length === 1) return { topicId: children[0].id, suggestion: null };
+    if (children.length > 1) return { topicId: null, suggestion: name };
+  }
+  // A parent that doesn't exist but looks like one that does ("Busines" vs
+  // "Business") is most likely a mishearing: suggest the existing one
+  // instead of creating a near-duplicate parent. (A suggestion is confirmed
+  // on Summary as a top-level topic, so it names the parent, not the child.)
+  if (parentName && !topLevelExactMatch(topics, parentName)) {
+    const similarParent = findSimilarTopic(topics, parentName, { shortNames: true });
+    if (similarParent) return { topicId: null, suggestion: similarParent.name };
+  }
   // Confident (including an explicit "put this under X" instruction, which
   // the prompt tells GPT to mark near-1.0) but not an exact match against
   // an existing TOP-LEVEL topic -- e.g. GPT said "Family" and "Familys"
@@ -691,15 +776,27 @@ function topLevelExactMatch(topics: TopicRow[], name: string): boolean {
   return topics.some((t) => t.parent_topic_id === null && t.name.toLowerCase() === target);
 }
 
+/** Sub-topics (under any parent) with exactly this name. */
+function subTopicsNamed(topics: TopicRow[], name: string): TopicRow[] {
+  return topics.filter((t) => t.parent_topic_id !== null && sameTopicName(t.name, name));
+}
+
+/**
+ * GPT sometimes echoes a display name ("Business · Liflux") as topic_name
+ * -- the form converse's action log uses. Topics nest one level, so the
+ * prefix is the parent.
+ */
+function splitTopicName(rawName: string | null, rawParent: string | null): { name: string | null; parent: string | null } {
+  if (!rawName || !rawName.includes('·')) return { name: rawName, parent: rawParent };
+  const parts = rawName.split('·').map((p) => p.trim()).filter(Boolean);
+  if (parts.length !== 2) return { name: rawName, parent: rawParent };
+  return { name: parts[1], parent: parts[0] };
+}
+
 function normalizeTopicKey(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
-/** "Business · Liflux" for a sub-topic -- the same form converse's action log uses. */
-function topicDisplayName(topic: TopicRow, topics: TopicRow[]): string {
-  const parent = topic.parent_topic_id ? topics.find((t) => t.id === topic.parent_topic_id) : undefined;
-  return parent ? `${parent.name} · ${topic.name}` : topic.name;
-}
 
 function findTopicByDisplay(topics: TopicRow[], display: string): TopicRow | undefined {
   const parts = display.split('·').map((p) => p.trim());
@@ -844,8 +941,8 @@ async function analyzeTranscript(
     recordedOn: { date: string; weekday: string } | null;
     liveChanges: string[];
     undoneChanges: string[];
-    /** Topics the user filed the conversation under by voice ("Business · Liflux"). */
-    liveFiledTopics: string[];
+    /** Topics the user filed the conversation under by voice. */
+    liveFiledTopics: { name: string; parent: string | null }[];
   }
 ): Promise<{ extraction: Extraction; inputTokens: number; outputTokens: number }> {
   if (!transcript.trim()) {
@@ -892,8 +989,10 @@ ${context.liveChanges.map((c) => `- ${c}`).join('\n')}`
     context.liveFiledTopics.length > 0
       ? `
 
-The user explicitly filed this conversation under these topics by voice ("A · B" = sub-topic B under A). Each one MUST be the topic_name (with topic_parent_name for a sub-topic, and topic_confidence 1.0) of the outline section(s) it was about -- the Overview section if it was about the conversation as a whole:
-${context.liveFiledTopics.map((t) => `- ${t}`).join('\n')}`
+The user explicitly filed this conversation under these topics by voice. Give the outline section(s) each one was about exactly these topic_name / topic_parent_name values, with topic_confidence 1.0 -- the Overview section if it was about the conversation as a whole:
+${context.liveFiledTopics
+  .map((t) => `- topic_name ${JSON.stringify(t.name)}, topic_parent_name ${t.parent ? JSON.stringify(t.parent) : 'null'}`)
+  .join('\n')}`
       : '';
   const dateNote = context.recordedOn
     ? `This was recorded on ${context.recordedOn.date} (${context.recordedOn.weekday}) in the speaker's timezone -- resolve relative dates ("내일", "금요일까지", "next week") against that day.`
@@ -1013,10 +1112,15 @@ ${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bull
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map(sanitizeTask).filter(Boolean) : [],
       memories: Array.isArray(parsed.memories) ? parsed.memories.map(sanitizeMemory).filter(Boolean) : [],
       requested_topics: Array.isArray(parsed.requested_topics)
-        ? parsed.requested_topics.filter(
-            (t: unknown): t is RequestedTopic =>
-              !!t && typeof t === 'object' && typeof (t as RequestedTopic).name === 'string'
-          )
+        ? parsed.requested_topics
+            .filter(
+              (t: unknown): t is RequestedTopic =>
+                !!t && typeof t === 'object' && typeof (t as RequestedTopic).name === 'string'
+            )
+            .map((t: RequestedTopic) => {
+              const { name, parent } = splitTopicName(optionalString(t.name), optionalString(t.parent_name));
+              return { name: name ?? '', parent_name: parent };
+            })
         : [],
     },
     inputTokens: typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0,
@@ -1058,6 +1162,11 @@ function clampConfidence(v: unknown): number | undefined {
 function optionalString(v: unknown): string | null {
   return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
+/** topic_name / topic_parent_name, with a "Parent · Child" topic_name split up. */
+function topicFields(raw: Record<string, unknown>): { topic_name: string | null; topic_parent_name: string | null } {
+  const { name, parent } = splitTopicName(optionalString(raw.topic_name), optionalString(raw.topic_parent_name));
+  return { topic_name: name, topic_parent_name: parent };
+}
 function sanitizeTask(raw: unknown): ExtractedTask | null {
   if (!raw || typeof raw !== 'object') return null;
   const t = raw as Record<string, unknown>;
@@ -1066,8 +1175,7 @@ function sanitizeTask(raw: unknown): ExtractedTask | null {
   return {
     title,
     priority: PRIORITIES.has(t.priority as string) ? (t.priority as ExtractedTask['priority']) : 'normal',
-    topic_name: optionalString(t.topic_name),
-    topic_parent_name: optionalString(t.topic_parent_name),
+    ...topicFields(t),
     topic_confidence: clampConfidence(t.topic_confidence),
     list_name: optionalString(t.list_name),
     list_confidence: clampConfidence(t.list_confidence),
@@ -1086,8 +1194,7 @@ function sanitizeOutlineSection(raw: unknown): OutlineSection | null {
   return {
     heading: typeof s.heading === 'string' ? s.heading : '',
     bullets: Array.isArray(s.bullets) ? s.bullets.filter((b: unknown): b is string => typeof b === 'string') : [],
-    topic_name: optionalString(s.topic_name),
-    topic_parent_name: optionalString(s.topic_parent_name),
+    ...topicFields(s),
     topic_confidence: clampConfidence(s.topic_confidence),
   };
 }
@@ -1099,8 +1206,7 @@ function sanitizeMemory(raw: unknown): ExtractedMemory | null {
   return {
     content,
     category: optionalString(m.category),
-    topic_name: optionalString(m.topic_name),
-    topic_parent_name: optionalString(m.topic_parent_name),
+    ...topicFields(m),
     topic_confidence: clampConfidence(m.topic_confidence),
   };
 }

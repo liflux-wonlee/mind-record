@@ -1,6 +1,6 @@
 import { describeFunctionError } from '@/lib/functionsError';
 import { supabase } from '@/lib/supabase';
-import { deviceTimeZone } from '@/lib/timezone';
+import { deviceLanguage, deviceTimeZone } from '@/lib/device';
 import { appendFilePart } from '@/services/recordings';
 
 export type ConverseResult = {
@@ -45,14 +45,16 @@ export async function converseTurn(
   turnId?: string
 ): Promise<ConverseResult> {
   const timezone = deviceTimeZone();
-  let body: FormData | { sessionId: string; storagePath: string; turnId?: string; timezone?: string };
+  const lang = deviceLanguage();
+  let body: FormData | { sessionId: string; storagePath: string; turnId?: string; timezone?: string; lang?: string };
   if ('storagePath' in audio) {
-    body = { sessionId, storagePath: audio.storagePath, turnId, timezone };
+    body = { sessionId, storagePath: audio.storagePath, turnId, timezone, lang };
   } else {
     const form = new FormData();
     form.append('sessionId', sessionId);
     if (turnId) form.append('turnId', turnId);
     if (timezone) form.append('timezone', timezone);
+    if (lang) form.append('lang', lang);
     await appendFilePart(form, 'audio', audio.uri, 'segment.m4a', audio.mimeType);
     body = form;
   }

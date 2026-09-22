@@ -1,5 +1,5 @@
 // Whose "today" is it? The device sends its IANA timezone with converse,
-// process-session and search-ask requests (src/lib/timezone.ts);
+// process-session and search-ask requests (src/lib/device.ts);
 // profiles.timezone is only a fallback -- the app never set it before, so
 // for most users it's still the 'UTC' column default, which is not a real
 // answer. A valid device value is saved back to the profile.

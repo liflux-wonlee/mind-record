@@ -113,17 +113,18 @@ const TRANSCRIBE_TIMEOUT_MS = 45_000;
 // GPT rounds and tools, from the moment the user's words are saved. Past it,
 // whatever was already changed is confirmed (a turn that changed nothing fails).
 const REPLY_DEADLINE_MS = 40_000;
+// No change (a write tool) may START later than this past the reply deadline.
+const WRITE_GRACE_MS = 5_000;
 const TTS_TIMEOUT_MS = 15_000;
 // Kept free after the reply for saving it and synthesizing speech.
 const TTS_RESERVE_MS = 20_000;
 // How long, after a turn's user row was written, the request that wrote it
-// is presumed to still be working on the reply: REPLY_DEADLINE_MS plus slack
-// for the tool that was running at the deadline and for clock skew between
-// this function and the database. Only after it does a retry take over.
+// is presumed to still be working on the reply: REPLY_DEADLINE_MS +
+// WRITE_GRACE_MS, plus slack for a write that started right at that limit
+// and for clock skew between this function and the database. Only after it
+// does a retry take over.
 const TURN_LEASE_MS = 65_000;
 const TURN_POLL_MS = 1_000;
-// A retry stops waiting early enough to still produce a reply in budget.
-const TAKEOVER_RESERVE_MS = REPLY_DEADLINE_MS + TTS_RESERVE_MS + 5_000;
 
 type ParsedRequest = {
   sessionId: string | undefined;
@@ -131,10 +132,19 @@ type ParsedRequest = {
   audioFile: File | null;
   turnId: string | undefined;
   timezone: string | undefined;
+  /** The device's language ("ko-KR") -- only a hint, for a turn with nothing heard yet to go on. */
+  lang: string | undefined;
 };
 
 async function parseRequest(req: Request): Promise<ParsedRequest> {
-  const parsed: ParsedRequest = { sessionId: undefined, storagePath: undefined, audioFile: null, turnId: undefined, timezone: undefined };
+  const parsed: ParsedRequest = {
+    sessionId: undefined,
+    storagePath: undefined,
+    audioFile: null,
+    turnId: undefined,
+    timezone: undefined,
+    lang: undefined,
+  };
   const field = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
   try {
     const contentType = req.headers.get('content-type') ?? '';
@@ -145,6 +155,7 @@ async function parseRequest(req: Request): Promise<ParsedRequest> {
       parsed.sessionId = field(form.get('sessionId'));
       parsed.turnId = field(form.get('turnId'));
       parsed.timezone = field(form.get('timezone'));
+      parsed.lang = field(form.get('lang'));
       const audio = form.get('audio');
       if (audio instanceof File) parsed.audioFile = audio;
     } else {
@@ -153,6 +164,7 @@ async function parseRequest(req: Request): Promise<ParsedRequest> {
       parsed.storagePath = field(body?.storagePath);
       parsed.turnId = field(body?.turnId);
       parsed.timezone = field(body?.timezone);
+      parsed.lang = field(body?.lang);
     }
   } catch {
     // handled by the caller's checks
@@ -224,7 +236,7 @@ Deno.serve(async (req) => {
   try {
     const { data: profile, error: profileError } = await db
       .from('profiles')
-      .select('ai_name, user_honorific, ai_voice, locale, timezone')
+      .select('ai_name, user_honorific, ai_voice, timezone')
       .eq('id', userId)
       .maybeSingle();
     if (profileError) throw profileError;
@@ -266,24 +278,44 @@ Deno.serve(async (req) => {
       });
     };
 
+    // The latest the reply may take, given when it starts: REPLY_DEADLINE_MS,
+    // but always leaving room to save and speak it within the request budget.
+    const replyDeadlineFrom = (start: number) => Math.min(start + REPLY_DEADLINE_MS, hardDeadline - TTS_RESERVE_MS);
+
+    const busyResponse = () => {
+      scheduleBackground(background, () => perf.finish({ path: pathTag, busy: true }));
+      // Not "try again": the other request may already have made the change.
+      return json(
+        {
+          error: 'Still finishing that one -- it may already have gone through, so check before saying it again.',
+          code: 'turn_busy',
+        },
+        409
+      );
+    };
+
     // A retried request's turn may already be under way (see the header).
     // Returns a finished response, what to carry on with, or null if this
     // turn hasn't saved anything yet.
-    type Carry = { userText: string; finishFrom: StoredTurn | null };
+    type Carry = { userText: string; finishFrom: StoredTurn | null; replyDeadline: number };
     const takeOverTurn = async (turnId: string): Promise<Response | Carry | null> => {
-      const settled = await settleTurn(db, sessionId, turnId, hardDeadline - TAKEOVER_RESERVE_MS);
+      // While the other request holds the lease, wait for its reply for as
+      // long as replaying it (just speech) still fits in this request.
+      const settled = await settleTurn(db, sessionId, turnId, hardDeadline - TTS_RESERVE_MS - TURN_POLL_MS);
       switch (settled.kind) {
         case 'fresh':
           return null;
         case 'replay':
           return await replay(settled.turn);
         case 'busy':
-          scheduleBackground(background, () => perf.finish({ path: pathTag, busy: true }));
-          return json({ error: 'This turn is still being handled -- try again in a moment.' }, 409);
+          return busyResponse();
         case 'finish':
-          return { userText: settled.turn.userText ?? '', finishFrom: settled.turn };
+          return { userText: settled.turn.userText ?? '', finishFrom: settled.turn, replyDeadline: replyDeadlineFrom(Date.now()) };
         case 'resume':
-          return { userText: settled.turn.userText ?? '', finishFrom: null };
+          // The client retries only once, so no other request remains to
+          // protect -- and if too little time is left, generateReply fails
+          // before any tool runs.
+          return { userText: settled.turn.userText ?? '', finishFrom: null, replyDeadline: replyDeadlineFrom(Date.now()) };
       }
     };
 
@@ -297,6 +329,23 @@ Deno.serve(async (req) => {
       carry = taken;
       // The transcript is already on record, so the uploaded audio is redundant.
       if (carry && storagePath) background.push(discardAudio(db, storagePath));
+    }
+
+    // Storage path: the upload is shared with this turn's other request (the
+    // client retries with the same path), which discards it as soon as it
+    // has saved the user's words -- possibly between the check above and
+    // this download. A missing file then means the words are on record.
+    let storedAudio: Blob | null = null;
+    if (!carry && !audioFile) {
+      const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath!);
+      if (downloadError || !file) {
+        const taken = clientTurnId ? await takeOverTurn(clientTurnId) : null;
+        if (taken instanceof Response) return taken;
+        if (!taken) throw downloadError ?? new Error('Recording not found.');
+        carry = taken;
+      } else {
+        storedAudio = file;
+      }
     }
 
     if (!carry) {
@@ -321,9 +370,7 @@ Deno.serve(async (req) => {
           .catch((e) => logError(`could not write turn audio backup ${backupPath}`, e));
         [transcribed] = await Promise.all([transcribeAudio(audioFile, 'segment.m4a'), backupWrite]);
       } else {
-        const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath!);
-        if (downloadError) throw downloadError;
-        transcribed = await transcribeAudio(file, storagePath!);
+        transcribed = await transcribeAudio(storedAudio!, storagePath!);
         backupStoragePath = storagePath!;
       }
       perf.mark('transcribe_done');
@@ -345,7 +392,18 @@ Deno.serve(async (req) => {
         // Nothing was actually said -- there's no transcript to lose, so the
         // audio is safe to discard right away.
         background.push(discardAudio(db, backupStoragePath));
-        const assistantText = NOTHING_HEARD_REPLY[profile?.locale === 'ko' ? 'ko' : 'en'];
+        // No words this turn to tell the language from: use the conversation's
+        // last user turn, else the device's language.
+        const { data: lastUser } = await db
+          .from('messages')
+          .select('content')
+          .eq('session_id', sessionId)
+          .eq('role', 'user')
+          .order('position', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const assistantText =
+          NOTHING_HEARD_REPLY[lastUser?.content ? replyLang([{ role: 'user', content: lastUser.content }]) : langFromHint(request.lang)];
         const audioBase64 = await speak(assistantText);
         perf.mark('tts_done');
         scheduleBackground(background, () => perf.finish({ path: pathTag, nothingHeard: true }));
@@ -354,6 +412,9 @@ Deno.serve(async (req) => {
 
       // The user's own words are saved BEFORE the audio is discarded: only
       // once the transcript is durably on record is the audio redundant.
+      // The reply's clock starts here -- the row's created_at (which starts
+      // the lease a retry honors) can only be later than this.
+      const savingAt = Date.now();
       const inserted = await insertMessageRow(db, {
         session_id: sessionId,
         user_id: userId,
@@ -368,10 +429,10 @@ Deno.serve(async (req) => {
         // possible with a turnId -- that's the index that collided).
         const taken = clientTurnId ? await takeOverTurn(clientTurnId) : null;
         if (taken instanceof Response) return taken;
-        if (!taken) throw new Error('This turn is already being handled -- try again in a moment.');
+        if (!taken) return busyResponse();
         carry = taken;
       } else {
-        carry = { userText, finishFrom: null };
+        carry = { userText, finishFrom: null, replyDeadline: replyDeadlineFrom(savingAt) };
         perf.mark('user_message_saved');
       }
     }
@@ -381,8 +442,11 @@ Deno.serve(async (req) => {
     let shouldEnd = false;
     if (carry.finishFrom) {
       // The request that ran this turn's tools died before replying. Confirm
-      // what it changed instead of running anything a second time.
-      const lang = replyLang(profile?.locale, [{ role: 'user', content: carry.userText }]);
+      // what it changed instead of running anything a second time -- and if
+      // it got as far as saving its turn meta, keep its decision to end the
+      // conversation ("... 추가하고 끝내").
+      const lang = replyLang([{ role: 'user', content: carry.userText }]);
+      shouldEnd = carry.finishFrom.meta?.end ?? false;
       assistantText = spokenForStoredTurn(carry.finishFrom, lang);
       actions.push(...storedActions(carry.finishFrom));
       perf.mark('finished_from_records');
@@ -407,12 +471,12 @@ Deno.serve(async (req) => {
       try {
         const reply = await generateReply(
           historyResult.data ?? [],
-          { aiName, userHonorific, locale: profile?.locale, timezone },
+          { aiName, userHonorific, timezone },
           catalog,
           toolContext,
           actions,
           usage,
-          Math.min(Date.now() + REPLY_DEADLINE_MS, hardDeadline - TTS_RESERVE_MS),
+          carry.replyDeadline,
           perf
         );
         assistantText = reply.reply;
@@ -453,20 +517,21 @@ Deno.serve(async (req) => {
         console.warn('converse: two requests completed the same turn', perf.turnId);
       }
     } catch (e) {
-      // Once something was changed, the turn must not fail: the user would
-      // repeat the command and do it twice.
-      if (actions.length === 0) throw e;
-      logError('converse could not save the reply after a change:', e);
+      // Once something was changed -- or the user asked to end -- the turn
+      // must not fail: they would repeat the command (and do it twice).
+      if (actions.length === 0 && !shouldEnd) throw e;
+      logError('converse could not save the reply after a change or goodbye:', e);
     }
 
     let audioBase64Reply = '';
     try {
       audioBase64Reply = await speak(assistantText);
     } catch (e) {
-      // Same rule -- after a change, return the reply text and the actions
-      // without audio (the client plays a short confirmation sound instead).
-      if (actions.length === 0) throw e;
-      logError('converse TTS failed after a change:', e);
+      // Same rule -- return the reply text, actions and shouldEnd without
+      // audio; the client plays a short confirmation sound, then ends or
+      // listens again.
+      if (actions.length === 0 && !shouldEnd) throw e;
+      logError('converse TTS failed after a change or goodbye:', e);
     }
     perf.mark('tts_done');
 
@@ -570,7 +635,8 @@ type Settled =
  * producing its reply: 'fresh' (nothing saved yet), 'replay' (reply
  * stored), 'finish' (that request made changes and then died -- confirm
  * them), 'resume' (it died having changed nothing -- reply from its saved
- * words), or 'busy' (its lease hadn't lapsed by `giveUpAt`).
+ * words), or 'busy' (its lease hadn't lapsed by `giveUpAt`, the latest this
+ * request can still replay a reply in time).
  */
 async function settleTurn(db: SupabaseClient, sessionId: string, turnId: string, giveUpAt: number): Promise<Settled> {
   let turn = await loadTurn(db, sessionId, turnId);
@@ -607,12 +673,17 @@ function storedActions(turn: StoredTurn): ConverseAction[] {
   ];
 }
 
-/** A spoken confirmation of what a stored turn changed (undo can only come before a turn's other changes). */
+/**
+ * A spoken confirmation of what a stored turn changed (undo can only come
+ * before a turn's other changes), plus a goodbye if it ended the
+ * conversation (its own closing line wasn't stored).
+ */
 function spokenForStoredTurn(turn: StoredTurn, lang: Lang): string {
   const parts = [
     ...turn.undos.map((u) => u.spoken?.[lang] || (lang === 'ko' ? '취소했어요.' : 'Done, I undid that.')),
     spokenForRecords(turn.records.filter((r) => !r.undone))[lang],
   ].filter(Boolean);
+  if (turn.meta?.end) return [...parts, CANNED_CLOSING[lang]].join(' ');
   return parts.join(' ') || FALLBACK_REPLY[lang];
 }
 
@@ -757,18 +828,15 @@ function arrayBufferToBase64(buffer: ArrayBuffer): string {
 
 // ── the reply ──────────────────────────────────────────────────────────
 
-// profiles.locale: 'auto' (default -- answer in whatever language the user
-// just spoke), or 'ko' / 'en' to always answer in that language.
-function replyLanguageRule(locale: string | null | undefined): string {
-  if (locale === 'ko') return 'Always reply in Korean, whatever language the user speaks.';
-  if (locale === 'en') return 'Always reply in English, whatever language the user speaks.';
-  return 'Reply in the SAME language the user is speaking in this turn (Korean if they spoke Korean, English if English, and so on).';
-}
+// Always the language the user is speaking: the Korean/English reply
+// picker was removed (Settings -> AI keeps "Auto" only), so profiles.locale
+// -- whose column default is 'en', never chosen by anyone -- is ignored.
+const REPLY_LANGUAGE_RULE =
+  'Reply in the SAME language the user is speaking in this turn (Korean if they spoke Korean, English if English, and so on).';
 
 type PromptOptions = {
   aiName: string | null;
   userHonorific: string | null;
-  locale: string | null | undefined;
   timezone: string;
 };
 
@@ -778,7 +846,7 @@ function buildSystemPrompt(opts: PromptOptions, actionLog: string[], catalog: { 
 
   let prompt = `You are the voice on the other end of a live, hands-free conversation inside Mind Record, a voice-journaling app -- the user often talks to you while driving. The conversation auto-listens again after every reply you give; the user never has to tap anything between turns. Mostly they are thinking out loud, like talking to a supportive friend while journaling -- your job is to listen and respond BRIEFLY (1-2 short, natural spoken sentences) so the conversation keeps flowing without you taking it over. Everything you say is read aloud by text-to-speech, so never use markdown, bullet points, lists, or a written-essay register -- talk the way a person actually talks.
 
-${replyLanguageRule(opts.locale)}
+${REPLY_LANGUAGE_RULE}
 
 Today is ${today} (${weekday}) in the user's timezone (${opts.timezone}). Resolve relative dates like "내일", "금요일", "next week" against this.
 
@@ -852,10 +920,15 @@ const CANNED_CLOSING: Record<Lang, string> = {
   en: "Okay, I'll save it here.",
 };
 
-function replyLang(locale: string | null | undefined, history: { role: string; content: string }[]): Lang {
-  if (locale === 'ko' || locale === 'en') return locale;
+/** The language of the user's latest turn -- for the server's own fixed phrases (confirmations, goodbyes). */
+function replyLang(history: { role: string; content: string }[]): Lang {
   const lastUserText = [...history].reverse().find((m) => m.role === 'user')?.content ?? '';
   return /[가-힣]/.test(lastUserText) ? 'ko' : 'en';
+}
+
+/** The device's language ("ko-KR"), when there are no words to go on. */
+function langFromHint(hint: string | undefined): Lang {
+  return hint?.toLowerCase().startsWith('ko') ? 'ko' : 'en';
 }
 
 async function chatRound(messages: ChatMessage[], toolsAllowed: boolean, timeoutMs: number): Promise<Record<string, any>> {
@@ -885,6 +958,7 @@ async function chatRound(messages: ChatMessage[], toolsAllowed: boolean, timeout
 }
 
 const ASKS_USER = new Set(['needs_confirmation', 'not_found', 'not_possible']);
+const WRITE_TOOLS = new Set(['create_task', 'file_under_topic', 'create_topic', 'undo_last_action']);
 
 /**
  * One conversational turn with tool calling: the model may call app-data
@@ -914,13 +988,15 @@ async function generateReply(
       .filter((m): m is { role: 'user' | 'assistant'; content: string } => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({ role: m.role, content: m.content })),
   ];
-  const lang = replyLang(opts.locale, history);
+  const lang = replyLang(history);
   const spoken: SpokenConfirmation[] = [];
-  const confirmAll = () => spoken.map((c) => c[lang]).join(' ');
 
   let end = false;
   let closingLine = '';
   let reply = '';
+  // What's owed without a usable model reply: what changed, plus the goodbye if the turn ends.
+  const confirmAndClose = () =>
+    [spoken.map((c) => c[lang]).join(' '), end ? closingLine || CANNED_CLOSING[lang] : ''].filter(Boolean).join(' ');
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round++) {
     const toolsAllowed = round < MAX_TOOL_ROUNDS;
@@ -933,7 +1009,7 @@ async function generateReply(
       // Nothing changed and no goodbye owed: the turn fails and the user repeats it.
       if (spoken.length === 0 && !end) throw e;
       logError('converse GPT round failed after tools ran:', e);
-      reply = [confirmAll(), end ? closingLine || CANNED_CLOSING[lang] : ''].filter(Boolean).join(' ');
+      reply = confirmAndClose();
       break;
     }
     usage.inputTokens += typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0;
@@ -977,6 +1053,18 @@ async function generateReply(
         continue;
       }
       seen.add(dedupeKey);
+      if (WRITE_TOOLS.has(name) && Date.now() > deadline + WRITE_GRACE_MS) {
+        // Past this point a retry of the turn may take it over (see
+        // TURN_LEASE_MS) -- a change started now could happen twice.
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify({ status: 'not_possible', reason: 'Out of time; nothing was changed. Tell the user briefly to say it again.' }),
+        });
+        everyCallCompletedAWrite = false;
+        questionPending = true;
+        continue;
+      }
       const outcome = await executeTool(toolContext, name, call.function?.arguments, actions);
       messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(outcome.result) });
       if (outcome.confirmation) {
@@ -1020,7 +1108,7 @@ async function generateReply(
   }
 
   reply = unwrapJsonReply(reply);
-  if (!reply) reply = spoken.length > 0 ? confirmAll() : end ? CANNED_CLOSING[lang] : FALLBACK_REPLY[lang];
+  if (!reply) reply = confirmAndClose() || FALLBACK_REPLY[lang];
   return { reply, end };
 }
 
