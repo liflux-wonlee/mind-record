@@ -24,7 +24,7 @@ import { friendlyMessage } from '@/lib/friendlyError';
 import { startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
-import { readRecordingBase64 } from '@/services/recordings';
+import { localRecordingSize } from '@/services/recordings';
 import {
   askSearchQuestion,
   uploadSearchQuestionAudio,
@@ -127,13 +127,13 @@ export function useVoiceSearch(
       // Storage-upload path, and isn't on this one).
       let result: SearchAnswerResult | undefined;
       if (DIRECT_AUDIO_UPLOAD_ENABLED) {
-        const { base64, byteLength } = await readRecordingBase64(uri);
+        const byteLength = localRecordingSize(uri);
         audioBytes = byteLength;
         if (byteLength > 0 && byteLength <= DIRECT_AUDIO_MAX_BYTES) {
           perf?.mark('audio_read');
           audioPath = 'direct';
           result = await askSearchQuestion({
-            audioBase64: base64,
+            uri,
             mimeType: 'audio/m4a',
             turnId: perf?.turnId,
             history: historyRef.current,

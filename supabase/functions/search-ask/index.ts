@@ -11,13 +11,19 @@
 // The whole corpus is never sent to the model -- only the rows
 // search_everything actually returned.
 //
-// A `storagePath` (instead of `question`) means this came from Search's
-// voice-input button: the audio is transcribed here, then the storage
-// object is discarded immediately (no `attachments` row is ever created
-// for it -- this was never a recording, just a spoken question).
+// A voice question (instead of `question`) means this came from Search's
+// voice-input button, sent as multipart form data (fields: turnId, history,
+// and an `audio` file part -- see src/services/searchAnswer.ts) or, as a
+// fallback (see src/lib/featureFlags.ts), a JSON body's `storagePath`
+// against audio already uploaded to Storage. Either way the audio itself
+// is never kept -- no `attachments` row is ever created for it, and a
+// storagePath-based upload is deleted right after transcribing -- this was
+// never a recording, just a spoken question.
 //
 // Invoked via
-//   supabase.functions.invoke('search-ask', { body: { question | storagePath, history } })
+//   supabase.functions.invoke('search-ask', { body })
+// where `body` is either a FormData (voice, direct) or a JSON object
+// { question | storagePath, history } (typed, or voice via the fallback).
 //
 // OPENAI_API_KEY / SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
 // are the same Edge Function secrets converse/process-session already rely on.
@@ -67,27 +73,47 @@ Deno.serve(async (req) => {
 
   let question: string | undefined;
   let storagePath: string | undefined;
-  let audioBase64Input: string | undefined;
-  let mimeType: string | undefined;
+  let audioFile: File | null = null;
   let clientTurnId: string | undefined;
   let history: Turn[] = [];
-  try {
-    const body = await req.json();
-    question = typeof body.question === 'string' ? body.question : undefined;
-    storagePath = typeof body.storagePath === 'string' ? body.storagePath : undefined;
-    audioBase64Input = typeof body.audioBase64 === 'string' ? body.audioBase64 : undefined;
-    mimeType = typeof body.mimeType === 'string' ? body.mimeType : undefined;
-    clientTurnId = typeof body.turnId === 'string' ? body.turnId : undefined;
-    history = Array.isArray(body.history)
-      ? body.history
+  const parseHistory = (raw: unknown): Turn[] =>
+    Array.isArray(raw)
+      ? raw
           .filter((t: unknown): t is Turn => !!t && typeof t === 'object' && typeof (t as Turn).question === 'string')
           .slice(-5)
       : [];
+  try {
+    const contentType = req.headers.get('content-type') ?? '';
+    if (contentType.includes('multipart/form-data')) {
+      // The direct-send path for a voice question (see
+      // src/lib/featureFlags.ts): streamed from the local file instead of
+      // inlined as base64 in a JSON body -- see converse/index.ts's own
+      // version of this comment for why.
+      const form = await req.formData();
+      const tid = form.get('turnId');
+      clientTurnId = typeof tid === 'string' ? tid : undefined;
+      const audio = form.get('audio');
+      if (audio instanceof File) audioFile = audio;
+      const historyRaw = form.get('history');
+      if (typeof historyRaw === 'string') {
+        try {
+          history = parseHistory(JSON.parse(historyRaw));
+        } catch {
+          // Malformed history from the client -- treat as no history rather than fail the question.
+        }
+      }
+    } else {
+      const body = await req.json();
+      question = typeof body.question === 'string' ? body.question : undefined;
+      storagePath = typeof body.storagePath === 'string' ? body.storagePath : undefined;
+      clientTurnId = typeof body.turnId === 'string' ? body.turnId : undefined;
+      history = parseHistory(body.history);
+    }
   } catch {
     // handled below
   }
-  if (!question && !storagePath && !audioBase64Input) {
-    return json({ error: 'question, storagePath, or audioBase64 is required.' }, 400);
+  if (!question && !storagePath && !audioFile) {
+    return json({ error: 'question, storagePath, or audio is required.' }, 400);
   }
 
   const perf = new PerfTurn('search_ask', clientTurnId ?? crypto.randomUUID());
@@ -129,15 +155,13 @@ Deno.serve(async (req) => {
     perf.mark('profile_fetched');
 
     let isVoice = false;
-    if (audioBase64Input) {
+    if (audioFile) {
       // A search question was never saved as a recording (no `attachments`
       // row, nothing to keep once transcribed) -- unlike converse's turn
       // audio, there is no durability tradeoff here at all, so this skips
       // Storage entirely instead of also keeping a backup copy there.
       isVoice = true;
-      const bytes = base64ToUint8Array(audioBase64Input);
-      const blob = new Blob([bytes], { type: mimeType || 'audio/m4a' });
-      const transcribed = await transcribeAudio(blob, 'query.m4a');
+      const transcribed = await transcribeAudio(audioFile, 'query.m4a');
       question = transcribed.text.trim();
       perf.mark('transcribe_done');
       if (transcribed.durationSeconds > 0 || transcribed.bytes > 0) {
@@ -205,7 +229,7 @@ Deno.serve(async (req) => {
         audioBase64: audioBase64Reply,
         turnId: perf.turnId,
       });
-      scheduleBackground(background, () => perf.finish({ path: audioBase64Input ? 'direct' : 'storage', emptyQuestion: true }));
+      scheduleBackground(background, () => perf.finish({ path: audioFile ? 'direct' : 'storage', emptyQuestion: true }));
       return response;
     }
     question = question.trim();
@@ -274,21 +298,14 @@ Deno.serve(async (req) => {
       turnId: perf.turnId,
     });
     perf.mark('response_ready');
-    scheduleBackground(background, () => perf.finish({ path: audioBase64Input ? 'direct' : 'storage' }));
+    scheduleBackground(background, () => perf.finish({ path: audioFile ? 'direct' : 'storage' }));
     return response;
   } catch (e) {
     console.error('search-ask failed:', e);
-    perf.finish({ path: audioBase64Input ? 'direct' : 'storage', error: true });
+    perf.finish({ path: audioFile ? 'direct' : 'storage', error: true });
     return json({ error: errorMessage(e, 'Something went wrong while searching.') }, 500);
   }
 });
-
-function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
 
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
 

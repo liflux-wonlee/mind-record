@@ -50,7 +50,7 @@ import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn } from '@/services/conversation';
 import { processSession } from '@/services/processing';
-import { readRecordingBase64, uploadRecording } from '@/services/recordings';
+import { localRecordingSize, uploadRecording } from '@/services/recordings';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
 export type ConversationTurn = { role: 'user' | 'assistant'; content: string };
@@ -362,14 +362,14 @@ export function useConversationSession(onAutoEnded?: (sessionId: string | null) 
           // blocking it) -- see converse/index.ts.
           let result;
           if (DIRECT_AUDIO_UPLOAD_ENABLED) {
-            const { base64, byteLength } = await readRecordingBase64(uri);
+            const byteLength = localRecordingSize(uri);
             audioBytes = byteLength;
             if (byteLength > 0 && byteLength <= DIRECT_AUDIO_MAX_BYTES) {
               throwIfAborted();
               perf?.mark('audio_read');
               audioPath = 'direct';
               result = await withOneRetry(() =>
-                converseTurn(sessionId, { audioBase64: base64, mimeType: 'audio/m4a' }, perf?.turnId)
+                converseTurn(sessionId, { uri, mimeType: 'audio/m4a' }, perf?.turnId)
               );
             }
           }

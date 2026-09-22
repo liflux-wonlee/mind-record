@@ -8,13 +8,14 @@
 // (`shouldEnd`) -- the client auto-relistens after every reply unless
 // that's set.
 //
-// Invoked by the app via
-//   supabase.functions.invoke('converse', { body: { sessionId, audioBase64, mimeType, turnId } })
-// (or, for an oversized recording / if DIRECT_AUDIO_UPLOAD_ENABLED is off,
+// Invoked by the app via a multipart request (fields: sessionId, turnId,
+// and an `audio` file part -- see src/services/conversation.ts) once per
+// turn (see src/hooks/useConversationSession.ts). Or, for an oversized
+// recording / if DIRECT_AUDIO_UPLOAD_ENABLED is off (see
+// src/lib/featureFlags.ts), a plain JSON body of
 // { sessionId, storagePath } against an already-uploaded attachment -- the
-// original flow, kept as a fallback; see src/lib/featureFlags.ts) once per
-// turn (see src/hooks/useConversationSession.ts). The transcript left
-// behind in `messages` is reused as the session's raw_transcript when
+// original flow, kept as a fallback. The transcript left behind in
+// `messages` is reused as the session's raw_transcript when
 // `process-session` runs at the end of the conversation, instead of
 // re-transcribing the same audio a second time (see process-session/index.ts).
 //
@@ -22,11 +23,14 @@
 // audio to Storage FIRST, then call this function with just the resulting
 // path, which downloaded it back down here before transcribing -- three
 // sequential network hops (client->Storage, then this function->Storage)
-// before Whisper even started. The `audioBase64` path sends the bytes
-// directly in this request instead, and (see below) keeps a backup copy in
-// Storage by writing it in PARALLEL with the Whisper call rather than
-// blocking on it -- see the perf marks below and the accompanying report
-// for what is and isn't been verified on a real device from here.
+// before Whisper even started. The multipart path sends the audio directly
+// in this request instead (streamed from the local file, not read into a
+// JS string first -- a base64-in-JSON version of this was tried first and
+// the request never even reached Supabase on a real device, so this is
+// multipart now), and keeps a backup copy in Storage by writing it in
+// PARALLEL with the Whisper call rather than blocking on it -- see the
+// perf marks below and the accompanying report for what is and isn't been
+// verified on a real device from here.
 //
 // OPENAI_API_KEY / SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY
 // are the same Edge Function secrets process-session already relies on.
@@ -71,16 +75,31 @@ Deno.serve(async (req) => {
 
   let sessionId: string | undefined;
   let storagePath: string | undefined;
-  let audioBase64: string | undefined;
-  let mimeType: string | undefined;
+  let audioFile: File | null = null;
   let clientTurnId: string | undefined;
   try {
-    ({ sessionId, storagePath, audioBase64, mimeType, turnId: clientTurnId } = await req.json());
+    const contentType = req.headers.get('content-type') ?? '';
+    if (contentType.includes('multipart/form-data')) {
+      // The direct-send path (see src/lib/featureFlags.ts): the client
+      // streams the turn's audio straight from its local file instead of
+      // inlining it as base64 in a JSON body -- a base64-in-JSON version
+      // of this was tried first and the request never even reached
+      // Supabase on a real device, so this is multipart now instead.
+      const form = await req.formData();
+      const sid = form.get('sessionId');
+      sessionId = typeof sid === 'string' ? sid : undefined;
+      const tid = form.get('turnId');
+      clientTurnId = typeof tid === 'string' ? tid : undefined;
+      const audio = form.get('audio');
+      if (audio instanceof File) audioFile = audio;
+    } else {
+      ({ sessionId, storagePath, turnId: clientTurnId } = await req.json());
+    }
   } catch {
     // handled by the checks below
   }
-  if (!sessionId || (!storagePath && !audioBase64)) {
-    return json({ error: 'sessionId and (storagePath or audioBase64) are required.' }, 400);
+  if (!sessionId || (!storagePath && !audioFile)) {
+    return json({ error: 'sessionId and (storagePath or audio) are required.' }, 400);
   }
 
   const perf = new PerfTurn('converse', clientTurnId ?? crypto.randomUUID());
@@ -111,8 +130,8 @@ Deno.serve(async (req) => {
   }
   // The audio is downloaded with the service role below (bypassing Storage
   // RLS), so a client-supplied path must be pinned to this user's own
-  // session -- a client-supplied audioBase64 has no path to check, but is
-  // itself scoped to this authenticated user's own request.
+  // session -- a client-supplied audio file part has no path to check, but
+  // is itself scoped to this authenticated user's own request.
   if (storagePath && !storagePath.startsWith(`${user.id}/${sessionId}/`)) {
     return json({ error: 'Recording not found.' }, 404);
   }
@@ -140,25 +159,23 @@ Deno.serve(async (req) => {
 
     let transcribed: TranscribeResult;
     let backupStoragePath: string | null = null;
-    if (audioBase64) {
-      const bytes = base64ToUint8Array(audioBase64);
-      const contentType = mimeType || 'audio/m4a';
-      const blob = new Blob([bytes], { type: contentType });
+    if (audioFile) {
+      const contentType = audioFile.type || 'audio/m4a';
       backupStoragePath = `${user.id}/${sessionId}/${Date.now()}.m4a`;
       // The backup write and the transcription run concurrently -- the
       // backup is a safety net for the window between "we have the audio"
       // and "the transcript is durably saved" (see the discardAudio calls
       // below), not something the user's reply should ever wait on. A
-      // failure here is logged and otherwise ignored: the bytes are still
-      // in hand for transcription either way.
+      // failure here is logged and otherwise ignored: the file is still in
+      // hand for transcription either way.
       const backupWrite = db.storage
         .from('recordings')
-        .upload(backupStoragePath, bytes, { contentType })
+        .upload(backupStoragePath, audioFile, { contentType })
         .then(({ error }) => {
           if (error) console.warn('could not write turn audio backup', backupStoragePath, error);
         })
         .catch((e) => console.warn('could not write turn audio backup', backupStoragePath, e));
-      [transcribed] = await Promise.all([transcribeAudio(blob, 'segment.m4a'), backupWrite]);
+      [transcribed] = await Promise.all([transcribeAudio(audioFile, 'segment.m4a'), backupWrite]);
     } else {
       const { data: file, error: downloadError } = await db.storage.from('recordings').download(storagePath!);
       if (downloadError) throw downloadError;
@@ -246,11 +263,11 @@ Deno.serve(async (req) => {
 
     const response = json({ userText, assistantText, shouldEnd, audioBase64: audioBase64Reply, turnId: perf.turnId });
     perf.mark('response_ready');
-    scheduleBackground(background, () => perf.finish({ path: audioBase64 ? 'direct' : 'storage' }));
+    scheduleBackground(background, () => perf.finish({ path: audioFile ? 'direct' : 'storage' }));
     return response;
   } catch (e) {
     console.error('converse failed:', e);
-    perf.finish({ path: audioBase64 ? 'direct' : 'storage', error: true });
+    perf.finish({ path: audioFile ? 'direct' : 'storage', error: true });
     return json({ error: errorMessage(e, 'Something went wrong while talking to the AI.') }, 500);
   }
 });
@@ -273,13 +290,6 @@ async function insertMessage(
 ): Promise<void> {
   const { error } = await db.from('messages').insert({ session_id: sessionId, user_id: userId, role, content });
   if (error) throw error;
-}
-
-function base64ToUint8Array(base64: string): Uint8Array<ArrayBuffer> {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
 }
 
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };

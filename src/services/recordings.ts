@@ -6,18 +6,29 @@ import type { Database } from '@/types/database';
 export type Attachment = Database['public']['Tables']['attachments']['Row'];
 
 /**
- * Reads a just-recorded local audio file as base64, for sending directly
- * in an Edge Function request body (see src/services/conversation.ts /
- * searchAnswer.ts) instead of uploading it to Storage first -- see
- * src/lib/featureFlags.ts's DIRECT_AUDIO_UPLOAD_ENABLED for why/when this
- * path is used at all, and its size guard for why a caller must still be
- * ready to fall back to uploadRecording() below.
+ * A just-recorded local audio file's size, to decide whether it's small
+ * enough to send directly in an Edge Function request instead of uploading
+ * to Storage first (see src/services/conversation.ts / searchAnswer.ts and
+ * src/lib/featureFlags.ts's DIRECT_AUDIO_UPLOAD_ENABLED / size guard). A
+ * plain stat -- unlike reading the file's contents, this doesn't need to
+ * load anything into JS memory.
  */
-export async function readRecordingBase64(fileUri: string): Promise<{ base64: string; byteLength: number }> {
-  const file = new File(fileUri);
-  const byteLength = file.size;
-  const base64 = await file.base64();
-  return { base64, byteLength };
+export function localRecordingSize(fileUri: string): number {
+  return new File(fileUri).size;
+}
+
+/**
+ * Appends a local file to a `FormData` as a multipart part, streamed from
+ * disk by React Native's native networking layer rather than read into a
+ * JS string first. RN's own FormData supports `{ uri, name, type }` as a
+ * value (see its own type declaration,
+ * react-native/Libraries/Network/FormData.js) -- TypeScript still resolves
+ * `FormData`/`Blob` to the DOM lib's stricter version here (a known
+ * friction point in Expo/RN + TS setups, not a runtime issue), hence the
+ * cast.
+ */
+export function appendFilePart(form: FormData, field: string, fileUri: string, name: string, mimeType: string): void {
+  form.append(field, { uri: fileUri, name, type: mimeType } as unknown as Blob);
 }
 
 /**

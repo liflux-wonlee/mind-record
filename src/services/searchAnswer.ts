@@ -1,5 +1,6 @@
 import { describeFunctionError } from '@/lib/functionsError';
 import { supabase } from '@/lib/supabase';
+import { appendFilePart } from '@/services/recordings';
 
 export type SearchTurn = { question: string; answer: string };
 
@@ -27,19 +28,30 @@ export type SearchAnswerResult = {
  * search-ask). Pass `question` (typed), `storagePath` (a voice question
  * already uploaded via uploadSearchQuestionAudio -- the original flow, for
  * a recording too large to inline or with the direct-send flag off, see
- * src/lib/featureFlags.ts), or `audioBase64` (the voice question sent
- * directly, skipping Storage entirely -- see supabase/functions/search-ask
- * for why this path has no durability tradeoff, unlike converse's turn
- * audio). Never combine more than one. `history` is the last few turns of
- * this search conversation, for follow-ups like "그중 이번 주에 할 것은?".
+ * src/lib/featureFlags.ts), or `{ uri, mimeType }` (the voice question sent
+ * directly as multipart, skipping Storage entirely -- see
+ * supabase/functions/search-ask for why this path has no durability
+ * tradeoff, unlike converse's turn audio). Never combine more than one.
+ * `history` is the last few turns of this search conversation, for
+ * follow-ups like "그중 이번 주에 할 것은?".
  */
 export async function askSearchQuestion(
   input:
     | { question: string; history?: SearchTurn[] }
     | { storagePath: string; history?: SearchTurn[] }
-    | { audioBase64: string; mimeType: string; turnId?: string; history?: SearchTurn[] }
+    | { uri: string; mimeType: string; turnId?: string; history?: SearchTurn[] }
 ): Promise<SearchAnswerResult> {
-  const { data, error } = await supabase.functions.invoke('search-ask', { body: input });
+  let body: FormData | typeof input;
+  if ('uri' in input) {
+    const form = new FormData();
+    appendFilePart(form, 'audio', input.uri, 'query.m4a', input.mimeType);
+    if (input.turnId) form.append('turnId', input.turnId);
+    if (input.history) form.append('history', JSON.stringify(input.history));
+    body = form;
+  } else {
+    body = input;
+  }
+  const { data, error } = await supabase.functions.invoke('search-ask', { body });
   if (error) throw await describeFunctionError(error, 'Could not answer that.');
   return data as SearchAnswerResult;
 }
