@@ -73,7 +73,13 @@ export const DEFAULT_SILENCE_DURATION_MS = 1500;
 // Absolute cap on one turn's recording, regardless of what the silence
 // detector above sees -- a safety net for the case where metering itself
 // misbehaves (see the interval below), not a normal way for a turn to end.
-const MAX_TURN_RECORDING_MS = 25_000;
+// 25s was too aggressive in practice: a genuinely long answer (a real
+// back-and-forth, not just a quick reply) hit it and got cut off mid-
+// sentence, with the AI replying to only the truncated recording -- see
+// the "maxDuration"-triggered turn in a real conversation's perf log.
+// 3 minutes is long enough that only a truly stuck silence detector should
+// ever reach it.
+const MAX_TURN_RECORDING_MS = 180_000;
 // Louder than this is always speech, whatever the floor says.
 const ABSOLUTE_SPEECH_DB = -20;
 // Above floor + this = speech; below floor + SILENCE_MARGIN_DB = quiet;
