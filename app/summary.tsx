@@ -15,10 +15,10 @@ import { processSession } from '@/services/processing';
 import { getSession, updateSessionOutline, updateSessionSummary, type Session } from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
 import {
-  assignSessionTopic,
   confirmTopicSuggestion,
-  listSessionTopics,
+  createTopic,
   listTopics,
+  syncSessionTopicLinks,
   type Topic,
 } from '@/services/topics';
 import { colors, font, radius } from '@/theme';
@@ -133,6 +133,73 @@ function topicDisplayName(topic: Topic, all: Topic[]): string {
   return parent ? `${parent.name} · ${topic.name}` : topic.name;
 }
 
+/**
+ * Each outline section files under its own topic, independently of every
+ * other section -- a single recording can genuinely cover more than one
+ * topic (see the top-level "remove the one whole-session topic" change
+ * this replaced), so there is no longer a single recommendation for the
+ * whole recording, only one per section here.
+ */
+function SectionTopicPicker({
+  section,
+  busy,
+  topics,
+  onChange,
+  onUseSuggestion,
+}: {
+  section: SessionOutlineSection;
+  busy: boolean;
+  topics: Topic[];
+  onChange: () => void;
+  onUseSuggestion: () => void;
+}) {
+  const topic = section.topic_id ? topics.find((t) => t.id === section.topic_id) : undefined;
+  if (topic) {
+    return (
+      <View style={styles.sectionTopicRow}>
+        <Tag variant="neutral">{topicDisplayName(topic, topics)}</Tag>
+        <Button
+          variant="ghost"
+          label="Change"
+          disabled={busy}
+          onPress={onChange}
+          style={{ minHeight: 32, paddingHorizontal: 6 }}
+          textStyle={{ fontSize: 12 }}
+        />
+      </View>
+    );
+  }
+  return (
+    <View style={styles.suggestRow}>
+      <Text style={styles.suggestText}>
+        {section.topic_suggestion ? (
+          <>AI thinks this belongs under &quot;{section.topic_suggestion}&quot;</>
+        ) : (
+          'Not filed under a topic yet.'
+        )}
+      </Text>
+      <View style={styles.suggestActions}>
+        {section.topic_suggestion ? (
+          <Button
+            label={busy ? 'Saving…' : `Use "${section.topic_suggestion}"`}
+            disabled={busy}
+            onPress={onUseSuggestion}
+            style={[styles.suggestButton, { backgroundColor: colors.pastelGreen }]}
+            textStyle={styles.pastelSmallText}
+          />
+        ) : null}
+        <Button
+          label="Pick topic"
+          disabled={busy}
+          onPress={onChange}
+          style={[styles.suggestButton, { backgroundColor: colors.pastelLavender }]}
+          textStyle={styles.pastelSmallText}
+        />
+      </View>
+    </View>
+  );
+}
+
 function TabOption({
   label,
   selected,
@@ -225,10 +292,9 @@ export default function SummaryScreen() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [memories, setMemories] = useState<Memory[]>([]);
   const [topics, setTopics] = useState<Topic[]>([]);
-  const [sessionTopics, setSessionTopics] = useState<Topic[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
-  // What the topic picker sheet is filing: a task/idea, or the whole recording.
-  const [picking, setPicking] = useState<Entry | { kind: 'session'; id: string } | null>(null);
+  // What the topic picker sheet is filing: a task/idea, or one outline section.
+  const [picking, setPicking] = useState<Entry | { kind: 'section'; index: number } | null>(null);
   const [busyEntryId, setBusyEntryId] = useState<string | null>(null);
   const [tab, setTab] = useState<'summary' | 'transcript'>('summary');
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
@@ -236,6 +302,12 @@ export default function SummaryScreen() {
   // Index into session.outline of the section currently being edited.
   const [editingSectionIndex, setEditingSectionIndex] = useState<number | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  // The topic picker sheet's inline "create a new topic" field.
+  const [newTopicName, setNewTopicName] = useState('');
+  const [creatingTopic, setCreatingTopic] = useState(false);
+  useEffect(() => {
+    if (picking === null) setNewTopicName('');
+  }, [picking]);
 
   const recordingHeader = (s: Session): string => {
     const title = s.title || 'Untitled recording';
@@ -295,7 +367,12 @@ export default function SummaryScreen() {
     if (!sessionId || editingSectionIndex === null || !session) return;
     const parsed = editTextToSection(text);
     if (!parsed) return;
-    const nextOutline = (session.outline ?? []).map((s, i) => (i === editingSectionIndex ? parsed : s));
+    const original = session.outline?.[editingSectionIndex];
+    const nextOutline = (session.outline ?? []).map((s, i) =>
+      i === editingSectionIndex
+        ? { ...parsed, topic_id: original?.topic_id ?? null, topic_suggestion: original?.topic_suggestion ?? null }
+        : s
+    );
     setSavingEdit(true);
     try {
       await updateSessionOutline(sessionId, nextOutline);
@@ -329,16 +406,14 @@ export default function SummaryScreen() {
 
   const loadResults = useCallback(async () => {
     if (!sessionId || !user) return;
-    const [t, m, tp, st] = await Promise.all([
+    const [t, m, tp] = await Promise.all([
       listTasksBySession(sessionId),
       listMemoriesBySession(sessionId),
       listTopics(user.id),
-      listSessionTopics(sessionId),
     ]);
     setTasks(t);
     setMemories(m);
     setTopics(tp);
-    setSessionTopics(st);
   }, [sessionId, user]);
 
   // Bumped by "Retry" to restart the poll (and re-kick processing).
@@ -422,7 +497,20 @@ export default function SummaryScreen() {
     !!sessionId && session?.processing_status !== 'done' && session?.processing_status !== 'error';
   const done = !!sessionId && !loadError && session?.processing_status === 'done';
 
+  // Every topic currently in play for this recording, across its outline
+  // sections and its tasks/ideas -- what `session_topics` (used to browse
+  // sessions by topic) should reconcile to after any single assignment
+  // changes. `outline` is passed in rather than read from `session` so a
+  // caller can sync against a just-computed next outline before the state
+  // update depending on it has actually landed.
+  const activeTopicIds = (outline: SessionOutlineSection[]): string[] => [
+    ...outline.map((s) => s.topic_id).filter((id): id is string => !!id),
+    ...tasks.map((t) => t.topic_id).filter((id): id is string => !!id),
+    ...memories.map((m) => m.topic_id).filter((id): id is string => !!id),
+  ];
+
   const assignEntryTopic = async (entry: Entry, topicId: string) => {
+    if (!sessionId) return;
     setBusyEntryId(entry.id);
     try {
       if (entry.kind === 'task') {
@@ -431,6 +519,10 @@ export default function SummaryScreen() {
         await assignMemoryTopic(entry.id, topicId);
       }
       await loadResults();
+      const nextTaskTopicIds = tasks.map((t) => (t.id === entry.id ? topicId : t.topic_id)).filter((id): id is string => !!id);
+      const nextMemoryTopicIds = memories.map((m) => (m.id === entry.id ? topicId : m.topic_id)).filter((id): id is string => !!id);
+      const sectionTopicIds = (session?.outline ?? []).map((s) => s.topic_id).filter((id): id is string => !!id);
+      await syncSessionTopicLinks(sessionId, [...sectionTopicIds, ...nextTaskTopicIds, ...nextMemoryTopicIds]);
       setPicking(null);
     } catch {
       // Leave the suggestion in place -- the user can just try again.
@@ -450,37 +542,56 @@ export default function SummaryScreen() {
     }
   };
 
-  const fileSessionUnder = async (topicId: string) => {
-    if (!sessionId) return;
-    setBusyEntryId(sessionId);
+  const assignSectionTopic = async (index: number, topicId: string) => {
+    if (!sessionId || !session) return;
+    const busyKey = `section-${index}`;
+    setBusyEntryId(busyKey);
     try {
-      await assignSessionTopic(sessionId, topicId);
-      const [s, st] = await Promise.all([getSession(sessionId), listSessionTopics(sessionId)]);
-      setSession(s);
-      setSessionTopics(st);
+      const nextOutline = (session.outline ?? []).map((s, i) =>
+        i === index ? { ...s, topic_id: topicId, topic_suggestion: null } : s
+      );
+      await updateSessionOutline(sessionId, nextOutline);
+      setSession((s) => (s ? { ...s, outline: nextOutline } : s));
+      await syncSessionTopicLinks(sessionId, activeTopicIds(nextOutline));
       setPicking(null);
     } catch (e) {
-      Alert.alert('Could not file this recording', friendlyMessage(e, 'Please try again.'));
+      Alert.alert('Could not file this section', friendlyMessage(e, 'Please try again.'));
     } finally {
       setBusyEntryId(null);
     }
   };
 
-  const useSessionSuggestion = async () => {
-    if (!user || !session?.topic_suggestion) return;
-    setBusyEntryId(sessionId ?? null);
+  const useSectionSuggestion = async (index: number) => {
+    if (!user) return;
+    const suggestion = session?.outline?.[index]?.topic_suggestion;
+    if (!suggestion) return;
+    setBusyEntryId(`section-${index}`);
     try {
-      const topic = await confirmTopicSuggestion(user.id, topics, session.topic_suggestion);
-      await fileSessionUnder(topic.id);
+      const topic = await confirmTopicSuggestion(user.id, topics, suggestion);
+      await assignSectionTopic(index, topic.id);
     } catch (e) {
-      Alert.alert('Could not file this recording', friendlyMessage(e, 'Please try again.'));
+      Alert.alert('Could not file this section', friendlyMessage(e, 'Please try again.'));
       setBusyEntryId(null);
+    }
+  };
+
+  const createAndPickTopic = async () => {
+    if (!user || !newTopicName.trim() || !picking) return;
+    setCreatingTopic(true);
+    try {
+      const topic = await createTopic(user.id, newTopicName.trim());
+      setTopics((prev) => [...prev, topic].sort((a, b) => a.name.localeCompare(b.name)));
+      onPickTopic(topic.id);
+    } catch (e) {
+      Alert.alert('Could not create topic', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setCreatingTopic(false);
     }
   };
 
   const onPickTopic = (topicId: string) => {
     if (!picking) return;
-    if (picking.kind === 'session') fileSessionUnder(topicId);
+    if (picking.kind === 'section') assignSectionTopic(picking.index, topicId);
     else assignEntryTopic(picking, topicId);
   };
 
@@ -561,62 +672,6 @@ export default function SummaryScreen() {
             </Text>
           </Pressable>
           {session?.summary ? <Text style={styles.editHint}>Hold to edit</Text> : null}
-
-          {/* Where this recording is filed. Every recording should end up
-              under a topic -- this is the only place a plain journal entry
-              (no tasks/ideas) can be filed or re-filed. */}
-          <View style={styles.topicRow}>
-            {sessionTopics.length > 0 ? (
-              <>
-                <View style={styles.topicTags}>
-                  {sessionTopics.map((t) => (
-                    <Tag key={t.id} variant="neutral">
-                      {topicDisplayName(t, topics)}
-                    </Tag>
-                  ))}
-                </View>
-                <Button
-                  variant="ghost"
-                  label="Change"
-                  disabled={busyEntryId === sessionId}
-                  onPress={() => sessionId && setPicking({ kind: 'session', id: sessionId })}
-                  style={{ minHeight: 32, paddingHorizontal: 6 }}
-                  textStyle={{ fontSize: 12 }}
-                />
-              </>
-            ) : session?.topic_suggestion ? (
-              <View style={{ flex: 1 }}>
-                <Text style={styles.suggestText}>AI thinks this belongs under &quot;{session.topic_suggestion}&quot;</Text>
-                <View style={styles.suggestActions}>
-                  <Button
-                    label={busyEntryId === sessionId ? 'Saving…' : `Use "${session.topic_suggestion}"`}
-                    disabled={busyEntryId === sessionId}
-                    onPress={useSessionSuggestion}
-                    style={[styles.suggestButton, { backgroundColor: colors.pastelGreen }]}
-                    textStyle={styles.pastelSmallText}
-                  />
-                  <Button
-                    label="Pick topic"
-                    disabled={busyEntryId === sessionId}
-                    onPress={() => sessionId && setPicking({ kind: 'session', id: sessionId })}
-                    style={[styles.suggestButton, { backgroundColor: colors.pastelLavender }]}
-                    textStyle={styles.pastelSmallText}
-                  />
-                </View>
-              </View>
-            ) : (
-              <>
-                <Text style={styles.suggestText}>Not filed under a topic yet.</Text>
-                <Button
-                  label="Pick topic"
-                  disabled={busyEntryId === sessionId}
-                  onPress={() => sessionId && setPicking({ kind: 'session', id: sessionId })}
-                  style={[styles.suggestButton, { backgroundColor: colors.pastelLavender }]}
-                  textStyle={styles.pastelSmallText}
-                />
-              </>
-            )}
-          </View>
         </View>
       ) : null}
 
@@ -639,6 +694,13 @@ export default function SummaryScreen() {
                   {renderInlineBold(bullet)}
                 </Text>
               ))}
+              <SectionTopicPicker
+                section={section}
+                busy={busyEntryId === `section-${i}`}
+                topics={topics}
+                onChange={() => setPicking({ kind: 'section', index: i })}
+                onUseSuggestion={() => useSectionSuggestion(i)}
+              />
             </Pressable>
           ))}
           {(session?.outline?.length ?? 0) > 0 ? (
@@ -738,7 +800,7 @@ export default function SummaryScreen() {
 
       <BottomSheet visible={picking !== null} onClose={() => setPicking(null)} title="Pick a topic">
             {topics.length === 0 ? (
-              <Text style={styles.footnote}>No topics yet.</Text>
+              <Text style={styles.footnote}>No topics yet -- create one below.</Text>
             ) : (
               topics.map((t, i) => (
                 <Button
@@ -755,6 +817,27 @@ export default function SummaryScreen() {
                 />
               ))
             )}
+            <View style={styles.newTopicRow}>
+              <TextInput
+                style={styles.newTopicInput}
+                value={newTopicName}
+                onChangeText={setNewTopicName}
+                placeholder="New topic name"
+                placeholderTextColor={colors.neutral600}
+              />
+              <Button
+                label={creatingTopic ? '…' : 'Create'}
+                disabled={creatingTopic || !newTopicName.trim()}
+                onPress={createAndPickTopic}
+                style={{
+                  minHeight: 44,
+                  paddingHorizontal: 14,
+                  borderRadius: radius.pastel,
+                  backgroundColor: colors.pastelGreen,
+                }}
+                textStyle={styles.pastelText}
+              />
+            </View>
             <Button label="Cancel" variant="ghost" align="flex-start" onPress={() => setPicking(null)} />
       </BottomSheet>
 
@@ -818,21 +901,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderRadius: radius.pastel,
   },
-  topicRow: {
+  sectionTopicRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    marginTop: 12,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(32,30,29,0.12)',
+    marginTop: 8,
   },
-  topicTags: {
-    flex: 1,
+  newTopicRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  newTopicInput: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    fontFamily: font.regular,
+    fontSize: 14,
+    color: colors.text,
+    backgroundColor: colors.bg,
+    borderRadius: radius.pastel,
   },
   retryButton: {
     alignSelf: 'flex-start',

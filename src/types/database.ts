@@ -17,8 +17,19 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 
 export type SessionMode = 'capture' | 'conversation' | 'driving';
 export type SessionProcessingStatus = 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error';
-/** Full structured breakdown of a recording (see supabase/functions/process-session) -- bullets may contain `**bold**` spans. */
-export type SessionOutlineSection = { heading: string; bullets: string[] };
+/**
+ * Full structured breakdown of a recording (see supabase/functions/process-session)
+ * -- bullets may contain `**bold**` spans. Each section carries its own topic
+ * filing, independently of the others -- a single recording can cover more
+ * than one topic (see app/summary.tsx), so there is no longer a single
+ * whole-session topic recommendation.
+ */
+export type SessionOutlineSection = {
+  heading: string;
+  bullets: string[];
+  topic_id?: string | null;
+  topic_suggestion?: string | null;
+};
 export type MessageRole = 'user' | 'assistant' | 'system';
 export type TaskStatus = 'open' | 'completed' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high';

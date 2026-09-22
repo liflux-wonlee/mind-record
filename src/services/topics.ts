@@ -212,18 +212,40 @@ export async function listSessionsUnclassifiedPage(
 }
 
 /**
- * Files a recording under exactly this topic (replacing any AI links) and
- * clears its pending suggestion, via the `assign_session_topic` RPC so the
- * unlink/link/clear-suggestion sequence is atomic -- three separate calls
- * here could previously fail partway through (e.g. losing connection right
- * after the delete) and leave the session with no topic link at all.
+ * Reconciles `session_topics` to exactly `topicIds` -- a recording can now
+ * cover several distinct topics (one per outline section, see
+ * app/summary.tsx), so this replaces the old single-topic
+ * `assign_session_topic` RPC (which unlinked every other topic first) with
+ * a diff against whatever topic ids are currently in play across the
+ * recording's sections/tasks/ideas, adding what's missing and removing
+ * what's no longer referenced by anything.
  */
-export async function assignSessionTopic(sessionId: string, topicId: string): Promise<void> {
-  const { error } = await supabase.rpc('assign_session_topic', {
-    p_session_id: sessionId,
-    p_topic_id: topicId,
-  });
-  if (error) throw error;
+export async function syncSessionTopicLinks(sessionId: string, topicIds: string[]): Promise<void> {
+  const wanted = [...new Set(topicIds)];
+  const { data: existing, error: existingError } = await supabase
+    .from('session_topics')
+    .select('topic_id')
+    .eq('session_id', sessionId);
+  if (existingError) throw existingError;
+  const existingIds = new Set((existing ?? []).map((r) => r.topic_id));
+
+  const toRemove = [...existingIds].filter((id) => !wanted.includes(id));
+  if (toRemove.length > 0) {
+    const { error } = await supabase
+      .from('session_topics')
+      .delete()
+      .eq('session_id', sessionId)
+      .in('topic_id', toRemove);
+    if (error) throw error;
+  }
+
+  const toAdd = wanted.filter((id) => !existingIds.has(id));
+  if (toAdd.length > 0) {
+    const { error } = await supabase
+      .from('session_topics')
+      .insert(toAdd.map((topic_id) => ({ session_id: sessionId, topic_id })));
+    if (error) throw error;
+  }
 }
 
 export async function listSessionTopics(sessionId: string): Promise<Topic[]> {

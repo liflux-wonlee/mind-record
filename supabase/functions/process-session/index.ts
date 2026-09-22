@@ -51,9 +51,23 @@ type ExtractedMemory = {
   topic_parent_name?: string | null;
   topic_confidence?: number;
 };
-type OutlineSection = { heading: string; bullets: string[] };
+/**
+ * An outline section files under its own topic, independently of every
+ * other section in the same recording -- a single recording can genuinely
+ * cover more than one topic (e.g. a work errand and a personal note about a
+ * friend, back to back), so there is no longer one "session_topic" for the
+ * whole recording. `topic_name`/`topic_parent_name`/`topic_confidence` here
+ * are GPT's per-section extraction, resolved via `resolveTopic` below the
+ * same way a task/memory's topic is.
+ */
+type OutlineSection = {
+  heading: string;
+  bullets: string[];
+  topic_name?: string | null;
+  topic_parent_name?: string | null;
+  topic_confidence?: number;
+};
 type RequestedTopic = { name: string; parent_name?: string | null };
-type SessionTopic = { topic_name: string; topic_parent_name?: string | null; topic_confidence?: number };
 
 type Extraction = {
   summary: string;
@@ -64,8 +78,6 @@ type Extraction = {
   memories: ExtractedMemory[];
   /** Topics the speaker explicitly asked to have created, even with nothing to file under them yet. */
   requested_topics: RequestedTopic[];
-  /** The one topic the recording as a whole is about -- how a plain journal entry gets filed. */
-  session_topic: SessionTopic | null;
 };
 
 Deno.serve(async (req) => {
@@ -347,20 +359,33 @@ Deno.serve(async (req) => {
       if (error) throw error;
     }
 
-    // session_topics: the recording's own topic (what it is about as a
-    // whole -- the only way a plain journal entry with no tasks/ideas gets
-    // filed anywhere) plus a rollup of every topic the tasks/ideas above
-    // were assigned to.
-    const confidenceByTopic = new Map<string, number>();
-    let sessionTopicSuggestion: string | null = null;
-    if (extraction.session_topic) {
-      const resolved = await resolveTopic(db, user.id, topics, extraction.session_topic);
-      if (resolved.topicId) {
-        confidenceByTopic.set(resolved.topicId, extraction.session_topic.topic_confidence ?? 1);
-      } else {
-        sessionTopicSuggestion = resolved.suggestion;
-      }
+    // Resolve each outline section's own topic the same way a task/idea's
+    // is resolved -- a recording can cover more than one topic, so this
+    // replaces the old single "session_topic" (see the OutlineSection type
+    // above). `topic_id`/`topic_suggestion` land directly on the section
+    // object written to `sessions.outline` below; the app (Summary) renders
+    // and lets the user change/confirm one section at a time from there.
+    const resolvedOutline = [];
+    for (const section of extraction.outline) {
+      const resolved = await resolveTopic(db, user.id, topics, section);
+      resolvedOutline.push({
+        heading: section.heading,
+        bullets: section.bullets,
+        topic_id: resolved.topicId,
+        topic_suggestion: resolved.suggestion,
+      });
     }
+
+    // session_topics: a rollup of every topic actually resolved above,
+    // across outline sections and tasks/ideas alike -- how a session shows
+    // up when browsing by topic.
+    const confidenceByTopic = new Map<string, number>();
+    resolvedOutline.forEach((section, i) => {
+      if (!section.topic_id) return;
+      const confidence = extraction.outline[i]?.topic_confidence ?? 1;
+      const prev = confidenceByTopic.get(section.topic_id) ?? 0;
+      if (confidence > prev) confidenceByTopic.set(section.topic_id, confidence);
+    });
     const allResolved = [...resolvedTasks, ...resolvedMemories];
     const allExtracted = [...extraction.tasks, ...extraction.memories];
     allResolved.forEach((row, i) => {
@@ -385,11 +410,11 @@ Deno.serve(async (req) => {
       .from('sessions')
       .update({
         summary: extraction.summary,
-        outline: extraction.outline,
+        outline: resolvedOutline,
         notable_quotes: extraction.notable_quotes,
         title: session.title ?? extraction.summary.slice(0, 80),
-        // Only worth asking the user when nothing got linked at all.
-        topic_suggestion: confidenceByTopic.size === 0 ? sessionTopicSuggestion : null,
+        // Superseded by each outline section's own topic_suggestion above.
+        topic_suggestion: null,
         processing_status: 'done',
       })
       .eq('id', sessionId);
@@ -618,7 +643,6 @@ async function analyzeTranscript(
         tasks: [],
         memories: [],
         requested_topics: [],
-        session_topic: null,
       },
       inputTokens: 0,
       outputTokens: 0,
@@ -648,7 +672,7 @@ There are TWO different summaries to produce, for two different places in the ap
 
 Both "summary" and "outline" describe the CONTENT only -- never the speech act itself. Do not comment on repetition, filler, hesitation, pacing, tone, or recording quality, and never describe the speaker's behavior or mental state as an outside observer (e.g. never write "the speaker seems rushed" or "is repeating themselves").
 
-The speaker may explicitly say things like "이건 [이름] 토픽에 넣어줘" or "put this under the X folder" -- treat "topic", "폴더" (folder), and "카테고리" (category) as the same concept, and treat an explicit instruction like that as a highly confident assignment (topic_confidence near 1.0), not a guess.
+The speaker may explicitly say things like "이건 [이름] 토픽에 넣어줘" or "put this under the X folder" while talking about something specific -- treat "topic", "폴더" (folder), and "카테고리" (category) as the same concept, and treat an explicit instruction like that as a highly confident assignment (topic_confidence near 1.0), not a guess, for the section covering whatever the speaker was talking about right around when they said it. If they also say something like "새 토픽 만들어서 X 아래에 넣어줘" (make a new topic and put it under X), that names a PARENT for a brand new sub-topic -- use topic_parent_name for X. An instruction like this applies only to the section(s) it's actually about; don't let one explicit instruction bleed into unrelated sections elsewhere in the same recording.
 
 Topics are nested at most one level deep: a major category (e.g. "Business") can have sub-topics under it (e.g. "Business" -> "Liflux"). The user's current topics:
 ${formatTopicTree(topics)}
@@ -656,7 +680,13 @@ ${formatTopicTree(topics)}
 Respond with strict JSON matching this shape:
 {
   "summary": string (1-2 sentences, short recap as described above, in the transcript's own language),
-  "outline": [{ "heading": string, "bullets": string[] }] (full breakdown as described above, at least one section),
+  "outline": [{
+    "heading": string,
+    "bullets": string[],
+    "topic_name": string or null,
+    "topic_parent_name": string or null (only if topic_name is/should be a sub-topic; must name a TOP-LEVEL topic),
+    "topic_confidence": number between 0 and 1
+  }] (full breakdown as described above, at least one section -- see below for topic_name),
   "notable_quotes": string[] (0-5 verbatim standout lines as described above; empty array is the normal case),
   "tasks": [{
     "title": string,
@@ -672,19 +702,14 @@ Respond with strict JSON matching this shape:
     "topic_parent_name": string or null,
     "topic_confidence": number between 0 and 1
   }],
-  "requested_topics": [{ "name": string, "parent_name": string or null }],
-  "session_topic": {
-    "topic_name": string,
-    "topic_parent_name": string or null,
-    "topic_confidence": number between 0 and 1
-  }
+  "requested_topics": [{ "name": string, "parent_name": string or null }]
 }
 
-"session_topic" is the ONE topic this recording as a whole is about -- how it gets filed in the user's topic list. ALWAYS fill it in (unless the transcript is genuinely empty or pure test noise, then null). Strongly prefer an existing topic from the list above when one fits. Otherwise propose a short, general, reusable name in the transcript's language (e.g. "신앙", "가족", "Business", "Health"), not a description of this one entry. Match the user's existing naming style. Use topic_parent_name only when the recording clearly belongs to an existing sub-topic's parent. If the speaker explicitly named a topic for this recording, use it with confidence near 1.0.
+Each outline section files under its OWN topic -- a recording can genuinely be about more than one thing (e.g. a work errand, then separately a personal note about a friend), so there is no single topic for the whole recording anymore, only one per section. For each section, ALWAYS fill in topic_name (unless the transcript is genuinely empty or pure test noise). Strongly prefer an existing topic from the list above when one fits that section's content. Otherwise propose a short, general, reusable name in the transcript's language (e.g. "신앙", "가족", "Business", "Health"), not a description of this one section. Match the user's existing naming style. Use topic_parent_name only when the section clearly belongs under an existing sub-topic's parent.
 
-"requested_topics" is ONLY for explicit instructions to create a topic/folder/category -- e.g. "교단이라는 토픽을 만들어줘", "make a new topic called Family", "add a Health folder" -- including ones with nothing to file under them yet. Use the exact name the speaker gave. Do not put topics here just because they are mentioned or would be a sensible place to file things; that is what topic_name on tasks/memories is for. Empty array when there is no such instruction.
+"requested_topics" is ONLY for explicit instructions to create a topic/folder/category -- e.g. "교단이라는 토픽을 만들어줘", "make a new topic called Family", "add a Health folder" -- including ones with nothing to file under them yet. Use the exact name the speaker gave. Do not put topics here just because they are mentioned or would be a sensible place to file things; that is what topic_name on outline sections/tasks/memories is for. Empty array when there is no such instruction.
 
-If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic something belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough.
+If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic a section, task, or memory belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough.
 
 ${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bullet text in ${detectedLanguage}, matching the transcript's own detected language, not any other language.` : 'The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary"/"heading"/bullet text in the same language as the transcript.'} Never invent tasks, ideas, or outline content that aren't actually in the transcript.`;
 
@@ -713,12 +738,8 @@ ${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bull
   const parsed = JSON.parse(content);
   const outline: OutlineSection[] = Array.isArray(parsed.outline)
     ? parsed.outline
-        .filter((s: unknown): s is { heading: unknown; bullets: unknown } => !!s && typeof s === 'object')
-        .map((s: { heading: unknown; bullets: unknown }) => ({
-          heading: typeof s.heading === 'string' ? s.heading : '',
-          bullets: Array.isArray(s.bullets) ? s.bullets.filter((b: unknown) => typeof b === 'string') : [],
-        }))
-        .filter((s: OutlineSection) => s.heading && s.bullets.length > 0)
+        .map(sanitizeOutlineSection)
+        .filter((s: OutlineSection | null): s is OutlineSection => !!s && !!s.heading && s.bullets.length > 0)
     : [];
   const notableQuotes: string[] = Array.isArray(parsed.notable_quotes)
     ? parsed.notable_quotes.filter((q: unknown): q is string => typeof q === 'string' && q.trim().length > 0).slice(0, 5)
@@ -731,7 +752,6 @@ ${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bull
       notable_quotes: notableQuotes,
       tasks: Array.isArray(parsed.tasks) ? parsed.tasks.map(sanitizeTask).filter(Boolean) : [],
       memories: Array.isArray(parsed.memories) ? parsed.memories.map(sanitizeMemory).filter(Boolean) : [],
-      session_topic: sanitizeSessionTopic(parsed.session_topic),
       requested_topics: Array.isArray(parsed.requested_topics)
         ? parsed.requested_topics.filter(
             (t: unknown): t is RequestedTopic =>
@@ -791,13 +811,13 @@ function sanitizeTask(raw: unknown): ExtractedTask | null {
     topic_confidence: clampConfidence(t.topic_confidence),
   };
 }
-function sanitizeSessionTopic(raw: unknown): SessionTopic | null {
+function sanitizeOutlineSection(raw: unknown): OutlineSection | null {
   if (!raw || typeof raw !== 'object') return null;
   const s = raw as Record<string, unknown>;
-  const topic_name = optionalString(s.topic_name);
-  if (!topic_name) return null;
   return {
-    topic_name,
+    heading: typeof s.heading === 'string' ? s.heading : '',
+    bullets: Array.isArray(s.bullets) ? s.bullets.filter((b: unknown): b is string => typeof b === 'string') : [],
+    topic_name: optionalString(s.topic_name),
     topic_parent_name: optionalString(s.topic_parent_name),
     topic_confidence: clampConfidence(s.topic_confidence),
   };
