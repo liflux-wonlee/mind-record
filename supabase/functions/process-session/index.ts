@@ -29,6 +29,8 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // auto-assigned) -- the app asks the user to confirm it on Summary instead
 // of silently filing something AI wasn't sure about.
 const TOPIC_CONFIDENCE_THRESHOLD = 0.6;
+// Same idea, for a task's list_name -- see resolveList.
+const LIST_CONFIDENCE_THRESHOLD = 0.6;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -36,6 +38,8 @@ const CORS_HEADERS = {
 };
 
 type TopicRow = { id: string; name: string; parent_topic_id: string | null };
+/** Flat -- unlike topics, task lists (e.g. "Shopping", "Work") have no nesting. */
+type ListRow = { id: string; name: string };
 
 type ExtractedTask = {
   title: string;
@@ -43,6 +47,11 @@ type ExtractedTask = {
   topic_name?: string | null;
   topic_parent_name?: string | null;
   topic_confidence?: number;
+  /** Which task list (e.g. "Shopping", "Work") this task belongs in -- a
+   *  separate concept from topic_name (subject-matter categorization);
+   *  only tasks get lists, not ideas or outline sections. */
+  list_name?: string | null;
+  list_confidence?: number;
 };
 type ExtractedMemory = {
   content: string;
@@ -278,11 +287,18 @@ Deno.serve(async (req) => {
     if (topicsError) throw topicsError;
     const topics: TopicRow[] = existingTopics ?? [];
 
+    const { data: existingLists, error: listsError } = await db
+      .from('task_lists')
+      .select('id, name')
+      .eq('user_id', user.id);
+    if (listsError) throw listsError;
+    const lists: ListRow[] = existingLists ?? [];
+
     const {
       extraction,
       inputTokens: analysisInputTokens,
       outputTokens: analysisOutputTokens,
-    } = await analyzeTranscript(transcript, topics, detectedLanguage);
+    } = await analyzeTranscript(transcript, topics, lists, detectedLanguage);
     if (analysisInputTokens > 0 || analysisOutputTokens > 0) {
       await recordUsage(db, {
         userId: user.id,
@@ -319,16 +335,21 @@ Deno.serve(async (req) => {
     // Resolve each item's topic (find-or-create) before inserting, so the
     // insert already carries the right topic_id -- or, below the
     // confidence threshold, no topic_id and a topic_suggestion instead.
+    // Tasks also resolve a list the same way -- a separate, flat concept
+    // from topics (see ListRow/resolveList).
     const resolvedTasks = [];
     for (const t of extraction.tasks) {
-      const resolved = await resolveTopic(db, user.id, topics, t);
+      const resolvedTopic = await resolveTopic(db, user.id, topics, t);
+      const resolvedList = await resolveList(db, user.id, lists, t);
       resolvedTasks.push({
         user_id: user.id,
         source_session_id: sessionId,
         title: t.title,
         priority: t.priority ?? 'normal',
-        topic_id: resolved.topicId,
-        topic_suggestion: resolved.suggestion,
+        topic_id: resolvedTopic.topicId,
+        topic_suggestion: resolvedTopic.suggestion,
+        list_id: resolvedList.listId,
+        list_suggestion: resolvedList.suggestion,
       });
     }
 
@@ -475,6 +496,36 @@ async function resolveTopic(
   }
   const topic = await findOrCreateTopic(db, userId, topics, name, parentName);
   return { topicId: topic.id, suggestion: null };
+}
+
+/**
+ * Same idea as resolveTopic, for a task's list -- but flat (no parent/child,
+ * no near-duplicate fuzzing): lists are a handful of simple buckets like
+ * Google Tasks' own lists ("My Tasks", "Shopping"), not a taxonomy, so an
+ * exact case-insensitive match is enough before creating a new one.
+ */
+async function resolveList(
+  db: SupabaseClient,
+  userId: string,
+  lists: ListRow[],
+  item: { list_name?: string | null; list_confidence?: number }
+): Promise<{ listId: string | null; suggestion: string | null }> {
+  const name = item.list_name?.trim();
+  if (!name || (item.list_confidence ?? 0) < LIST_CONFIDENCE_THRESHOLD) {
+    return { listId: null, suggestion: name ?? null };
+  }
+  let list = lists.find((l) => l.name.toLowerCase() === name.toLowerCase());
+  if (!list) {
+    const { data, error } = await db
+      .from('task_lists')
+      .insert({ user_id: userId, name })
+      .select('id, name')
+      .single();
+    if (error) throw error;
+    list = data;
+    lists.push(list);
+  }
+  return { listId: list.id, suggestion: null };
 }
 
 function topLevelExactMatch(topics: TopicRow[], name: string): boolean {
@@ -632,6 +683,7 @@ function formatTopicTree(topics: TopicRow[]): string {
 async function analyzeTranscript(
   transcript: string,
   topics: TopicRow[],
+  lists: ListRow[],
   detectedLanguage: string | null
 ): Promise<{ extraction: Extraction; inputTokens: number; outputTokens: number }> {
   if (!transcript.trim()) {
@@ -677,6 +729,9 @@ The speaker may explicitly say things like "이건 [이름] 토픽에 넣어줘"
 Topics are nested at most one level deep: a major category (e.g. "Business") can have sub-topics under it (e.g. "Business" -> "Liflux"). The user's current topics:
 ${formatTopicTree(topics)}
 
+Separately, a TASK can also belong to a task list -- a flat, simple bucket like Google Tasks' own lists (e.g. "Shopping", "Work", "Errands"), NOT the same thing as its topic (a task's topic is what it's ABOUT; its list is which practical to-do bucket it belongs in -- the same task can have both, and they're often different, e.g. topic "Family" + list "Shopping" for "buy a birthday present"). The user's current task lists:
+${lists.length > 0 ? lists.map((l) => `- ${l.name}`).join('\n') : '(none yet)'}
+
 Respond with strict JSON matching this shape:
 {
   "summary": string (1-2 sentences, short recap as described above, in the transcript's own language),
@@ -693,7 +748,9 @@ Respond with strict JSON matching this shape:
     "priority": "low" | "normal" | "high",
     "topic_name": string or null,
     "topic_parent_name": string or null (only if topic_name is/should be a sub-topic; must name a TOP-LEVEL topic),
-    "topic_confidence": number between 0 and 1
+    "topic_confidence": number between 0 and 1,
+    "list_name": string or null (which task list, as described above -- separate from topic_name),
+    "list_confidence": number between 0 and 1
   }],
   "memories": [{
     "content": string,
@@ -707,9 +764,11 @@ Respond with strict JSON matching this shape:
 
 Each outline section files under its OWN topic -- a recording can genuinely be about more than one thing (e.g. a work errand, then separately a personal note about a friend), so there is no single topic for the whole recording anymore, only one per section. For each section, ALWAYS fill in topic_name (unless the transcript is genuinely empty or pure test noise). Strongly prefer an existing topic from the list above when one fits that section's content. Otherwise propose a short, general, reusable name in the transcript's language (e.g. "신앙", "가족", "Business", "Health"), not a description of this one section. Match the user's existing naming style. Use topic_parent_name only when the section clearly belongs under an existing sub-topic's parent.
 
-"requested_topics" is ONLY for explicit instructions to create a topic/folder/category -- e.g. "교단이라는 토픽을 만들어줘", "make a new topic called Family", "add a Health folder" -- including ones with nothing to file under them yet. Use the exact name the speaker gave. Do not put topics here just because they are mentioned or would be a sensible place to file things; that is what topic_name on outline sections/tasks/memories is for. Empty array when there is no such instruction.
+For a task's list_name, only fill it in when a list is actually a good fit ("리스트" specifically -- distinct from "토픽"/"폴더"/"카테고리" above, which mean topic). Unlike topic_name, it's fine to leave list_name null for an ordinary task with no obvious list -- not every task needs one. The same explicit-instruction rule applies: if the speaker says something like "이건 쇼핑 리스트에 넣어줘" or "put this on my Work list", treat that as a highly confident list_confidence near 1.0 for that specific task.
 
-If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic a section, task, or memory belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough.
+"requested_topics" is ONLY for explicit instructions to create a topic/folder/category -- e.g. "교단이라는 토픽을 만들어줘", "make a new topic called Family", "add a Health folder" -- including ones with nothing to file under them yet. Use the exact name the speaker gave. Do not put topics here just because they are mentioned or would be a sensible place to file things; that is what topic_name on outline sections/tasks/memories is for. Empty array when there is no such instruction. There is no equivalent for lists -- a bare "make a list called X" with nothing to put in it isn't worth creating; a list is only created once a real task actually needs it.
+
+If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic a section, task, or memory belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough. Same threshold for list_confidence.
 
 ${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bullet text in ${detectedLanguage}, matching the transcript's own detected language, not any other language.` : 'The transcript may be in Korean, English, or a mix -- write "title"/"content"/"summary"/"heading"/bullet text in the same language as the transcript.'} Never invent tasks, ideas, or outline content that aren't actually in the transcript.`;
 
@@ -809,6 +868,8 @@ function sanitizeTask(raw: unknown): ExtractedTask | null {
     topic_name: optionalString(t.topic_name),
     topic_parent_name: optionalString(t.topic_parent_name),
     topic_confidence: clampConfidence(t.topic_confidence),
+    list_name: optionalString(t.list_name),
+    list_confidence: clampConfidence(t.list_confidence),
   };
 }
 function sanitizeOutlineSection(raw: unknown): OutlineSection | null {

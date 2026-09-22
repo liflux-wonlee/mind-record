@@ -51,11 +51,16 @@ export async function listTasksPendingTopicReview(userId: string): Promise<Task[
 
 export async function createTask(
   userId: string,
-  input: { title: string; dueDate?: string | null }
+  input: { title: string; dueDate?: string | null; listId?: string | null }
 ): Promise<Task> {
   const { data, error } = await supabase
     .from('tasks')
-    .insert({ user_id: userId, title: input.title, due_date: input.dueDate ?? null })
+    .insert({
+      user_id: userId,
+      title: input.title,
+      due_date: input.dueDate ?? null,
+      list_id: input.listId ?? null,
+    })
     .select()
     .single();
   if (error) throw error;
@@ -106,6 +111,31 @@ export async function clearTaskTopic(taskId: string): Promise<Task> {
     .eq('id', taskId)
     .select()
     .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Files a task under this list (or moves it to a different one), confirming any AI suggestion in the process. */
+export async function assignTaskList(taskId: string, listId: string): Promise<Task> {
+  const { data, error } = await supabase
+    .from('tasks')
+    .update({ list_id: listId, list_suggestion: null })
+    .eq('id', taskId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+/** Removes this task from its list -- the task itself is kept, just unfiled. */
+export async function clearTaskList(taskId: string): Promise<Task> {
+  const { data, error } = await supabase.from('tasks').update({ list_id: null }).eq('id', taskId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function setTaskStarred(taskId: string, starred: boolean): Promise<Task> {
+  const { data, error } = await supabase.from('tasks').update({ starred }).eq('id', taskId).select().single();
   if (error) throw error;
   return data;
 }

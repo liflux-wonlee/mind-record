@@ -1,11 +1,12 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
+import { ShareIcon, StarIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
-import { Button, RuleThick } from '@/components/ui';
+import { Button, RuleThick, Tag } from '@/components/ui';
 import { useTasks } from '@/hooks/useTasks';
 import {
   getGoogleTasksSendRecord,
@@ -13,12 +14,27 @@ import {
   type GoogleTasksSendRecord,
 } from '@/services/googleTasks';
 import { friendlyMessage } from '@/lib/friendlyError';
+import { useAuth } from '@/providers/AuthProvider';
+import { confirmListSuggestion, type TaskList } from '@/services/taskLists';
 import type { Task } from '@/services/tasks';
 import { colors, font, h2, radius } from '@/theme';
 
 type Filter = 'open' | 'completed';
+// Same picker-target shape whether the sheet was opened from the "Needs a
+// list" section or from a task's own edit sheet -- both just want to end
+// up calling the same assign function.
+type ListPickTarget = { taskId: string; onDone?: () => void };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const PICKER_COLORS = [
+  colors.pastelGreen,
+  colors.pastelBlue,
+  colors.pastelPeach,
+  colors.pastelLavender,
+  colors.pastelYellow,
+  colors.pastelPink,
+];
 
 /** Parses a YYYY-MM-DD as a LOCAL calendar date. `new Date('2026-09-19')`
  *  is UTC midnight, which in any zone west of UTC is still the 18th --
@@ -53,12 +69,35 @@ function isoDate(d: Date): string {
 
 export default function TasksScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const tasksState = useTasks();
   const [newTitle, setNewTitle] = useState('');
   const [adding, setAdding] = useState(false);
   const [filter, setFilter] = useState<Filter>('open');
+  // 'all' shows every list (plus the "needs a list" review section);
+  // otherwise the id of the one list currently selected.
+  const [selectedListId, setSelectedListId] = useState<string>('all');
   const [editing, setEditing] = useState<Task | null>(null);
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
+  const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
+
+  // Long-press (or tap) a list chip other than "All"/"+ New list" to rename/delete it.
+  const [managingList, setManagingList] = useState<TaskList | null>(null);
+  const [manageListName, setManageListName] = useState('');
+  const [savingList, setSavingList] = useState(false);
+
+  // "+ New list" chip.
+  const [creatingList, setCreatingList] = useState(false);
+  const [newListName, setNewListName] = useState('');
+
+  // The "Pick a list" sheet, shared by the "Needs a list" section and each
+  // task's own "Change" button (see TaskEditSheet).
+  const [picking, setPicking] = useState<ListPickTarget | null>(null);
+  const [pickNewListName, setPickNewListName] = useState('');
+  const [creatingPickList, setCreatingPickList] = useState(false);
+  useEffect(() => {
+    if (picking === null) setPickNewListName('');
+  }, [picking]);
 
   // Search deep-links to a task with ?edit=<id>: open its sheet once the
   // list has loaded, and switch the filter so it's visible behind it.
@@ -70,15 +109,32 @@ export default function TasksScreen() {
     if (!target) return;
     setConsumedEdit(edit);
     setFilter(target.status === 'completed' ? 'completed' : 'open');
+    setSelectedListId('all');
     setEditing(target);
   }, [edit, consumedEdit, tasksState]);
+
+  const lists = tasksState.status === 'ready' ? tasksState.lists : [];
+  const tasks = tasksState.status === 'ready' ? tasksState.tasks : [];
+  const listById = (id: string | null) => (id ? lists.find((l) => l.id === id) : undefined);
+
+  const statusFiltered = tasks.filter((t) => (filter === 'open' ? t.status !== 'completed' : t.status === 'completed'));
+  // Extracted from a recording but not confident enough about which list --
+  // kept separate from the ordinary list below instead of dumped in
+  // wherever they'd otherwise sort, so they don't get lost among filed tasks.
+  const needsListReview = selectedListId === 'all' ? statusFiltered.filter((t) => !t.list_id && t.list_suggestion) : [];
+  const needsReviewIds = new Set(needsListReview.map((t) => t.id));
+  const visibleTasks = statusFiltered.filter((t) => {
+    if (needsReviewIds.has(t.id)) return false;
+    if (selectedListId === 'all') return true;
+    return t.list_id === selectedListId;
+  });
 
   const submitNewTask = async () => {
     const title = newTitle.trim();
     if (!title || adding) return;
     setAdding(true);
     try {
-      await tasksState.add(title);
+      await tasksState.add(title, undefined, selectedListId !== 'all' ? selectedListId : undefined);
       setNewTitle('');
     } catch (e) {
       Alert.alert('Could not add task', friendlyMessage(e, 'Please try again.'));
@@ -87,8 +143,98 @@ export default function TasksScreen() {
     }
   };
 
-  const tasks = tasksState.status === 'ready' ? tasksState.tasks : [];
-  const visibleTasks = tasks.filter((t) => (filter === 'open' ? t.status !== 'completed' : t.status === 'completed'));
+  const openManageList = (list: TaskList) => {
+    setManagingList(list);
+    setManageListName(list.name);
+  };
+
+  const saveListRename = async () => {
+    if (!managingList || !manageListName.trim() || savingList) return;
+    setSavingList(true);
+    try {
+      await tasksState.renameList(managingList, manageListName.trim());
+      setManagingList(null);
+    } catch (e) {
+      Alert.alert('Could not rename', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSavingList(false);
+    }
+  };
+
+  const confirmDeleteList = () => {
+    if (!managingList) return;
+    const list = managingList;
+    Alert.alert(`Delete "${list.name}"?`, 'Tasks in it are kept, just unfiled from any list.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await tasksState.removeList(list);
+            if (selectedListId === list.id) setSelectedListId('all');
+            setManagingList(null);
+          } catch (e) {
+            Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'));
+          }
+        },
+      },
+    ]);
+  };
+
+  const createList = async () => {
+    if (!newListName.trim()) return;
+    try {
+      const list = await tasksState.addList(newListName.trim());
+      setNewListName('');
+      setCreatingList(false);
+      if (list) setSelectedListId(list.id);
+    } catch (e) {
+      Alert.alert('Could not create list', friendlyMessage(e, 'Please try again.'));
+    }
+  };
+
+  const moveTaskToList = async (taskId: string, listId: string) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    setBusyTaskId(taskId);
+    try {
+      await tasksState.moveToList(task, listId);
+      setPicking(null);
+    } catch (e) {
+      Alert.alert('Could not move task', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setBusyTaskId(null);
+    }
+  };
+
+  const useTaskListSuggestion = async (task: Task) => {
+    if (!user || !task.list_suggestion) return;
+    setBusyTaskId(task.id);
+    try {
+      const list = await confirmListSuggestion(user.id, lists, task.list_suggestion);
+      await moveTaskToList(task.id, list.id);
+    } catch (e) {
+      Alert.alert('Could not file this task', friendlyMessage(e, 'Please try again.'));
+      setBusyTaskId(null);
+    }
+  };
+
+  const createAndPickList = async () => {
+    if (!user || !pickNewListName.trim() || !picking) return;
+    setCreatingPickList(true);
+    try {
+      const list = await tasksState.addList(pickNewListName.trim());
+      if (list) await moveTaskToList(picking.taskId, list.id);
+    } catch (e) {
+      Alert.alert('Could not create list', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setCreatingPickList(false);
+    }
+  };
+
+  const toggleStar = (task: Task) =>
+    tasksState.toggleStar(task).catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')));
 
   return (
     <Screen>
@@ -100,6 +246,20 @@ export default function TasksScreen() {
         <Text style={styles.openCount}>{tasksState.openCount} open</Text>
       </View>
       <Text style={styles.title}>Tasks</Text>
+
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.listChipRow} contentContainerStyle={{ gap: 8 }}>
+        <ListChip label="All" selected={selectedListId === 'all'} onPress={() => setSelectedListId('all')} />
+        {lists.map((l) => (
+          <ListChip
+            key={l.id}
+            label={l.name}
+            selected={selectedListId === l.id}
+            onPress={() => setSelectedListId(l.id)}
+            onLongPress={() => openManageList(l)}
+          />
+        ))}
+        <ListChip label="+ New list" selected={false} onPress={() => setCreatingList(true)} muted />
+      </ScrollView>
 
       <View style={styles.addRow}>
         <TextInput
@@ -136,42 +296,68 @@ export default function TasksScreen() {
           <Text style={styles.errorText}>{tasksState.message}</Text>
           <Button variant="secondary" label="Retry" onPress={tasksState.refresh} style={{ minHeight: 40 }} />
         </View>
-      ) : visibleTasks.length === 0 ? (
-        <View style={styles.centerBlock}>
-          <Text style={styles.emptyText}>
-            {filter === 'open' ? 'Nothing here yet — add your first task above.' : 'No completed tasks yet.'}
-          </Text>
-        </View>
       ) : (
         <>
-          {visibleTasks.map((task, i) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              color={i % 2 === 0 ? colors.pastelYellow : colors.pastelGreen}
-              onToggle={() =>
-                tasksState
-                  .toggle(task)
-                  .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
-              }
-              onPress={() => setEditing(task)}
-              onShare={() =>
-                setShareContent({
-                  kicker: 'Task',
-                  title: task.title,
-                  body: [task.title, task.due_date ? formatDueDate(task.due_date) : null, task.description]
-                    .filter(Boolean)
-                    .join('\n\n'),
-                })
-              }
-            />
-          ))}
-          <Text style={styles.hint}>Hold a task for sharing options</Text>
+          {needsListReview.length > 0 ? (
+            <View style={{ marginBottom: 10 }}>
+              <Text style={styles.sectionHeading}>Needs a list</Text>
+              {needsListReview.map((task) => (
+                <View key={task.id} style={styles.reviewCard}>
+                  <Text style={styles.taskTitle}>{task.title}</Text>
+                  <Text style={styles.suggestText}>
+                    AI thinks this belongs in &quot;{task.list_suggestion}&quot;
+                  </Text>
+                  <View style={styles.suggestActions}>
+                    <Button
+                      label={busyTaskId === task.id ? 'Saving…' : `Use "${task.list_suggestion}"`}
+                      disabled={busyTaskId === task.id}
+                      onPress={() => useTaskListSuggestion(task)}
+                      style={[styles.suggestButton, { backgroundColor: colors.pastelGreen }]}
+                      textStyle={styles.pastelSmallText}
+                    />
+                    <Button
+                      label="Pick list"
+                      disabled={busyTaskId === task.id}
+                      onPress={() => setPicking({ taskId: task.id })}
+                      style={[styles.suggestButton, { backgroundColor: colors.pastelLavender }]}
+                      textStyle={styles.pastelSmallText}
+                    />
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {visibleTasks.length === 0 && needsListReview.length === 0 ? (
+            <View style={styles.centerBlock}>
+              <Text style={styles.emptyText}>
+                {filter === 'open' ? 'Nothing here yet — add your first task above.' : 'No completed tasks yet.'}
+              </Text>
+            </View>
+          ) : (
+            visibleTasks.map((task, i) => (
+              <TaskRow
+                key={task.id}
+                task={task}
+                list={selectedListId === 'all' ? listById(task.list_id) : undefined}
+                color={i % 2 === 0 ? colors.pastelYellow : colors.pastelGreen}
+                onToggle={() =>
+                  tasksState
+                    .toggle(task)
+                    .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
+                }
+                onOpen={() => setEditing(task)}
+                onToggleStar={() => toggleStar(task)}
+              />
+            ))
+          )}
+          {visibleTasks.length > 0 ? <Text style={styles.hint}>Hold a task to view or edit its details</Text> : null}
         </>
       )}
 
       <TaskEditSheet
         task={editing}
+        list={editing ? listById(editing.list_id) : undefined}
         onClose={() => setEditing(null)}
         onOpenSource={(sessionId) => {
           setEditing(null);
@@ -187,7 +373,126 @@ export default function TasksScreen() {
           await tasksState.remove(editing);
           setEditing(null);
         }}
+        onChangeList={() => editing && setPicking({ taskId: editing.id, onDone: () => setEditing(null) })}
+        onShare={() =>
+          editing &&
+          setShareContent({
+            kicker: 'Task',
+            title: editing.title,
+            body: [editing.title, editing.due_date ? formatDueDate(editing.due_date) : null, editing.description]
+              .filter(Boolean)
+              .join('\n\n'),
+          })
+        }
       />
+
+      <BottomSheet visible={managingList !== null} onClose={() => setManagingList(null)} title="Edit list">
+        <TextInput
+          style={styles.input}
+          value={manageListName}
+          onChangeText={setManageListName}
+          placeholder="List name"
+          placeholderTextColor={colors.neutral600}
+        />
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+          <Button label="Cancel" variant="ghost" onPress={() => setManagingList(null)} style={{ flex: 1 }} />
+          <Button
+            label={savingList ? 'Saving…' : 'Save'}
+            disabled={savingList || !manageListName.trim()}
+            onPress={saveListRename}
+            style={{ flex: 1, backgroundColor: colors.pastelGreen, borderRadius: radius.pastel }}
+            textStyle={{ color: colors.text }}
+          />
+        </View>
+        <Button
+          label="Delete list"
+          variant="ghost"
+          align="flex-start"
+          textStyle={{ color: colors.accent700 }}
+          onPress={confirmDeleteList}
+          style={{ marginTop: 10 }}
+        />
+      </BottomSheet>
+
+      <BottomSheet visible={creatingList} onClose={() => setCreatingList(false)} title="New list">
+        <TextInput
+          style={styles.input}
+          value={newListName}
+          onChangeText={setNewListName}
+          placeholder="List name"
+          placeholderTextColor={colors.neutral600}
+          autoFocus
+        />
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <Button label="Cancel" variant="ghost" onPress={() => setCreatingList(false)} style={{ flex: 1 }} />
+          <Button
+            label="Create"
+            disabled={!newListName.trim()}
+            onPress={createList}
+            style={{ flex: 1, backgroundColor: colors.pastelGreen, borderRadius: radius.pastel }}
+            textStyle={{ color: colors.text }}
+          />
+        </View>
+      </BottomSheet>
+
+      <BottomSheet
+        visible={picking !== null}
+        onClose={() => {
+          picking?.onDone?.();
+          setPicking(null);
+        }}
+        title="Pick a list"
+      >
+        {lists.length === 0 ? (
+          <Text style={styles.footnote}>No lists yet -- create one below.</Text>
+        ) : (
+          lists.map((l, i) => (
+            <Button
+              key={l.id}
+              label={l.name}
+              align="flex-start"
+              disabled={busyTaskId !== null}
+              onPress={() => picking && moveTaskToList(picking.taskId, l.id)}
+              style={{
+                marginBottom: 8,
+                borderRadius: radius.pastel,
+                backgroundColor: PICKER_COLORS[i % PICKER_COLORS.length],
+              }}
+              textStyle={{ color: colors.text }}
+            />
+          ))
+        )}
+        <View style={styles.newListRow}>
+          <TextInput
+            style={styles.newListInput}
+            value={pickNewListName}
+            onChangeText={setPickNewListName}
+            placeholder="New list name"
+            placeholderTextColor={colors.neutral600}
+          />
+          <Button
+            label={creatingPickList ? '…' : 'Create'}
+            disabled={creatingPickList || !pickNewListName.trim()}
+            onPress={createAndPickList}
+            style={{
+              minHeight: 44,
+              paddingHorizontal: 14,
+              borderRadius: radius.pastel,
+              backgroundColor: colors.pastelGreen,
+            }}
+            textStyle={{ color: colors.text }}
+          />
+        </View>
+        <Button
+          label="Cancel"
+          variant="ghost"
+          align="flex-start"
+          onPress={() => {
+            picking?.onDone?.();
+            setPicking(null);
+          }}
+        />
+      </BottomSheet>
 
       <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
     </Screen>
@@ -217,18 +522,50 @@ function FilterOption({
   );
 }
 
+function ListChip({
+  label,
+  selected,
+  onPress,
+  onLongPress,
+  muted,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  onLongPress?: () => void;
+  muted?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      style={[
+        styles.listChip,
+        selected ? { backgroundColor: colors.accent } : { backgroundColor: colors.surface },
+        muted && !selected && { borderWidth: 1, borderColor: colors.divider },
+      ]}
+    >
+      <Text style={[styles.listChipText, selected && { color: colors.bg }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function TaskRow({
   task,
+  list,
   color,
   onToggle,
-  onPress,
-  onShare,
+  onOpen,
+  onToggleStar,
 }: {
   task: Task;
+  list: TaskList | undefined;
   color: string;
   onToggle: () => void;
-  onPress: () => void;
-  onShare: () => void;
+  onOpen: () => void;
+  onToggleStar: () => void;
 }) {
   const done = task.status === 'completed';
   return (
@@ -240,7 +577,7 @@ function TaskRow({
         onPress={onToggle}
         style={[styles.checkbox, done && { backgroundColor: colors.text }]}
       />
-      <Pressable style={styles.taskBody} onPress={onPress} onLongPress={onShare}>
+      <Pressable style={styles.taskBody} onPress={onOpen} onLongPress={onOpen}>
         <Text style={[styles.taskTitle, done && { textDecorationLine: 'line-through', color: colors.neutral500 }]}>
           {task.title}
         </Text>
@@ -250,6 +587,7 @@ function TaskRow({
               ? formatDueDate(task.due_date)
               : `Added ${new Date(task.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
           </Text>
+          {list ? <Tag variant="neutral">{list.name}</Tag> : null}
         </View>
         {task.description ? (
           <View style={styles.quoteBox}>
@@ -257,24 +595,40 @@ function TaskRow({
           </View>
         ) : null}
       </Pressable>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={task.starred ? 'Unstar task' : 'Star task'}
+        onPress={onToggleStar}
+        hitSlop={8}
+        style={styles.starButton}
+      >
+        <StarIcon size={20} filled={task.starred} color={task.starred ? colors.accent700 : colors.neutral500} />
+      </Pressable>
     </View>
   );
 }
 
 function TaskEditSheet({
   task,
+  list,
   onClose,
   onSave,
   onDelete,
   onOpenSource,
+  onChangeList,
+  onShare,
 }: {
   task: Task | null;
+  list: TaskList | undefined;
   onClose: () => void;
-  onSave: (input: { title: string; dueDate?: string | null }) => Promise<void>;
+  onSave: (input: { title: string; description?: string | null; dueDate?: string | null }) => Promise<void>;
   onDelete: () => Promise<void>;
   onOpenSource: (sessionId: string) => void;
+  onChangeList: () => void;
+  onShare: () => void;
 }) {
   const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
   const [dueDate, setDueDate] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [sendRecord, setSendRecord] = useState<GoogleTasksSendRecord | null>(null);
@@ -283,6 +637,7 @@ function TaskEditSheet({
   React.useEffect(() => {
     if (task) {
       setTitle(task.title);
+      setDescription(task.description ?? '');
       setDueDate(task.due_date);
       setSendRecord(null);
       getGoogleTasksSendRecord('task', task.id)
@@ -323,7 +678,7 @@ function TaskEditSheet({
     }
     setSaving(true);
     try {
-      await onSave({ title: title.trim(), dueDate });
+      await onSave({ title: title.trim(), description: description.trim() || null, dueDate });
     } catch (e) {
       Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {
@@ -357,6 +712,29 @@ function TaskEditSheet({
             placeholderTextColor={colors.neutral600}
           />
 
+          <Text style={styles.fieldLabel}>Details</Text>
+          <TextInput
+            style={[styles.input, styles.descriptionInput]}
+            value={description}
+            onChangeText={setDescription}
+            placeholder="Add notes for this task"
+            placeholderTextColor={colors.neutral600}
+            multiline
+            textAlignVertical="top"
+          />
+
+          <Text style={styles.fieldLabel}>List</Text>
+          <View style={styles.listFieldRow}>
+            <Text style={styles.listFieldText}>{list ? list.name : 'No list'}</Text>
+            <Button
+              variant="ghost"
+              label="Change"
+              onPress={onChangeList}
+              style={{ minHeight: 32, paddingHorizontal: 6 }}
+              textStyle={{ fontSize: 12 }}
+            />
+          </View>
+
           <Text style={styles.fieldLabel}>Due date</Text>
           <View style={styles.dateRow}>
             <DateChip label="No date" selected={dueDate === null} onPress={() => setDueDate(null)} />
@@ -372,15 +750,25 @@ function TaskEditSheet({
             placeholderTextColor={colors.neutral600}
           />
 
-          {task?.source_session_id ? (
-            <Button
-              variant="secondary"
-              label="Open source recording"
-              align="flex-start"
-              onPress={() => task.source_session_id && onOpenSource(task.source_session_id)}
-              style={{ marginTop: 14 }}
-            />
-          ) : null}
+          <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+            {task?.source_session_id ? (
+              <Button
+                variant="secondary"
+                label="Open source recording"
+                align="flex-start"
+                onPress={() => task.source_session_id && onOpenSource(task.source_session_id)}
+                style={{ flex: 1 }}
+              />
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Share this task"
+              onPress={onShare}
+              style={styles.shareIconButton}
+            >
+              <ShareIcon size={18} color={colors.neutral700} />
+            </Pressable>
+          </View>
 
           <Button
             variant="secondary"
@@ -439,7 +827,21 @@ const styles = StyleSheet.create({
   title: {
     ...h2,
     marginTop: 6,
-    marginBottom: 14,
+    marginBottom: 12,
+  },
+  listChipRow: {
+    marginBottom: 12,
+  },
+  listChip: {
+    minHeight: 34,
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    borderRadius: radius.pastel,
+  },
+  listChipText: {
+    fontFamily: font.semibold,
+    fontSize: 13,
+    color: colors.text,
   },
   addRow: {
     flexDirection: 'row',
@@ -504,6 +906,20 @@ const styles = StyleSheet.create({
     color: colors.neutral600,
     textAlign: 'center',
   },
+  sectionHeading: {
+    fontFamily: font.semibold,
+    fontSize: 11,
+    letterSpacing: 11 * 0.08,
+    textTransform: 'uppercase',
+    color: colors.neutral600,
+    marginBottom: 8,
+  },
+  reviewCard: {
+    backgroundColor: colors.pastelPeach,
+    borderRadius: radius.pastel,
+    padding: 12,
+    marginBottom: 8,
+  },
   task: {
     flexDirection: 'row',
     gap: 12,
@@ -524,6 +940,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minWidth: 0,
   },
+  starButton: {
+    paddingTop: 2,
+    paddingLeft: 4,
+  },
   taskTitle: {
     fontFamily: font.semibold,
     fontSize: 15,
@@ -532,6 +952,7 @@ const styles = StyleSheet.create({
   },
   metaRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
     marginTop: 3,
   },
@@ -564,6 +985,35 @@ const styles = StyleSheet.create({
     borderColor: colors.divider,
     borderRadius: radius.pastel,
     marginBottom: 10,
+  },
+  descriptionInput: {
+    minHeight: 80,
+    paddingTop: 12,
+  },
+  listFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.divider,
+    borderRadius: radius.pastel,
+    paddingHorizontal: 12,
+    minHeight: 44,
+    marginBottom: 10,
+  },
+  listFieldText: {
+    fontFamily: font.regular,
+    fontSize: 14,
+    color: colors.text,
+  },
+  shareIconButton: {
+    minHeight: 44,
+    minWidth: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.pastel,
   },
   sendHint: {
     fontFamily: font.regular,
@@ -598,6 +1048,50 @@ const styles = StyleSheet.create({
     fontFamily: font.regular,
     fontSize: 12,
     color: colors.text,
+  },
+  suggestText: {
+    fontFamily: font.regular,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.neutral800,
+    marginTop: 4,
+  },
+  suggestActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  suggestButton: {
+    minHeight: 36,
+    paddingHorizontal: 12,
+    borderRadius: radius.pastel,
+  },
+  pastelSmallText: {
+    color: colors.text,
+    fontSize: 12,
+  },
+  footnote: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.neutral600,
+    paddingVertical: 12,
+  },
+  newListRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
+    marginBottom: 12,
+  },
+  newListInput: {
+    flex: 1,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    fontFamily: font.regular,
+    fontSize: 14,
+    color: colors.text,
+    backgroundColor: colors.bg,
+    borderRadius: radius.pastel,
   },
   hint: {
     fontFamily: font.regular,

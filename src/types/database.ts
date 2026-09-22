@@ -189,6 +189,10 @@ export type Database = {
           completed_at: string | null;
           topic_id: string | null;
           topic_suggestion: string | null;
+          /** In-app grouping (e.g. "Shopping", "Work") -- independent of Google Tasks, whose sync still uses one default list (see profiles-adjacent google_tasks_connections). */
+          list_id: string | null;
+          list_suggestion: string | null;
+          starred: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -204,10 +208,31 @@ export type Database = {
           completed_at?: string | null;
           topic_id?: string | null;
           topic_suggestion?: string | null;
+          list_id?: string | null;
+          list_suggestion?: string | null;
+          starred?: boolean;
           created_at?: string;
           updated_at?: string;
         };
         Update: Partial<Database['public']['Tables']['tasks']['Insert']>;
+        Relationships: [];
+      };
+      task_lists: {
+        Row: {
+          id: string;
+          user_id: string;
+          name: string;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          name: string;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: Partial<Database['public']['Tables']['task_lists']['Insert']>;
         Relationships: [];
       };
       memories: {
