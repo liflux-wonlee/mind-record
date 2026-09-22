@@ -32,6 +32,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 import { errorMessage } from '../_shared/errorMessage.ts';
 import { PerfTurn, scheduleBackground } from '../_shared/perf.ts';
+import { formatHits, searchRecords, splitKeywords, type SearchHit } from '../_shared/recordSearch.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -53,15 +54,6 @@ const NOTHING_HEARD: Record<string, string> = {
 };
 
 type Turn = { question: string; answer: string };
-type SearchHit = {
-  kind: 'session' | 'task' | 'memory';
-  id: string;
-  title: string;
-  snippet: string | null;
-  happened_at: string;
-  session_id: string | null;
-  topic_id: string | null;
-};
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -237,21 +229,12 @@ Deno.serve(async (req) => {
     const interpretation = await interpret(question, history, profile?.timezone ?? null);
     perf.mark('interpret_done');
 
-    const { data: rawHits, error: searchError } = await callerClient.rpc('search_everything', {
-      q: interpretation.keywords || question,
-      max_results: 60,
+    const keywords = splitKeywords(interpretation.keywords || question);
+    const hits: SearchHit[] = await searchRecords(callerClient, keywords, {
+      dateFrom: interpretation.date_from,
+      dateTo: interpretation.date_to,
+      limit: 25,
     });
-    if (searchError) throw searchError;
-    let hits: SearchHit[] = (rawHits ?? []) as SearchHit[];
-    if (interpretation.date_from) {
-      hits = hits.filter((h) => h.happened_at >= interpretation.date_from!);
-    }
-    if (interpretation.date_to) {
-      // happened_at is a full timestamp; date_to is a bare date, so allow
-      // through the end of that day rather than truncating it to midnight.
-      hits = hits.filter((h) => h.happened_at < `${interpretation.date_to}T23:59:59.999Z`);
-    }
-    hits = hits.slice(0, 25);
     perf.mark('search_done');
 
     const result = await answer(question, history, hits, aiName, userHonorific, locale);
@@ -352,7 +335,7 @@ async function interpret(
   const system = `You turn a question about a personal voice-journaling app's own past records into a search request. ${todayContext}
 
 Extract:
-- "keywords": the 1-5 most important search words from the question, in the SAME language the question is in (this feeds a plain ILIKE text search, not a semantic one -- pick words likely to appear literally in the user's own recordings/tasks/ideas, not the question's grammar words).
+- "keywords": the 1-5 most important search words from the question, space-separated, in the SAME language the question is in (each word is searched separately with a plain ILIKE text match, not a semantic one -- pick words likely to appear literally in the user's own recordings/tasks/ideas, not the question's grammar words; for Korean, use the bare noun without particles, e.g. "에스더" not "에스더가"/"에스더랑").
 - "date_from" / "date_to": a "YYYY-MM-DD" range ONLY if the question names or implies one (e.g. "this week", "last month", "어제", "지난주") -- resolve it against today's date above. null/null if no date is implied (most questions).
 
 If earlier turns are given, use them ONLY to resolve something this question leaves implicit (e.g. "그중 이번 주에 할 것은?" after a prior question about tasks) -- carry forward the earlier topic's keywords if this question doesn't stand on its own.
@@ -401,16 +384,7 @@ async function answer(
   userHonorific: string | null,
   locale: string | null
 ): Promise<{ answer: string; inputTokens: number; outputTokens: number }> {
-  const recordsBlock =
-    hits.length === 0
-      ? '(no matching records)'
-      : hits
-          .map((h, i) => {
-            const date = h.happened_at.slice(0, 10);
-            const label = h.kind === 'session' ? 'Recording' : h.kind === 'task' ? 'Task' : 'Idea';
-            return `${i + 1}. [${label}] ${date} -- ${h.title}${h.snippet && h.snippet !== h.title ? `: ${h.snippet}` : ''}`;
-          })
-          .join('\n');
+  const recordsBlock = formatHits(hits);
 
   let system = `You answer questions about a user's own past voice-journal records inside Mind Record, using ONLY the numbered records below. This is read aloud by text-to-speech sometimes, so write the way a person actually talks -- no markdown, no bullet points.
 

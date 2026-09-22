@@ -12,7 +12,11 @@ export type ConverseResult = {
   audioBase64: string;
   /** Echoed back from the request for perf-log correlation (see src/lib/perfLog.ts). */
   turnId?: string;
+  /** What the AI actually did in the app this turn (task added, topic filed, ...), for on-screen confirmation chips. */
+  actions?: ConverseAction[];
 };
+
+export type ConverseAction = { type: string; label: string };
 
 /**
  * Sends one turn's audio to the `converse` Edge Function: it transcribes
@@ -30,18 +34,29 @@ export type ConverseResult = {
  * recording too large to inline or with the flag off (an attachment
  * already uploaded via src/services/recordings.ts's uploadRecording).
  */
+/** The device's IANA timezone (e.g. "America/New_York") -- converse needs it to know what "today" means for the user. */
+function deviceTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function converseTurn(
   sessionId: string,
   audio: { storagePath: string } | { uri: string; mimeType: string },
   turnId?: string
 ): Promise<ConverseResult> {
-  let body: FormData | { sessionId: string; storagePath: string; turnId?: string };
+  const timezone = deviceTimeZone();
+  let body: FormData | { sessionId: string; storagePath: string; turnId?: string; timezone?: string };
   if ('storagePath' in audio) {
-    body = { sessionId, storagePath: audio.storagePath, turnId };
+    body = { sessionId, storagePath: audio.storagePath, turnId, timezone };
   } else {
     const form = new FormData();
     form.append('sessionId', sessionId);
     if (turnId) form.append('turnId', turnId);
+    if (timezone) form.append('timezone', timezone);
     await appendFilePart(form, 'audio', audio.uri, 'segment.m4a', audio.mimeType);
     body = form;
   }

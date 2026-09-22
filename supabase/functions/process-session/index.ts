@@ -18,6 +18,7 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 import { errorMessage } from '../_shared/errorMessage.ts';
+import { findSimilarName } from '../_shared/nameMatch.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
@@ -294,11 +295,24 @@ Deno.serve(async (req) => {
     if (listsError) throw listsError;
     const lists: ListRow[] = existingLists ?? [];
 
+    // Tasks that already exist for this session: ones the user added out
+    // loud DURING the conversation (converse's create_task tool), or ones
+    // left behind by an earlier attempt at this same run that failed
+    // partway. The analysis is told about them, and any re-extraction of
+    // one is dropped below, instead of filing the same to-do twice.
+    const { data: existingSessionTasks, error: existingTasksError } = await db
+      .from('tasks')
+      .select('title')
+      .eq('source_session_id', sessionId)
+      .eq('user_id', user.id);
+    if (existingTasksError) throw existingTasksError;
+    const existingTaskTitles = (existingSessionTasks ?? []).map((t) => t.title as string);
+
     const {
       extraction,
       inputTokens: analysisInputTokens,
       outputTokens: analysisOutputTokens,
-    } = await analyzeTranscript(transcript, topics, lists, detectedLanguage);
+    } = await analyzeTranscript(transcript, topics, lists, existingTaskTitles, detectedLanguage);
     if (analysisInputTokens > 0 || analysisOutputTokens > 0) {
       await recordUsage(db, {
         userId: user.id,
@@ -337,8 +351,10 @@ Deno.serve(async (req) => {
     // confidence threshold, no topic_id and a topic_suggestion instead.
     // Tasks also resolve a list the same way -- a separate, flat concept
     // from topics (see ListRow/resolveList).
+    const alreadyExisting = new Set(existingTaskTitles.map(normalizeTaskTitle));
+    const newTasks = extraction.tasks.filter((t) => !alreadyExisting.has(normalizeTaskTitle(t.title)));
     const resolvedTasks = [];
-    for (const t of extraction.tasks) {
+    for (const t of newTasks) {
       const resolvedTopic = await resolveTopic(db, user.id, topics, t);
       const resolvedList = await resolveList(db, user.id, lists, t);
       resolvedTasks.push({
@@ -408,7 +424,7 @@ Deno.serve(async (req) => {
       if (confidence > prev) confidenceByTopic.set(section.topic_id, confidence);
     });
     const allResolved = [...resolvedTasks, ...resolvedMemories];
-    const allExtracted = [...extraction.tasks, ...extraction.memories];
+    const allExtracted = [...newTasks, ...extraction.memories];
     allResolved.forEach((row, i) => {
       if (!row.topic_id) return;
       const confidence = allExtracted[i]?.topic_confidence ?? null;
@@ -533,53 +549,21 @@ function topLevelExactMatch(topics: TopicRow[], name: string): boolean {
   return topics.some((t) => t.parent_topic_id === null && t.name.toLowerCase() === target);
 }
 
-function normalizeTopicName(name: string): string {
-  return name.trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-function levenshtein(a: string, b: string): number {
-  if (a === b) return 0;
-  const m = a.length;
-  const n = b.length;
-  if (m === 0) return n;
-  if (n === 0) return m;
-  const dp: number[] = new Array(n + 1);
-  for (let j = 0; j <= n; j++) dp[j] = j;
-  for (let i = 1; i <= m; i++) {
-    let prev = dp[0];
-    dp[0] = i;
-    for (let j = 1; j <= n; j++) {
-      const temp = dp[j];
-      dp[j] = a[i - 1] === b[j - 1] ? prev : 1 + Math.min(prev, dp[j], dp[j - 1]);
-      prev = temp;
-    }
-  }
-  return dp[n];
+/** Case/spacing/punctuation-insensitive form of a task title, for spotting a re-extracted duplicate. */
+function normalizeTaskTitle(title: string): string {
+  return title.toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
 }
 
 /** A TOP-LEVEL topic close enough to `name` that creating a brand new one
  *  alongside it would likely be an unwanted near-duplicate ("Family" next
  *  to "Familys", "Health" next to "Health stuff") -- close, but not the
- *  same name (an exact match is handled separately, by reusing it outright). */
+ *  same name (an exact match is handled separately, by reusing it outright).
+ *  Same rule converse's live tools use (see _shared/nameMatch.ts). */
 function findSimilarTopic(topics: TopicRow[], name: string): TopicRow | null {
-  const target = normalizeTopicName(name);
-  let best: TopicRow | null = null;
-  let bestDistance = Infinity;
-  for (const t of topics) {
-    if (t.parent_topic_id !== null) continue;
-    const candidate = normalizeTopicName(t.name);
-    if (candidate === target) continue;
-    const contains =
-      candidate.length > 2 && target.length > 2 && (candidate.includes(target) || target.includes(candidate));
-    const distance = levenshtein(candidate, target);
-    const maxLen = Math.max(candidate.length, target.length);
-    const closeEnough = contains || (maxLen > 0 && distance / maxLen <= 0.3);
-    if (closeEnough && distance < bestDistance) {
-      best = t;
-      bestDistance = distance;
-    }
-  }
-  return best;
+  return findSimilarName(
+    topics.filter((t) => t.parent_topic_id === null),
+    name
+  );
 }
 
 /** Case-insensitive find-or-create of `name` (under `parentName`, itself
@@ -684,6 +668,7 @@ async function analyzeTranscript(
   transcript: string,
   topics: TopicRow[],
   lists: ListRow[],
+  existingTaskTitles: string[],
   detectedLanguage: string | null
 ): Promise<{ extraction: Extraction; inputTokens: number; outputTokens: number }> {
   if (!transcript.trim()) {
@@ -731,7 +716,11 @@ ${formatTopicTree(topics)}
 
 Separately, a TASK can also belong to a task list -- a flat, simple bucket like Google Tasks' own lists (e.g. "Shopping", "Work", "Errands"), NOT the same thing as its topic (a task's topic is what it's ABOUT; its list is which practical to-do bucket it belongs in -- the same task can have both, and they're often different, e.g. topic "Family" + list "Shopping" for "buy a birthday present"). The user's current task lists:
 ${lists.length > 0 ? lists.map((l) => `- ${l.name}`).join('\n') : '(none yet)'}
-
+${
+  existingTaskTitles.length > 0
+    ? `\nTasks that ALREADY EXIST for this recording -- the user added them out loud while talking, so their spoken requests to add them are in the transcript. Do NOT output any of these in "tasks" again, even reworded:\n${existingTaskTitles.map((t) => `- ${t}`).join('\n')}\n`
+    : ''
+}
 Respond with strict JSON matching this shape:
 {
   "summary": string (1-2 sentences, short recap as described above, in the transcript's own language),

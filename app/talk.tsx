@@ -394,6 +394,12 @@ function ConversationPanel({
                 {turn.role === 'user' ? 'You' : aiName ?? 'AI'}
               </Kicker>
               <Text style={styles.turnText}>{turn.content}</Text>
+              {turn.actions?.map((label, j) => (
+                <View key={j} style={styles.actionChip}>
+                  <CheckIcon size={13} color={colors.accent800} />
+                  <Text style={styles.actionChipText}>{label}</Text>
+                </View>
+              ))}
             </View>
           ))
         )}
@@ -535,6 +541,22 @@ const styles = StyleSheet.create({
     fontFamily: font.regular,
     fontSize: 16,
     lineHeight: 23,
+    color: colors.text,
+  },
+  actionChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginTop: 6,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.pastelGreen,
+  },
+  actionChipText: {
+    fontFamily: font.semibold,
+    fontSize: 12,
     color: colors.text,
   },
   // The centered recording "stage" -- status pill, waveform, and (Capture

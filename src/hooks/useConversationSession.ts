@@ -50,12 +50,13 @@ import { isNetworkError } from '@/lib/functionsError';
 import { startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
-import { converseTurn } from '@/services/conversation';
+import { converseTurn, type ConverseResult } from '@/services/conversation';
 import { processSession } from '@/services/processing';
 import { localRecordingSize, uploadRecording } from '@/services/recordings';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
-export type ConversationTurn = { role: 'user' | 'assistant'; content: string };
+/** `actions` (assistant turns only): what the AI actually did in the app that turn, shown as confirmation chips. */
+export type ConversationTurn = { role: 'user' | 'assistant'; content: string; actions?: string[] };
 export type ConversationState = 'idle' | 'recording' | 'thinking' | 'speaking';
 
 // Metering is in dBFS (0 = loudest, more negative = quieter). On Android
@@ -382,7 +383,7 @@ export function useConversationSession(
           // this out. converse still keeps a backup copy in Storage itself
           // on this path (written in parallel with transcribing, not
           // blocking it) -- see converse/index.ts.
-          let result;
+          let result: ConverseResult | undefined;
           if (DIRECT_AUDIO_UPLOAD_ENABLED) {
             const byteLength = localRecordingSize(uri);
             audioBytes = byteLength;
@@ -413,7 +414,11 @@ export function useConversationSession(
           setTurns((prev) => {
             const next = [...prev];
             if (result.userText) next.push({ role: 'user', content: result.userText });
-            next.push({ role: 'assistant', content: result.assistantText });
+            next.push({
+              role: 'assistant',
+              content: result.assistantText,
+              actions: result.actions?.length ? result.actions.map((a) => a.label) : undefined,
+            });
             return next;
           });
           pendingEndRef.current = result.shouldEnd;
