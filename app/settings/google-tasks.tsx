@@ -128,7 +128,12 @@ export default function GoogleTasksSettingsScreen() {
 
           <View style={styles.card}>
             <Kicker style={{ color: colors.neutral600, marginBottom: 6 }}>Default list</Kicker>
-            <Text style={[styles.body, { marginBottom: 14 }]}>{status.defaultListTitle ?? 'Not chosen yet'}</Text>
+            <Text style={[styles.body, { marginBottom: 6 }]}>{status.defaultListTitle ?? 'Not chosen yet'}</Text>
+            <Text style={[styles.hint, { marginBottom: 14 }]}>
+              For tasks that aren&apos;t in any of your lists. A task in one of your lists goes to the Google list with
+              the same name (created there if needed), or to the one you pick for that list in Tasks (long-press the
+              list).
+            </Text>
             <Button
               variant="secondary"
               label="Change"
@@ -152,7 +157,8 @@ export default function GoogleTasksSettingsScreen() {
         <View style={styles.card}>
           <Text style={styles.body}>
             Connect a Google account to send tasks to Google Tasks. This never syncs automatically -- you choose
-            what to send, from that task&apos;s own menu.
+            what to send, from that task&apos;s own menu, or by asking in a Conversation (&quot;구글 태스크에도
+            넣어줘&quot;).
           </Text>
           <Button
             label={connecting ? 'Connecting…' : 'Connect Google Tasks'}
@@ -200,5 +206,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     lineHeight: 20,
     color: colors.text,
+  },
+  hint: {
+    fontFamily: font.regular,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.neutral600,
   },
 });

@@ -840,7 +840,11 @@ type PromptOptions = {
   timezone: string;
 };
 
-function buildSystemPrompt(opts: PromptOptions, actionLog: string[], catalog: { topics: string; lists: string }): string {
+function buildSystemPrompt(
+  opts: PromptOptions,
+  actionLog: string[],
+  catalog: { topics: string; lists: string; google: string }
+): string {
   const today = localToday(opts.timezone);
   const weekday = new Date().toLocaleDateString('en-US', { timeZone: opts.timezone, weekday: 'long' });
 
@@ -855,10 +859,12 @@ Most turns: just react naturally and briefly -- a short acknowledgment, a light 
 YOU CAN SEE AND CHANGE THE USER'S APP DATA through your tools:
 - Look things up: list_task_lists, list_tasks (their task lists and open tasks); their topics and list names are below.
 - Search their past: search_records (their earlier recordings, tasks and ideas).
-- Make changes, which happen immediately: create_task, file_under_topic, create_topic, undo_last_action.
+- Make changes, which happen immediately: create_task, send_to_google_tasks, file_under_topic, create_topic, undo_last_action.
 Use a tool whenever the user asks about their tasks or anything they said or recorded before, or tells you to add, file or create something. Never say you can't look something up or can't do it when a tool covers it. Don't use tools for ordinary chatting.
 
 Names: always pass the EXACT existing topic or list name from the lists below, mapping how the user said it (a Korean rendering like "패밀리" for "Family", a near-spelling, a translation) to that exact name. Only ask for a NEW topic or list (create_new / create_new_list) when the user explicitly asked for a new one. If they ask for a new topic without saying its name ("새 토픽 만들어서 Business 아래에 넣어줘"), suggest a short name and ask before creating anything.
+
+Google Tasks ("구글 태스크에 넣어줘", "구글 할 일에도 보내줘"): for a new to-do, create_task with send_to_google true; for a task that already exists (such as one you just added), send_to_google_tasks with its exact title. A task in one of their lists goes to the Google list with the same name (created there if missing) unless they chose another for that list; a task in no list goes to their default Google list. Only send to Google when they ask. If Google Tasks isn't connected, say they can connect it in Account -> Google Tasks. Undoing a task or a send also removes it from Google Tasks.
 
 After a change, confirm in ONE short sentence exactly what was done. If the user then asks to cancel or undo it (e.g. "취소해"), call undo_last_action. Only claim something was done if the tool said so. Only undo when they clearly ask to cancel or undo.
 If a tool returns needs_confirmation or not_found, ask one short question (e.g. "Family 말씀이세요, 아니면 '패밀리'라는 새 토픽을 만들까요?") and do nothing else until they answer; then call the tool again with the existing name, or with the create_new / force flag the tool describes.
@@ -875,7 +881,9 @@ The user's topics (data):
 ${catalog.topics}
 
 The user's task lists (data):
-${catalog.lists}`;
+${catalog.lists}
+
+Google Tasks: ${catalog.google}`;
 
   if (opts.aiName) {
     prompt += `\n\nThe user calls you "${opts.aiName}" -- that's your name in this conversation. If they address you by it (e.g. "${opts.aiName}, ...") or ask who you are, respond as ${opts.aiName} naturally; don't explain that this is a configured name.`;
@@ -963,7 +971,7 @@ async function chatRound(messages: ChatMessage[], toolsAllowed: boolean, timeout
 }
 
 const ASKS_USER = new Set(['needs_confirmation', 'not_found', 'not_possible']);
-const WRITE_TOOLS = new Set(['create_task', 'file_under_topic', 'create_topic', 'undo_last_action']);
+const WRITE_TOOLS = new Set(['create_task', 'send_to_google_tasks', 'file_under_topic', 'create_topic', 'undo_last_action']);
 
 /**
  * One conversational turn with tool calling: the model may call app-data
@@ -980,7 +988,7 @@ const WRITE_TOOLS = new Set(['create_task', 'file_under_topic', 'create_topic', 
 async function generateReply(
   history: { role: string; content: string }[],
   opts: PromptOptions,
-  catalog: { topics: string; lists: string },
+  catalog: { topics: string; lists: string; google: string },
   toolContext: ToolContext,
   actions: ConverseAction[],
   usage: TokenUsage,

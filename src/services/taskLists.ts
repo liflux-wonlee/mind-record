@@ -35,6 +35,25 @@ export async function renameTaskList(listId: string, name: string): Promise<Task
   return data;
 }
 
+/**
+ * Which Google Tasks list this list's tasks are sent to: a specific one, or
+ * `null` for automatic -- the Google list with the same name, created in
+ * Google on first send if missing (see supabase/functions/_shared/googleTasks.ts).
+ */
+export async function setTaskListGoogleList(
+  listId: string,
+  googleList: { id: string; title: string } | null
+): Promise<TaskList> {
+  const { data, error } = await supabase
+    .from('task_lists')
+    .update({ google_task_list_id: googleList?.id ?? null, google_task_list_title: googleList?.title ?? null })
+    .eq('id', listId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
 /** Tasks under this list keep their content, just unfiled (list_id set null) -- same convention as deleteTopic. */
 export async function deleteTaskList(listId: string): Promise<void> {
   const { error } = await supabase.from('task_lists').delete().eq('id', listId);

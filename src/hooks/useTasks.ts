@@ -14,6 +14,7 @@ import {
   deleteTaskList,
   listTaskLists,
   renameTaskList,
+  setTaskListGoogleList,
   type TaskList,
 } from '@/services/taskLists';
 import {
@@ -134,6 +135,14 @@ export function useTasks() {
     );
   }, []);
 
+  const setListGoogleList = useCallback(async (list: TaskList, googleList: { id: string; title: string } | null) => {
+    const updated = await setTaskListGoogleList(list.id, googleList);
+    setState((prev) =>
+      prev.status === 'ready' ? { ...prev, lists: prev.lists.map((l) => (l.id === updated.id ? updated : l)) } : prev
+    );
+    return updated;
+  }, []);
+
   const removeList = useCallback(async (list: TaskList) => {
     await deleteTaskList(list.id);
     setState((prev) =>
@@ -159,6 +168,7 @@ export function useTasks() {
     removeFromList,
     addList,
     renameList,
+    setListGoogleList,
     removeList,
     openCount: state.status === 'ready' ? state.tasks.filter((t) => t.status === 'open').length : 0,
   };

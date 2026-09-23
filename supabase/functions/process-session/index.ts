@@ -351,7 +351,9 @@ Deno.serve(async (req) => {
     const undone = actionRecords.filter((r) => r.undone);
     const live = actionRecords.filter((r) => !r.undone);
     const liveTaskTitles = new Set(live.filter((r) => r.type === 'task_created').map((r) => normalizeTaskTitle(r.subject)));
-    const liveTopicKeys = new Set(live.filter((r) => r.type !== 'task_created').map((r) => normalizeTopicKey(r.subject)));
+    const liveTopicKeys = new Set(
+      live.filter((r) => r.type === 'topic_filed' || r.type === 'topic_created').map((r) => normalizeTopicKey(r.subject))
+    );
 
     const undoneTaskTitles = new Set(
       undone
@@ -968,7 +970,7 @@ async function analyzeTranscript(
     ? `
 
 This transcript is a spoken CONVERSATION between the user and the app's voice assistant, one line per turn. "User:" lines are the user -- they are the journal content. "AI:" lines are the assistant's replies: context for understanding the user, never content to summarize, quote, or extract tasks/ideas from. "[App did: ...]" lines are changes the assistant made in the app right then, at the user's request.
-User lines that were only questions or instructions to the app -- asking what topics/tasks exist, searching their past, asking to save/end, or asking to add a task, file under a topic or make a topic -- are not journal content: leave them out of "summary", "outline" and "notable_quotes".
+User lines that were only questions or instructions to the app -- asking what topics/tasks exist, searching their past, asking to save/end, or asking to add a task, send one to Google Tasks, file under a topic or make a topic -- are not journal content: leave them out of "summary", "outline" and "notable_quotes".
 A request to add a task, file under a topic or make a topic was CARRIED OUT only if a matching "[App did: ...]" line follows it (right after it, or a turn or two later once the user answered a question about it) -- never output a carried-out request again as a task, idea or requested_topic. A request with no matching "[App did: ...]" line was NOT carried out (the assistant couldn't do it, or asked something back that was never settled): handle it exactly as you would in an ordinary recording -- extract the task, give the section it's about that topic_name, or add it to requested_topics.`
     : '';
   const undoneNote =

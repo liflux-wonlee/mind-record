@@ -1,10 +1,11 @@
-// The user's Google Tasks lists, for Account's "Default list" picker
-// (src/services/googleTasks.ts's listGoogleTaskLists()).
+// The user's Google Tasks lists, for Account's "Default list" picker and
+// the per-list picker on Tasks (src/services/googleTasks.ts's
+// listGoogleTaskLists()).
 
 import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 import { errorMessage } from '../_shared/errorMessage.ts';
-import { getValidAccessToken, googleTasksFetch, NotConnectedError } from '../_shared/googleTasks.ts';
+import { fetchGoogleTaskLists, getValidAccessToken, NotConnectedError } from '../_shared/googleTasks.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
@@ -35,13 +36,7 @@ Deno.serve(async (req) => {
 
   try {
     const { accessToken } = await getValidAccessToken(db, user.id);
-    const res = await googleTasksFetch(accessToken, 'users/@me/lists');
-    if (!res.ok) {
-      console.error('Google Tasks API (lists) failed:', res.status, await res.text());
-      throw new Error('Could not load your Google Tasks lists.');
-    }
-    const data = await res.json();
-    const lists = (data.items ?? []).map((l: { id: string; title: string }) => ({ id: l.id, title: l.title }));
+    const lists = await fetchGoogleTaskLists(accessToken);
     return json({ lists });
   } catch (e) {
     // 200, not 409 -- this is an expected, actionable state the client

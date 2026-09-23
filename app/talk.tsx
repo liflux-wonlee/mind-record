@@ -142,7 +142,7 @@ export default function TalkScreen() {
     const kept = keptVoiceChanges(conversation.turns);
     const discardMessage =
       kept > 0
-        ? `What you said so far will not be saved. ${kept === 1 ? 'The task or topic' : `The ${kept} tasks and topics`} the AI added for you (shown with a check mark) will be kept.`
+        ? `What you said so far will not be saved. ${kept === 1 ? 'The change' : `The ${kept} changes`} the AI made for you (tasks, topics, Google Tasks -- shown with a check mark) will be kept.`
         : 'What you said so far will not be saved.';
     Alert.alert('Discard this conversation?', discardMessage, [
       { text: 'Keep talking', style: 'cancel' },
@@ -211,9 +211,9 @@ export default function TalkScreen() {
 
 /**
  * How many changes the AI made by voice outlive discarding the conversation:
- * tasks it added and topics it created. Filing into an existing topic is a
- * link to this conversation, so it goes with it; anything undone later
- * doesn't count.
+ * tasks it added, topics it created, and tasks it sent to Google Tasks.
+ * Filing into an existing topic is a link to this conversation, so it goes
+ * with it; anything undone later doesn't count.
  */
 function keptVoiceChanges(turns: ConversationTurn[]): number {
   const actions = turns.flatMap((t) => t.actions ?? []);
@@ -225,7 +225,11 @@ function keptVoiceChanges(turns: ConversationTurn[]): number {
   }
   let kept = 0;
   for (const a of actions) {
-    const lasting = a.type === 'task_created' || a.type === 'topic_created' || (a.type === 'topic_filed' && a.newTopic === true);
+    const lasting =
+      a.type === 'task_created' ||
+      a.type === 'topic_created' ||
+      a.type === 'google_sent' ||
+      (a.type === 'topic_filed' && a.newTopic === true);
     if (!lasting) continue;
     const undoneCount = undone.get(a.label) ?? 0;
     if (undoneCount > 0) {

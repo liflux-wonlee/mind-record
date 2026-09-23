@@ -27,9 +27,19 @@ export type UndoRecord = {
   spoken?: { ko: string; en: string };
 };
 
+/** One task this action sent to Google Tasks. */
+export type GoogleSendLog = {
+  task_id: string;
+  list_id: string;
+  list_title: string | null;
+  google_task_id: string;
+  /** The Google list was created for this send (same-name mapping) -- undo removes it again if it's left empty. */
+  created_list: boolean;
+};
+
 export type ActionRecord = {
   v: 1;
-  type: 'task_created' | 'topic_filed' | 'topic_created';
+  type: 'task_created' | 'topic_filed' | 'topic_created' | 'google_sent';
   label: string;
   turn_id: string;
   /** The task title / topic display name ("Business · Liflux") this was about. */
@@ -41,6 +51,8 @@ export type ActionRecord = {
   list_ids: string[];
   /** The session_topics link this action added (null if it already existed). */
   linked_topic_id: string | null;
+  /** google_sent only: what was sent. (Undoing a task_created removes every Google copy of its tasks, however they were sent.) */
+  google_sends?: GoogleSendLog[];
   undone: boolean;
 };
 

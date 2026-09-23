@@ -18,7 +18,7 @@ export type ConverseResult = {
 };
 
 /**
- * type: 'task_created' | 'topic_filed' | 'topic_created' | 'undone'.
+ * type: 'task_created' | 'google_sent' | 'topic_filed' | 'topic_created' | 'undone'.
  * newTopic: a topic_filed that also created the topic.
  */
 export type ConverseAction = { type: string; label: string; newTopic?: boolean };

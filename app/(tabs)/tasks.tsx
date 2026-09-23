@@ -10,7 +10,10 @@ import { Button, RuleThick, Tag } from '@/components/ui';
 import { useTasks } from '@/hooks/useTasks';
 import {
   getGoogleTasksSendRecord,
+  getGoogleTasksStatus,
+  listGoogleTaskLists,
   sendToGoogleTasks,
+  type GoogleTaskList,
   type GoogleTasksSendRecord,
 } from '@/services/googleTasks';
 import { friendlyMessage } from '@/lib/friendlyError';
@@ -85,6 +88,13 @@ export default function TasksScreen() {
   const [managingList, setManagingList] = useState<TaskList | null>(null);
   const [manageListName, setManageListName] = useState('');
   const [savingList, setSavingList] = useState(false);
+  // Which Google Tasks list the managed list's tasks are sent to (see
+  // supabase/migrations/20260926000001_task_list_google_mapping.sql).
+  // null while checking whether Google Tasks is connected at all.
+  const [googleConnected, setGoogleConnected] = useState<boolean | null>(null);
+  const [googleLists, setGoogleLists] = useState<GoogleTaskList[] | null>(null);
+  const [googlePickerOpen, setGooglePickerOpen] = useState(false);
+  const [savingGoogleList, setSavingGoogleList] = useState(false);
 
   // "+ New list" chip.
   const [creatingList, setCreatingList] = useState(false);
@@ -146,6 +156,37 @@ export default function TasksScreen() {
   const openManageList = (list: TaskList) => {
     setManagingList(list);
     setManageListName(list.name);
+    setGooglePickerOpen(false);
+    setGoogleLists(null);
+    setGoogleConnected(null);
+    getGoogleTasksStatus()
+      .then((status) => setGoogleConnected(status.connected))
+      .catch(() => setGoogleConnected(false));
+  };
+
+  const openGooglePicker = async () => {
+    setGooglePickerOpen(true);
+    if (googleLists) return;
+    try {
+      setGoogleLists(await listGoogleTaskLists());
+    } catch (e) {
+      setGooglePickerOpen(false);
+      Alert.alert('Could not load your Google lists', friendlyMessage(e, 'Please try again.'));
+    }
+  };
+
+  const chooseGoogleList = async (choice: GoogleTaskList | null) => {
+    if (!managingList || savingGoogleList) return;
+    setSavingGoogleList(true);
+    try {
+      const updated = await tasksState.setListGoogleList(managingList, choice);
+      setManagingList(updated);
+      setGooglePickerOpen(false);
+    } catch (e) {
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSavingGoogleList(false);
+    }
   };
 
   const saveListRename = async () => {
@@ -404,6 +445,56 @@ export default function TasksScreen() {
             textStyle={{ color: colors.text }}
           />
         </View>
+
+        <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Google Tasks</Text>
+        {googleConnected === null ? (
+          <ActivityIndicator color={colors.accent} style={{ alignSelf: 'flex-start' }} />
+        ) : !googleConnected ? (
+          <Text style={styles.sendHint}>Connect Google Tasks in Account to send this list&apos;s tasks there.</Text>
+        ) : managingList ? (
+          <>
+            <View style={styles.listFieldRow}>
+              <Text style={styles.listFieldText}>
+                {managingList.google_task_list_title ?? `Same name ("${managingList.name}")`}
+              </Text>
+              <Button
+                variant="ghost"
+                label={googlePickerOpen ? 'Close' : 'Change'}
+                onPress={googlePickerOpen ? () => setGooglePickerOpen(false) : openGooglePicker}
+                style={{ minHeight: 32, paddingHorizontal: 6 }}
+                textStyle={{ fontSize: 12 }}
+              />
+            </View>
+            {googlePickerOpen ? (
+              googleLists === null ? (
+                <ActivityIndicator color={colors.accent} style={{ alignSelf: 'flex-start', marginTop: 6 }} />
+              ) : (
+                <View style={{ marginTop: 6 }}>
+                  <GoogleListOption
+                    label={`Automatic -- same name ("${managingList.name}")`}
+                    selected={!managingList.google_task_list_id}
+                    disabled={savingGoogleList}
+                    onPress={() => chooseGoogleList(null)}
+                  />
+                  {googleLists.map((g) => (
+                    <GoogleListOption
+                      key={g.id}
+                      label={g.title || '(untitled)'}
+                      selected={managingList.google_task_list_id === g.id}
+                      disabled={savingGoogleList}
+                      onPress={() => chooseGoogleList(g)}
+                    />
+                  ))}
+                </View>
+              )
+            ) : null}
+            <Text style={styles.sendHint}>
+              Sending a task from this list puts it in this Google list. Automatic uses the Google list with the same
+              name, and creates it there if it doesn&apos;t exist yet.
+            </Text>
+          </>
+        ) : null}
+
         <Button
           label="Delete list"
           variant="ghost"
@@ -496,6 +587,31 @@ export default function TasksScreen() {
 
       <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
     </Screen>
+  );
+}
+
+function GoogleListOption({
+  label,
+  selected,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected, disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={[styles.googleOption, selected && styles.googleOptionSelected]}
+    >
+      <Text style={styles.googleOptionText}>{label}</Text>
+      {selected ? <Text style={styles.googleOptionCheck}>✓</Text> : null}
+    </Pressable>
   );
 }
 
@@ -655,13 +771,18 @@ function TaskEditSheet({
     setSending(true);
     try {
       const result = await sendToGoogleTasks('task', task.id);
-      setSendRecord({ googleTaskId: result.googleTaskId, listTitle: null, sentAt: new Date().toISOString() });
+      setSendRecord({ googleTaskId: result.googleTaskId, listTitle: result.listTitle, sentAt: new Date().toISOString() });
     } catch (e) {
       const name = e instanceof Error ? e.name : '';
       if (name === 'NotConnectedError') {
         Alert.alert('Not connected', 'Connect Google Tasks first in Account -> Google Tasks.');
       } else if (name === 'NeedsListError') {
-        Alert.alert('Choose a list first', 'Pick a default list in Account -> Google Tasks.');
+        Alert.alert(
+          'Choose a list first',
+          "This task isn't in any list. Put it in a list, or pick a default list in Account -> Google Tasks."
+        );
+      } else if (name === 'MappedListMissingError') {
+        Alert.alert('Google list not found', friendlyMessage(e, 'Pick another Google list for this list.'));
       } else {
         Alert.alert('Could not send', friendlyMessage(e, 'Please try again.'));
       }
@@ -1014,6 +1135,31 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.surface,
     borderRadius: radius.pastel,
+  },
+  googleOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.surface,
+    marginBottom: 6,
+  },
+  googleOptionSelected: {
+    backgroundColor: colors.pastelGreen,
+  },
+  googleOptionText: {
+    flex: 1,
+    fontFamily: font.regular,
+    fontSize: 13,
+    color: colors.text,
+  },
+  googleOptionCheck: {
+    fontFamily: font.semibold,
+    fontSize: 13,
+    color: colors.text,
+    marginLeft: 8,
   },
   sendHint: {
     fontFamily: font.regular,

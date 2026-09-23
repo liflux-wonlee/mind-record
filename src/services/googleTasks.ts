@@ -124,13 +124,22 @@ export async function disconnectGoogleTasks(): Promise<void> {
   if (error) throw await describeFunctionError(error, 'Could not disconnect Google Tasks.');
 }
 
-export type SendGoogleTasksResult = { status: 'sent' | 'already_sent'; googleTaskId: string; listId: string };
+export type SendGoogleTasksResult = {
+  status: 'sent' | 'already_sent';
+  googleTaskId: string;
+  listId: string;
+  listTitle: string | null;
+  /** A Google list was created for this send (the task's list had no same-named one in Google). */
+  createdList: boolean;
+};
 
 /**
  * Sends one task or idea to Google Tasks -- only ever called from that
- * item's own menu/an explicit user action, never automatically. Throws a
- * distinguishable error (`notConnected`/`needsList`) so the caller can
- * prompt to connect/pick a list instead of showing a generic failure.
+ * item's own menu/an explicit user action, never automatically. A task in
+ * one of the app's lists goes to that list's Google list (the same-named
+ * one by default); others to the default list. Throws a distinguishable
+ * error (`NotConnectedError` / `NeedsListError` / `MappedListMissingError`)
+ * so the caller can point to the fix instead of a generic failure.
  */
 export async function sendToGoogleTasks(
   itemType: 'task' | 'memory',
@@ -144,11 +153,17 @@ export async function sendToGoogleTasks(
     const described = await describeFunctionError(error, 'Could not send this to Google Tasks.');
     throw described;
   }
-  const result = data as SendGoogleTasksResult & { error?: string; notConnected?: boolean; needsList?: boolean };
+  const result = data as SendGoogleTasksResult & {
+    error?: string;
+    notConnected?: boolean;
+    needsList?: boolean;
+    mappedListMissing?: boolean;
+  };
   if (result.error) {
     const e = new Error(result.error);
     if (result.notConnected) e.name = 'NotConnectedError';
     if (result.needsList) e.name = 'NeedsListError';
+    if (result.mappedListMissing) e.name = 'MappedListMissingError';
     throw e;
   }
   return result;

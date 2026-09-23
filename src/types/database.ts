@@ -225,6 +225,9 @@ export type Database = {
           id: string;
           user_id: string;
           name: string;
+          /** The Google Tasks list chosen for this list; null = automatic (the Google list with the same name). */
+          google_task_list_id: string | null;
+          google_task_list_title: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -232,6 +235,8 @@ export type Database = {
           id?: string;
           user_id: string;
           name: string;
+          google_task_list_id?: string | null;
+          google_task_list_title?: string | null;
           created_at?: string;
           updated_at?: string;
         };
