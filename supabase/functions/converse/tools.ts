@@ -66,7 +66,23 @@ export type ToolContext = {
   turnId: string;
   /** Set once undo has run in this turn; a second undo in the same turn is refused. */
   undoUsed: boolean;
+  /**
+   * Epoch ms by which Google Tasks calls must be done -- inside the lease a
+   * retried request honors (see converse/index.ts TURN_LEASE_MS), so a slow
+   * Google send can't still be running when a retry takes the turn over.
+   */
+  googleDeadline: number;
 };
+
+// Too little time left to start a Google send (token refresh + lists +
+// maybe creating a list + the insert).
+const MIN_GOOGLE_SEND_MS = 6_000;
+
+function googleSignal(ctx: ToolContext, minimumMs = 0): AbortSignal | null {
+  const left = ctx.googleDeadline - Date.now();
+  if (left < minimumMs) return null;
+  return AbortSignal.timeout(Math.max(1_000, left));
+}
 
 /**
  * A write the AI made this turn, for the client's on-screen confirmation
@@ -168,8 +184,8 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'send_to_google_tasks',
       description:
-        'Send a task that ALREADY exists in the app to Google Tasks ("방금 거 구글 태스크에도 넣어줘", "우유 사기 구글에 보내줘"). For a new to-do, use create_task with send_to_google instead. task_title: the task\'s title as it is in the app (for one you just added, exactly the title you used). A task in one of their lists goes to the Google list with the same name (or the one they picked for it); other tasks go to their default Google list.',
-      parameters: obj({ task_title: { type: 'string' } }, ['task_title']),
+        'Send a task that ALREADY exists in the app to Google Tasks ("방금 거 구글 태스크에도 넣어줘", "우유 사기 구글에 보내줘"). For a new to-do, use create_task with send_to_google instead. task_title: the task\'s title as it is in the app (for one you just added, exactly the title you used). task_id: only after this tool listed several matching tasks and the user picked one -- pass that option\'s task_id. A task in one of their lists goes to the Google list with the same name (or the one they picked for it); other tasks go to their default Google list.',
+      parameters: obj({ task_title: { type: 'string' }, task_id: { type: 'string' } }, ['task_title']),
     },
   },
   {
@@ -210,8 +226,12 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'undo_last_action',
       description:
-        'Undo a change you made earlier in this conversation (a task added, a task sent to Google Tasks, a topic filed or created) -- only when the user explicitly asks to cancel/undo it ("취소해", "방금 거 취소", "아까 Esther 토픽 취소해줘", "undo that"). With no target, it undoes the previous turn\'s changes. target: the task title or topic name they named, if they named one. confirm: true only after they confirmed undoing a change you asked them about.',
-      parameters: obj({ target: { type: 'string' }, confirm: { type: 'boolean' } }),
+        'Undo a change you made earlier in this conversation (a task added, a task sent to Google Tasks, a topic filed or created) -- only when the user explicitly asks to cancel/undo it ("취소해", "방금 거 취소", "아까 Esther 토픽 취소해줘", "undo that"). With no target, it undoes the previous turn\'s changes. target: the task title or topic name they named, if they named one. what: "google_send" when they only want the Google Tasks copy taken back ("구글에 보낸 건 취소해", "구글에서만 빼줘") -- the task stays in the app; otherwise leave it out. confirm: true only after they confirmed undoing a change you asked them about.',
+      parameters: obj({
+        target: { type: 'string' },
+        what: { type: 'string', enum: ['google_send', 'change'] },
+        confirm: { type: 'boolean' },
+      }),
     },
   },
   {
@@ -647,8 +667,17 @@ async function createTask(ctx: ToolContext, args: Record<string, unknown>, actio
 
 type GoogleAttempt = { result: Record<string, unknown>; spoken: SpokenConfirmation; sent: boolean };
 
+const GOOGLE_OUT_OF_TIME: Omit<GoogleAttempt, 'sent'> = {
+  result: { status: 'not_possible', reason: 'out_of_time', note: 'Nothing was sent to Google Tasks; they can ask again.' },
+  spoken: {
+    ko: '시간이 부족해서 구글 태스크로는 보내지 못했어요. 다시 말해 주세요.',
+    en: "I ran out of time to send it to Google Tasks -- please ask again.",
+  },
+};
+
 /** Why a send to Google Tasks didn't happen, as a tool result and a spoken line. */
 function googleFailure(e: unknown): Omit<GoogleAttempt, 'sent'> {
+  if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) return GOOGLE_OUT_OF_TIME;
   if (e instanceof NotConnectedError) {
     return {
       result: { status: 'not_possible', reason: 'google_tasks_not_connected', note: 'They can connect it in Account -> Google Tasks.' },
@@ -695,9 +724,11 @@ async function sendTaskToGoogleAndLog(
   title: string,
   actions: ConverseAction[]
 ): Promise<GoogleAttempt> {
+  const signal = googleSignal(ctx, MIN_GOOGLE_SEND_MS);
+  if (!signal) return { ...GOOGLE_OUT_OF_TIME, sent: false };
   let sent: GoogleSendResult;
   try {
-    sent = await sendToGoogleTasks(ctx.db, ctx.userId, { kind: 'task', id: taskId });
+    sent = await sendToGoogleTasks(ctx.db, ctx.userId, { kind: 'task', id: taskId }, { signal });
   } catch (e) {
     return { ...googleFailure(e), sent: false };
   }
@@ -740,7 +771,18 @@ async function sendTaskToGoogleAndLog(
   };
 }
 
-type TaskMatchRow = { id: string; title: string; source_session_id: string | null };
+type TaskMatchRow = {
+  id: string;
+  title: string;
+  source_session_id: string | null;
+  due_date: string | null;
+  task_lists: { name: string } | { name: string }[] | null;
+};
+
+function listNameOf(t: TaskMatchRow): string | null {
+  const l = Array.isArray(t.task_lists) ? t.task_lists[0] : t.task_lists;
+  return l?.name ?? null;
+}
 
 /** "방금 거 구글에도 보내줘": sends a task that already exists, found by its title. */
 async function sendExistingTaskToGoogle(
@@ -749,16 +791,23 @@ async function sendExistingTaskToGoogle(
   actions: ConverseAction[]
 ): Promise<ToolOutcome> {
   const wanted = str(args.task_title);
-  if (!wanted) return { result: { error: 'Which task? task_title is required.' } };
+  const wantedId = str(args.task_id);
+  if (!wanted && !wantedId) return { result: { error: 'Which task? task_title is required.' } };
   const { data, error } = await ctx.db
     .from('tasks')
-    .select('id, title, source_session_id')
+    .select('id, title, source_session_id, due_date, task_lists(name)')
     .eq('user_id', ctx.userId)
     .eq('status', 'open')
     .order('created_at', { ascending: false })
     .limit(300);
   if (error) throw error;
   const tasks = (data ?? []) as TaskMatchRow[];
+  if (wantedId) {
+    const picked = tasks.find((t) => t.id === wantedId);
+    if (!picked) return { result: { status: 'not_found', note: 'That task_id is not one of their open tasks. Look it up again by title.' } };
+    const attempt = await sendTaskToGoogleAndLog(ctx, picked.id, picked.title, actions);
+    return attempt.sent ? { result: attempt.result, confirmation: attempt.spoken } : { result: attempt.result };
+  }
   const fromThisConversation = (t: TaskMatchRow) => t.source_session_id === ctx.sessionId;
 
   const exact = tasks.filter((t) => sameName(t.title, wanted));
@@ -782,8 +831,9 @@ async function sendExistingTaskToGoogle(
         result: {
           status: 'needs_confirmation',
           reason: 'several_tasks_match',
-          options: candidates.slice(0, 4).map((t) => t.title),
-          instruction: 'Nothing was sent. Ask which one they mean, then call send_to_google_tasks again with that exact title.',
+          options: candidates.slice(0, 4).map((t) => ({ task_id: t.id, title: t.title, list: listNameOf(t), due: t.due_date })),
+          instruction:
+            'Nothing was sent. Ask which one they mean -- mention the list or due date when titles are the same -- then call send_to_google_tasks again with that option\'s task_id.',
         },
       };
     }
@@ -938,7 +988,11 @@ async function revertRecord(ctx: ToolContext, record: ActionRecord): Promise<Goo
     if (send.created_list) createdGoogleLists.push(send.list_id);
   }
   const unique = [...new Map(googleRefs.map((r) => [`${r.google_task_list_id}\u0000${r.google_task_id}`, r])).values()];
-  const google = await deleteFromGoogleTasks(ctx.db, ctx.userId, unique, { removeListsIfEmpty: createdGoogleLists });
+  // Deleting twice is harmless, so this may run a little past the deadline rather than skip it.
+  const google = await deleteFromGoogleTasks(ctx.db, ctx.userId, unique, {
+    removeListsIfEmpty: createdGoogleLists,
+    signal: AbortSignal.timeout(Math.max(5_000, ctx.googleDeadline - Date.now())),
+  });
 
   if (record.task_ids.length > 0) {
     const { error } = await ctx.db
@@ -1071,14 +1125,25 @@ async function undoLastAction(ctx: ToolContext, args: Record<string, unknown>, a
     .limit(300);
   if (error) throw error;
 
-  // Newest first: every not-yet-undone change from an earlier turn.
+  // Newest first: every not-yet-undone change from an earlier turn -- only
+  // Google sends when that's all they want taken back (the task stays).
+  const onlyGoogleSends = args.what === 'google_send';
   const candidates: { id: string; position: number; record: ActionRecord }[] = [];
   for (const row of rows ?? []) {
     const record = parseActionRecord(row);
-    if (record && !record.undone && record.turn_id !== ctx.turnId) candidates.push({ id: row.id, position: row.position, record });
+    if (!record || record.undone || record.turn_id === ctx.turnId) continue;
+    if (onlyGoogleSends && record.type !== 'google_sent') continue;
+    candidates.push({ id: row.id, position: row.position, record });
   }
   if (candidates.length === 0) {
-    return { result: { status: 'nothing_to_undo', note: 'You have not changed anything earlier in this conversation.' } };
+    return {
+      result: {
+        status: 'nothing_to_undo',
+        note: onlyGoogleSends
+          ? 'You have not sent anything to Google Tasks earlier in this conversation.'
+          : 'You have not changed anything earlier in this conversation.',
+      },
+    };
   }
 
   const target = str(args.target);

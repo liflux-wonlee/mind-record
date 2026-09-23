@@ -95,6 +95,10 @@ export default function TasksScreen() {
   const [googleLists, setGoogleLists] = useState<GoogleTaskList[] | null>(null);
   const [googlePickerOpen, setGooglePickerOpen] = useState(false);
   const [savingGoogleList, setSavingGoogleList] = useState(false);
+  // Which list the Edit list sheet is showing right now -- a Google-list save
+  // that finishes after the sheet closed or moved on must not touch it.
+  const managingListIdRef = React.useRef<string | null>(null);
+  managingListIdRef.current = managingList?.id ?? null;
 
   // "+ New list" chip.
   const [creatingList, setCreatingList] = useState(false);
@@ -177,11 +181,14 @@ export default function TasksScreen() {
 
   const chooseGoogleList = async (choice: GoogleTaskList | null) => {
     if (!managingList || savingGoogleList) return;
+    const listId = managingList.id;
     setSavingGoogleList(true);
     try {
       const updated = await tasksState.setListGoogleList(managingList, choice);
-      setManagingList(updated);
-      setGooglePickerOpen(false);
+      if (managingListIdRef.current === listId) {
+        setManagingList((cur) => (cur && cur.id === listId ? updated : cur));
+        setGooglePickerOpen(false);
+      }
     } catch (e) {
       Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {

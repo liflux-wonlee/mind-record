@@ -8,6 +8,17 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 export const GOOGLE_TASKS_CLIENT_ID = Deno.env.get('GOOGLE_TASKS_CLIENT_ID');
+
+// Every Google call is bounded: converse makes these mid-turn, inside its
+// own time budget, and a hung request must not hold a voice reply hostage.
+// A caller can also pass an overall `signal` (converse's turn deadline)
+// that cuts a whole multi-call send short.
+const GOOGLE_TIMEOUT_MS = 10_000;
+
+function callSignal(signal?: AbortSignal): AbortSignal {
+  const perCall = AbortSignal.timeout(GOOGLE_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, perCall]) : perCall;
+}
 export const GOOGLE_TASKS_CLIENT_SECRET = Deno.env.get('GOOGLE_TASKS_CLIENT_SECRET');
 
 export type GoogleTasksConnection = {
@@ -28,7 +39,8 @@ export type GoogleTasksConnection = {
  */
 export async function getValidAccessToken(
   db: SupabaseClient,
-  userId: string
+  userId: string,
+  signal?: AbortSignal
 ): Promise<{ accessToken: string; connection: GoogleTasksConnection }> {
   const { data: connection, error } = await db
     .from('google_tasks_connections')
@@ -56,6 +68,7 @@ export async function getValidAccessToken(
       refresh_token: connection.refresh_token,
       grant_type: 'refresh_token',
     }),
+    signal: callSignal(signal),
   });
   if (!res.ok) {
     const body = await res.text();
@@ -90,14 +103,15 @@ export class NotConnectedError extends Error {
   }
 }
 
-// Every Google call is bounded: converse makes these mid-turn, inside its
-// own time budget, and a hung request must not hold a voice reply hostage.
-const GOOGLE_TIMEOUT_MS = 10_000;
-
-export async function googleTasksFetch(accessToken: string, path: string, init?: RequestInit): Promise<Response> {
+export async function googleTasksFetch(
+  accessToken: string,
+  path: string,
+  init?: RequestInit,
+  signal?: AbortSignal
+): Promise<Response> {
   return fetch(`https://tasks.googleapis.com/tasks/v1/${path}`, {
     ...init,
-    signal: init?.signal ?? AbortSignal.timeout(GOOGLE_TIMEOUT_MS),
+    signal: init?.signal ?? callSignal(signal),
     headers: { ...(init?.headers ?? {}), Authorization: `Bearer ${accessToken}` },
   });
 }
@@ -107,13 +121,13 @@ export async function googleTasksFetch(accessToken: string, path: string, init?:
 export type GoogleTaskList = { id: string; title: string };
 
 /** Every one of the user's Google Tasks lists (the API pages them, 100 at most per page). */
-export async function fetchGoogleTaskLists(accessToken: string): Promise<GoogleTaskList[]> {
+export async function fetchGoogleTaskLists(accessToken: string, signal?: AbortSignal): Promise<GoogleTaskList[]> {
   const lists: GoogleTaskList[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < 10; page++) {
     const query = new URLSearchParams({ maxResults: '100' });
     if (pageToken) query.set('pageToken', pageToken);
-    const res = await googleTasksFetch(accessToken, `users/@me/lists?${query}`);
+    const res = await googleTasksFetch(accessToken, `users/@me/lists?${query}`, undefined, signal);
     if (!res.ok) {
       console.error('Google Tasks API (lists) failed:', res.status, await res.text());
       throw new Error('Could not load your Google Tasks lists.');
@@ -179,7 +193,8 @@ async function resolveTarget(
   accessToken: string,
   connection: GoogleTasksConnection,
   appListId: string | null,
-  explicitListId: string | undefined
+  explicitListId: string | undefined,
+  signal: AbortSignal | undefined
 ): Promise<Target> {
   if (explicitListId) {
     const title = explicitListId === connection.default_list_id ? connection.default_list_title : null;
@@ -202,14 +217,14 @@ async function resolveTarget(
           manualFor: appList.name,
         };
       }
-      const lists = await fetchGoogleTaskLists(accessToken);
+      const lists = await fetchGoogleTaskLists(accessToken, signal);
       const match = lists.find((l) => sameListTitle(l.title, appList.name));
       if (match) return { id: match.id, title: match.title, createdList: false, manualFor: null };
       const res = await googleTasksFetch(accessToken, 'users/@me/lists', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: appList.name }),
-      });
+      }, signal);
       if (!res.ok) {
         console.error('Google Tasks API (create list) failed:', res.status, await res.text());
         throw new Error('Could not create the list in Google Tasks.');
@@ -236,7 +251,7 @@ export async function sendToGoogleTasks(
   db: SupabaseClient,
   userId: string,
   item: GoogleSendItem,
-  opts: { listId?: string } = {}
+  opts: { listId?: string; signal?: AbortSignal } = {}
 ): Promise<GoogleSendResult> {
   let title: string;
   let notes: string | null;
@@ -271,8 +286,8 @@ export async function sendToGoogleTasks(
   }
   const itemColumn = item.kind === 'task' ? 'task_id' : 'memory_id';
 
-  const { accessToken, connection } = await getValidAccessToken(db, userId);
-  const target = await resolveTarget(db, userId, accessToken, connection, appListId, opts.listId);
+  const { accessToken, connection } = await getValidAccessToken(db, userId, opts.signal);
+  const target = await resolveTarget(db, userId, accessToken, connection, appListId, opts.listId, opts.signal);
 
   const { data: existing, error: existingError } = await db
     .from('google_tasks_sends')
@@ -295,7 +310,7 @@ export async function sendToGoogleTasks(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title, notes: notes ?? undefined, due }),
-  });
+  }, opts.signal);
   if (!res.ok) {
     const body = await res.text();
     if ((res.status === 404 || res.status === 400) && target.manualFor !== null) throw new MappedListMissingError(target.manualFor);
@@ -312,14 +327,20 @@ export async function sendToGoogleTasks(
     google_task_list_title: target.title,
     google_task_id: googleTaskId,
   });
+  const taskUrl = `lists/${encodeURIComponent(target.id)}/tasks/${encodeURIComponent(googleTaskId)}`;
   if (insertError) {
-    if (insertError.code !== '23505') throw insertError;
+    if (insertError.code !== '23505') {
+      // Without its send record this copy could never be undone, and a
+      // retry would add a second one -- take it back out of Google.
+      await googleTasksFetch(accessToken, taskUrl, { method: 'DELETE' }).catch((e) =>
+        console.error('Google Tasks rollback failed:', e instanceof Error ? e.message : '')
+      );
+      throw insertError;
+    }
     // A concurrent send of the same item to the same list (a double-tap)
     // recorded itself first -- remove the duplicate this call just created
     // in Google and report the recorded one.
-    await googleTasksFetch(accessToken, `lists/${encodeURIComponent(target.id)}/tasks/${encodeURIComponent(googleTaskId)}`, {
-      method: 'DELETE',
-    }).catch(() => undefined);
+    await googleTasksFetch(accessToken, taskUrl, { method: 'DELETE' }).catch(() => undefined);
     const { data: winner } = await db
       .from('google_tasks_sends')
       .select('google_task_id')
@@ -348,13 +369,13 @@ export async function deleteFromGoogleTasks(
   db: SupabaseClient,
   userId: string,
   sends: GoogleSendRef[],
-  /** Google lists created for these sends: removed too, if nothing is left in them. */
-  opts: { removeListsIfEmpty?: string[] } = {}
+  /** removeListsIfEmpty: Google lists created for these sends -- removed too, if nothing is left in them. */
+  opts: { removeListsIfEmpty?: string[]; signal?: AbortSignal } = {}
 ): Promise<{ removed: number; failed: number; notConnected: boolean }> {
   if (sends.length === 0) return { removed: 0, failed: 0, notConnected: false };
   let accessToken: string;
   try {
-    ({ accessToken } = await getValidAccessToken(db, userId));
+    ({ accessToken } = await getValidAccessToken(db, userId, opts.signal));
   } catch (e) {
     if (e instanceof NotConnectedError) return { removed: 0, failed: sends.length, notConnected: true };
     console.error('Google Tasks delete: no access token:', e instanceof Error ? e.message : '');
@@ -367,7 +388,8 @@ export async function deleteFromGoogleTasks(
       const res = await googleTasksFetch(
         accessToken,
         `lists/${encodeURIComponent(send.google_task_list_id)}/tasks/${encodeURIComponent(send.google_task_id)}`,
-        { method: 'DELETE' }
+        { method: 'DELETE' },
+        opts.signal
       );
       if (res.ok || res.status === 404 || res.status === 410) {
         removed++;
@@ -390,11 +412,11 @@ export async function deleteFromGoogleTasks(
   for (const listId of new Set(opts.removeListsIfEmpty ?? [])) {
     try {
       const query = new URLSearchParams({ maxResults: '1', showCompleted: 'true', showHidden: 'true', showDeleted: 'false' });
-      const res = await googleTasksFetch(accessToken, `lists/${encodeURIComponent(listId)}/tasks?${query}`);
+      const res = await googleTasksFetch(accessToken, `lists/${encodeURIComponent(listId)}/tasks?${query}`, undefined, opts.signal);
       if (!res.ok) continue;
       const data = await res.json();
       if (Array.isArray(data.items) && data.items.length > 0) continue;
-      const del = await googleTasksFetch(accessToken, `users/@me/lists/${encodeURIComponent(listId)}`, { method: 'DELETE' });
+      const del = await googleTasksFetch(accessToken, `users/@me/lists/${encodeURIComponent(listId)}`, { method: 'DELETE' }, opts.signal);
       if (!del.ok && del.status !== 404) console.error('Google Tasks API (delete list) failed:', del.status, await del.text());
     } catch (e) {
       console.error('Google Tasks API (delete list) failed:', e instanceof Error ? e.message : '');

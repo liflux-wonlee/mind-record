@@ -120,10 +120,13 @@ const TTS_TIMEOUT_MS = 15_000;
 const TTS_RESERVE_MS = 20_000;
 // How long, after a turn's user row was written, the request that wrote it
 // is presumed to still be working on the reply: REPLY_DEADLINE_MS +
-// WRITE_GRACE_MS, plus slack for a write that started right at that limit
-// and for clock skew between this function and the database. Only after it
-// does a retry take over.
+// WRITE_GRACE_MS + GOOGLE_AFTER_WRITE_MS (57s), plus slack for a database
+// write that started right at that limit and for clock skew between this
+// function and the database. Only after it does a retry take over.
 const TURN_LEASE_MS = 65_000;
+// Google Tasks calls (a send, or removing one on undo) must be done this long
+// after the write deadline -- still well inside TURN_LEASE_MS.
+const GOOGLE_AFTER_WRITE_MS = 12_000;
 const TURN_POLL_MS = 1_000;
 
 type ParsedRequest = {
@@ -459,6 +462,7 @@ Deno.serve(async (req) => {
         timezone,
         turnId: perf.turnId,
         undoUsed: false,
+        googleDeadline: carry.replyDeadline + WRITE_GRACE_MS + GOOGLE_AFTER_WRITE_MS,
       };
       const [historyResult, catalog] = await Promise.all([
         db.from('messages').select('role, content').eq('session_id', sessionId).order('position', { ascending: true }),
@@ -864,7 +868,7 @@ Use a tool whenever the user asks about their tasks or anything they said or rec
 
 Names: always pass the EXACT existing topic or list name from the lists below, mapping how the user said it (a Korean rendering like "패밀리" for "Family", a near-spelling, a translation) to that exact name. Only ask for a NEW topic or list (create_new / create_new_list) when the user explicitly asked for a new one. If they ask for a new topic without saying its name ("새 토픽 만들어서 Business 아래에 넣어줘"), suggest a short name and ask before creating anything.
 
-Google Tasks ("구글 태스크에 넣어줘", "구글 할 일에도 보내줘"): for a new to-do, create_task with send_to_google true; for a task that already exists (such as one you just added), send_to_google_tasks with its exact title. A task in one of their lists goes to the Google list with the same name (created there if missing) unless they chose another for that list; a task in no list goes to their default Google list. Only send to Google when they ask. If Google Tasks isn't connected, say they can connect it in Account -> Google Tasks. Undoing a task or a send also removes it from Google Tasks.
+Google Tasks ("구글 태스크에 넣어줘", "구글 할 일에도 보내줘"): for a new to-do, create_task with send_to_google true; for a task that already exists (such as one you just added), send_to_google_tasks with its exact title. A task in one of their lists goes to the Google list with the same name (created there if missing) unless they chose another for that list; a task in no list goes to their default Google list. Only send to Google when they ask. If Google Tasks isn't connected, say they can connect it in Account -> Google Tasks. Undoing a task or a send also removes it from Google Tasks; if they only want the Google copy removed ("구글에 보낸 건 취소해"), call undo_last_action with what "google_send" -- the task stays in the app.
 
 After a change, confirm in ONE short sentence exactly what was done. If the user then asks to cancel or undo it (e.g. "취소해"), call undo_last_action. Only claim something was done if the tool said so. Only undo when they clearly ask to cancel or undo.
 If a tool returns needs_confirmation or not_found, ask one short question (e.g. "Family 말씀이세요, 아니면 '패밀리'라는 새 토픽을 만들까요?") and do nothing else until they answer; then call the tool again with the existing name, or with the create_new / force flag the tool describes.
