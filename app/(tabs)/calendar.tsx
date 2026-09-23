@@ -446,7 +446,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   weekday: {
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: 0,
     textAlign: 'center',
     fontFamily: font.semibold,
     fontSize: 9,
@@ -457,16 +460,25 @@ const styles = StyleSheet.create({
   weekRow: {
     flexDirection: 'row',
   },
+  // Every cell -- blank or not -- must be exactly 1/7 of the row, matching
+  // the weekday header. Yoga counts horizontal padding as a cell's minimum
+  // width on top of `flex: 1`, so padded day cells next to unpadded blanks
+  // came out wider and the numbers drifted off their weekday columns in
+  // any week with blanks (the first and last). Hence: no horizontal
+  // padding, a zero basis, and no min-content width.
   day: {
-    flex: 1,
+    flexGrow: 1,
+    flexShrink: 1,
+    flexBasis: 0,
+    minWidth: 0,
     minHeight: 48,
   },
   dayCell: {
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingTop: 6,
-    paddingHorizontal: 4,
     paddingBottom: 5,
+    overflow: 'hidden',
   },
   dayRule: {
     borderBottomWidth: 1,
