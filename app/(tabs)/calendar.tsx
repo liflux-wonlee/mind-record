@@ -281,7 +281,7 @@ export default function RecordsScreen() {
                 </Text>
               </View>
 
-              <RuleThick style={{ marginTop: 6, marginBottom: 10 }} />
+              <RuleThick style={{ marginTop: 8, marginBottom: 20 }} />
               {dayConversations.map((session, i) => (
                 <Row
                   key={session.id}
@@ -316,7 +316,7 @@ export default function RecordsScreen() {
             <Text style={styles.empty}>No records yet.</Text>
           ) : (
             <>
-              <RuleThick style={{ marginTop: 10, marginBottom: 10 }} />
+              <RuleThick style={{ marginTop: 10, marginBottom: 20 }} />
               {listSessions.map((session, i) => (
                 <Row
                   key={session.id}
