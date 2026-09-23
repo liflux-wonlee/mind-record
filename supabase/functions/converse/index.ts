@@ -68,13 +68,13 @@ import {
 } from '../_shared/actionLog.ts';
 import { errorMessage } from '../_shared/errorMessage.ts';
 import { PerfTurn, scheduleBackground } from '../_shared/perf.ts';
+import { localToday } from '../_shared/appData.ts';
 import { resolveUserTimeZone } from '../_shared/timezone.ts';
 import { recordUsage } from '../_shared/usage.ts';
 import {
   describeActionLog,
   describeUserCatalog,
   executeTool,
-  localToday,
   spokenForRecords,
   TOOL_DEFINITIONS,
   type ConverseAction,
