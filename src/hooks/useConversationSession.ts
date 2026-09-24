@@ -39,6 +39,7 @@ import {
   useAudioRecorderState,
 } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
@@ -81,34 +82,42 @@ export const DEFAULT_SILENCE_DURATION_MS = 1500;
 // 3 minutes is long enough that only a truly stuck silence detector should
 // ever reach it.
 const MAX_TURN_RECORDING_MS = 180_000;
-// Louder than this is always speech, whatever the floor says -- but only in
-// a quiet room (floor below QUIET_ROOM_FLOOR_DB). In a moving car, road and
-// engine noise peaks cross it all the time, and each crossing used to reset
-// the pause timer, so a turn never ended while driving.
-const ABSOLUTE_SPEECH_DB = -20;
-const QUIET_ROOM_FLOOR_DB = -45;
-// Above floor + this = speech; below floor + SILENCE_MARGIN_DB = quiet;
-// in between = ambiguous (neither resets nor advances the pause timer).
-const SPEECH_MARGIN_DB = 12;
-const SILENCE_MARGIN_DB = 6;
+// The noise level is a low percentile (NOISE_PERCENTILE) of the last
+// NOISE_WINDOW_READINGS smoothed readings -- kept across turns, since the
+// room/car doesn't change between one reply and the next. A percentile, not
+// the single quietest reading: one deep dip no longer drags the reference
+// down (which made every later reading look like speech, so a turn in a car
+// never ended), and a whole 15s window has to get louder before it moves up
+// (so a long answer doesn't slowly become "the noise" and get cut off).
+//
+// Tuned on synthetic car/room traces, not yet on a real drive -- the
+// detector's numbers go into the perf log line for that (see detectorSnapshot).
+const NOISE_WINDOW_READINGS = 75;
+const NOISE_PERCENTILE = 0.1;
+// Until the window has this many readings, loud ones stay out of it: at the
+// very start of a conversation there's no noise history yet, and letting the
+// user's first words in would make their own voice the "noise".
+const NOISE_WINDOW_WARMUP = 30;
+// Above noise + SPEECH_MARGIN_DB counts as loud. A turn only STARTS on
+// sustained loudness -- SPEECH_START_RUN loud readings in a row, or
+// SPEECH_START_OF_RECENT of the last SPEECH_START_RECENT -- so a road bump or
+// a door closing before the user talks can't start the pause timer early.
+const SPEECH_MARGIN_DB = 8;
+const SPEECH_START_RUN = 4;
+const SPEECH_START_OF_RECENT = 6;
+const SPEECH_START_RECENT = 8;
+// Once the user has spoken, anything above noise + this keeps the turn open;
+// only readings back down near the noise count toward the pause.
+const PAUSE_MARGIN_DB = 6;
 // Readings are judged on the median of the last few, not one by one --
 // Android reports the PEAK of each 200ms window, so a single bump, click or
 // turn-signal tick would otherwise read as speech.
 const SMOOTHING_READINGS = 3;
-// The user's own speaking level, learned while they talk: once known, only
-// readings within this many dB of it count as speech (noise swings don't),
-// and anything this far below it counts as a pause even when constant noise
-// keeps the level well above the floor.
-const SPEECH_BAND_DB = 10;
-const SPEECH_DROP_DB = 14;
-// The floor drifts upward this much per 200ms tick so it can recover if the
-// room gets louder, but snaps down instantly to any quieter reading.
-const FLOOR_RISE_DB_PER_TICK = 0.25;
 // Android reports -160 when the recorder has no samples yet (amplitude 0);
 // treat anything this low as "no signal": it counts as quiet but must not
-// become the floor, or every later reading would look like speech.
+// enter the noise window, or every later reading would look like speech.
 const NO_SIGNAL_DB = -100;
-const FLOOR_MIN_DB = -70;
+const NOISE_MIN_DB = -70;
 // Played instead of the spoken reply when converse made a change in the app
 // but couldn't synthesize the reply (the text is on screen) -- so a driver
 // still hears that the turn went through before the mic reopens.
@@ -119,6 +128,30 @@ const CONFIRM_SOUND_FALLBACK_MS = 3000;
 // it can throw and/or leave a corrupt, zero-duration file behind (a known
 // Android MediaRecorder quirk) -- always pad a stop out to at least this long.
 const MIN_RECORDING_MS = 800;
+// Android: record through the phone's voice-call input path, which applies
+// the device's own noise suppression before the level is metered -- road and
+// engine noise are exactly what it's built to take out, so both the pause
+// detector and the transcription hear more voice and less car. (Capture keeps
+// the plain mic: it records whatever is going on, not just one voice.)
+const CONVERSATION_RECORDING_OPTIONS = {
+  ...SPEECH_RECORDING_OPTIONS,
+  android: { ...SPEECH_RECORDING_OPTIONS.android, audioSource: 'voice_communication' as const },
+  isMeteringEnabled: true,
+};
+// Keeps the screen on while a conversation is going: the conversation stops
+// when the app goes to the background (see useAudioInterruption below), and
+// the screen timing out mid-answer counted as exactly that.
+const KEEP_AWAKE_TAG = 'mind-record-conversation';
+// Between one reply finishing and the next turn's recording starting the
+// state is briefly 'idle' -- releasing the screen then would let a screen
+// whose timeout already ran out go dark right in the middle of the loop.
+const KEEP_AWAKE_RELEASE_DELAY_MS = 3000;
+
+/** The p-quantile (0..1) of `values`; `values` must not be empty. */
+function percentile(values: number[], p: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor((sorted.length - 1) * p)];
+}
 
 // Only a request that never reached the function is retried: a 4xx/5xx
 // that did reach it may already have inserted this turn's messages, and
@@ -201,20 +234,19 @@ export function useConversationSession(
   const sessionIdRef = useRef<string | null>(null);
   const hasSpokenRef = useRef(false);
   const silenceStartRef = useRef<number | null>(null);
-  const noiseFloorRef = useRef<number | null>(null);
-  // See SPEECH_BAND_DB -- kept across turns (the same voice, the same mic).
-  const speechLevelRef = useRef<number | null>(null);
+  // See NOISE_WINDOW_READINGS -- kept across turns.
+  const noiseWindowRef = useRef<number[]>([]);
+  const noiseLevelRef = useRef<number | null>(null);
   const recentLevelsRef = useRef<number[]>([]);
+  // This turn's recent loud/not-loud readings and current loud streak (see SPEECH_START_RUN).
+  const loudHistoryRef = useRef<boolean[]>([]);
+  const loudRunRef = useRef(0);
   // Diagnostics for the perf log line: how this turn's readings were judged,
   // so a real drive's log shows why a pause was (or wasn't) detected.
   const detectorStatsRef = useRef({ speech: 0, quiet: 0, unsure: 0 });
   const detectorSnapshot = (): Record<string, number | null> => {
-    const round = (v: number | null) => (v === null ? null : Math.round(v));
-    return {
-      ...detectorStatsRef.current,
-      floorDb: round(noiseFloorRef.current),
-      voiceDb: round(speechLevelRef.current),
-    };
+    const noise = noiseLevelRef.current;
+    return { ...detectorStatsRef.current, noiseDb: noise === null ? null : Math.round(noise) };
   };
   const recordingStartedAtRef = useRef<number | null>(null);
   // Guards stopTurn against overlapping calls -- the silence interval below
@@ -278,7 +310,7 @@ export function useConversationSession(
   // recorder then wrote an unencoded, zero-duration file (Whisper: "Invalid
   // file format", duration 0) and never reported a metering level, which is
   // why the silence auto-stop never fired either.
-  const recorder = useAudioRecorder({ ...SPEECH_RECORDING_OPTIONS, isMeteringEnabled: true });
+  const recorder = useAudioRecorder(CONVERSATION_RECORDING_OPTIONS);
   const recorderState = useAudioRecorderState(recorder, 200);
   meteringRef.current = recorderState.metering;
   const player = useAudioPlayer(null);
@@ -384,6 +416,8 @@ export function useConversationSession(
       recorder.record();
       recordingStartedAtRef.current = Date.now();
       recentLevelsRef.current = [];
+      loudHistoryRef.current = [];
+      loudRunRef.current = 0;
       detectorStatsRef.current = { speech: 0, quiet: 0, unsure: 0 };
       activeRef.current = true;
       abortedRef.current = false;
@@ -608,10 +642,10 @@ export function useConversationSession(
     if (state !== 'recording') {
       hasSpokenRef.current = false;
       silenceStartRef.current = null;
-      // noiseFloorRef is deliberately kept across turns: the room doesn't
+      // noiseWindowRef is deliberately kept across turns: the room doesn't
       // change between one reply and the next, and re-seeding it from the
-      // first reading of a turn the user is already talking into would put
-      // the "floor" at speech level and miss that whole utterance.
+      // first readings of a turn the user is already talking into would put
+      // the "noise" at speech level and miss that whole utterance.
       return;
     }
     const timer = setInterval(() => {
@@ -630,42 +664,46 @@ export function useConversationSession(
       const raw = meteringRef.current;
       if (raw === undefined) return;
 
-      let quiet: boolean;
-      let speech = false;
-      if (raw <= NO_SIGNAL_DB) {
-        quiet = true;
-      } else {
+      let loud = false;
+      let quiet = true;
+      if (raw > NO_SIGNAL_DB) {
         const recent = recentLevelsRef.current;
         recent.push(raw);
         if (recent.length > SMOOTHING_READINGS) recent.shift();
         const level = [...recent].sort((a, b) => a - b)[Math.floor(recent.length / 2)];
 
-        const prev = noiseFloorRef.current;
-        const floor = Math.max(
-          FLOOR_MIN_DB,
-          prev === null ? level : Math.min(level, prev + FLOOR_RISE_DB_PER_TICK)
-        );
-        noiseFloorRef.current = floor;
-        const voice = speechLevelRef.current;
+        const noiseWindow = noiseWindowRef.current;
+        const before = noiseWindow.length > 0 ? percentile(noiseWindow, NOISE_PERCENTILE) : level;
+        if (noiseWindow.length >= NOISE_WINDOW_WARMUP || level <= before + SPEECH_MARGIN_DB) {
+          noiseWindow.push(level);
+          if (noiseWindow.length > NOISE_WINDOW_READINGS) noiseWindow.shift();
+        }
+        const noise = Math.max(NOISE_MIN_DB, percentile(noiseWindow, NOISE_PERCENTILE));
+        noiseLevelRef.current = noise;
 
-        const aboveNoise = level > floor + SPEECH_MARGIN_DB && (voice === null || level > voice - SPEECH_BAND_DB);
-        const loudInQuietRoom = floor < QUIET_ROOM_FLOOR_DB && level > ABSOLUTE_SPEECH_DB;
-        speech = aboveNoise || loudInQuietRoom;
-        quiet = level < Math.max(floor + SILENCE_MARGIN_DB, voice === null ? -Infinity : voice - SPEECH_DROP_DB);
-        if (speech) speechLevelRef.current = voice === null ? level : voice * 0.8 + level * 0.2;
+        loud = level > noise + SPEECH_MARGIN_DB;
+        quiet = level <= noise + PAUSE_MARGIN_DB;
       }
       const stats = detectorStatsRef.current;
-      if (speech) stats.speech++;
+      if (loud) stats.speech++;
       else if (quiet) stats.quiet++;
       else stats.unsure++;
 
-      if (speech) {
+      loudRunRef.current = loud ? loudRunRef.current + 1 : 0;
+      const history = loudHistoryRef.current;
+      history.push(loud);
+      if (history.length > SPEECH_START_RECENT) history.shift();
+      if (
+        !hasSpokenRef.current &&
+        (loudRunRef.current >= SPEECH_START_RUN || history.filter(Boolean).length >= SPEECH_START_OF_RECENT)
+      ) {
         hasSpokenRef.current = true;
+      }
+      if (!hasSpokenRef.current) return; // hasn't started talking yet -- don't count this as a pause
+      if (!quiet) {
         silenceStartRef.current = null;
         return;
       }
-      if (!hasSpokenRef.current) return; // hasn't started talking yet -- don't count this as a pause
-      if (!quiet) return; // ambiguous band -- leave the pause timer where it is
       if (silenceStartRef.current === null) {
         silenceStartRef.current = Date.now();
         return;
@@ -754,6 +792,31 @@ export function useConversationSession(
     player.pause();
     if (current !== 'thinking') setState('idle');
   });
+
+  // See KEEP_AWAKE_TAG. Held from the first turn until the loop has really
+  // stopped (ended, cancelled, interrupted, or an error left it idle).
+  useEffect(() => {
+    if (state !== 'idle') {
+      activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {
+        // Best-effort -- worst case the screen times out as before.
+      });
+      return;
+    }
+    const timer = setTimeout(() => {
+      deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {
+        // Not held (never activated) -- nothing to release.
+      });
+    }, KEEP_AWAKE_RELEASE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [state]);
+  useEffect(
+    () => () => {
+      deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {
+        // Not held -- nothing to release.
+      });
+    },
+    []
+  );
 
   // Leaving the screen mid-conversation (Android back, swipe) must NOT
   // silently destroy what was already said -- only a session that never
