@@ -81,12 +81,26 @@ export const DEFAULT_SILENCE_DURATION_MS = 1500;
 // 3 minutes is long enough that only a truly stuck silence detector should
 // ever reach it.
 const MAX_TURN_RECORDING_MS = 180_000;
-// Louder than this is always speech, whatever the floor says.
+// Louder than this is always speech, whatever the floor says -- but only in
+// a quiet room (floor below QUIET_ROOM_FLOOR_DB). In a moving car, road and
+// engine noise peaks cross it all the time, and each crossing used to reset
+// the pause timer, so a turn never ended while driving.
 const ABSOLUTE_SPEECH_DB = -20;
+const QUIET_ROOM_FLOOR_DB = -45;
 // Above floor + this = speech; below floor + SILENCE_MARGIN_DB = quiet;
 // in between = ambiguous (neither resets nor advances the pause timer).
 const SPEECH_MARGIN_DB = 12;
 const SILENCE_MARGIN_DB = 6;
+// Readings are judged on the median of the last few, not one by one --
+// Android reports the PEAK of each 200ms window, so a single bump, click or
+// turn-signal tick would otherwise read as speech.
+const SMOOTHING_READINGS = 3;
+// The user's own speaking level, learned while they talk: once known, only
+// readings within this many dB of it count as speech (noise swings don't),
+// and anything this far below it counts as a pause even when constant noise
+// keeps the level well above the floor.
+const SPEECH_BAND_DB = 10;
+const SPEECH_DROP_DB = 14;
 // The floor drifts upward this much per 200ms tick so it can recover if the
 // room gets louder, but snaps down instantly to any quieter reading.
 const FLOOR_RISE_DB_PER_TICK = 0.25;
@@ -188,6 +202,20 @@ export function useConversationSession(
   const hasSpokenRef = useRef(false);
   const silenceStartRef = useRef<number | null>(null);
   const noiseFloorRef = useRef<number | null>(null);
+  // See SPEECH_BAND_DB -- kept across turns (the same voice, the same mic).
+  const speechLevelRef = useRef<number | null>(null);
+  const recentLevelsRef = useRef<number[]>([]);
+  // Diagnostics for the perf log line: how this turn's readings were judged,
+  // so a real drive's log shows why a pause was (or wasn't) detected.
+  const detectorStatsRef = useRef({ speech: 0, quiet: 0, unsure: 0 });
+  const detectorSnapshot = (): Record<string, number | null> => {
+    const round = (v: number | null) => (v === null ? null : Math.round(v));
+    return {
+      ...detectorStatsRef.current,
+      floorDb: round(noiseFloorRef.current),
+      voiceDb: round(speechLevelRef.current),
+    };
+  };
   const recordingStartedAtRef = useRef<number | null>(null);
   // Guards stopTurn against overlapping calls -- the silence interval below
   // ticks every 200ms independent of how far a previous stopTurn() call has
@@ -223,7 +251,12 @@ export function useConversationSession(
   // and byte counts.
   const currentTurnRef = useRef<PerfTurn | null>(null);
   const firstPlayMarkedRef = useRef(false);
-  const lastTurnMetaRef = useRef<{ trigger: string; audioPath: 'direct' | 'storage'; noVoice?: boolean } | null>(null);
+  const lastTurnMetaRef = useRef<{
+    trigger: string;
+    audioPath: 'direct' | 'storage';
+    noVoice?: boolean;
+    detector?: Record<string, number | null>;
+  } | null>(null);
   // Bumped whenever a reply's life ends (it finished, or the conversation
   // was ended/cancelled/interrupted/left), so a pending confirm-sound
   // fallback timer (see CONFIRM_SOUND_FALLBACK_MS) can't act on it later.
@@ -350,6 +383,8 @@ export function useConversationSession(
       await recorder.prepareToRecordAsync();
       recorder.record();
       recordingStartedAtRef.current = Date.now();
+      recentLevelsRef.current = [];
+      detectorStatsRef.current = { speech: 0, quiet: 0, unsure: 0 };
       activeRef.current = true;
       abortedRef.current = false;
       hasContentRef.current = true;
@@ -383,7 +418,7 @@ export function useConversationSession(
       // screen already, so play the confirmation sound and carry on as if
       // the reply had just finished playing (listen again, or end).
       const finishWithoutVoice = (meta: { trigger: string; audioPath: 'direct' | 'storage' }) => {
-        lastTurnMetaRef.current = { ...meta, noVoice: true };
+        lastTurnMetaRef.current = { ...meta, noVoice: true, detector: detectorSnapshot() };
         stateRef.current = 'speaking';
         setState('speaking');
         invalidateReply();
@@ -504,7 +539,7 @@ export function useConversationSession(
           player.replace(replyFile.uri);
           player.play();
           perf?.mark('play_called');
-          lastTurnMetaRef.current = { trigger, audioPath };
+          lastTurnMetaRef.current = { trigger, audioPath, detector: detectorSnapshot() };
           setState('speaking');
         } catch (e) {
           if (e instanceof TurnAbortedError) {
@@ -592,23 +627,37 @@ export function useConversationSession(
         return;
       }
 
-      const level = meteringRef.current;
-      if (level === undefined) return;
+      const raw = meteringRef.current;
+      if (raw === undefined) return;
 
       let quiet: boolean;
       let speech = false;
-      if (level <= NO_SIGNAL_DB) {
+      if (raw <= NO_SIGNAL_DB) {
         quiet = true;
       } else {
+        const recent = recentLevelsRef.current;
+        recent.push(raw);
+        if (recent.length > SMOOTHING_READINGS) recent.shift();
+        const level = [...recent].sort((a, b) => a - b)[Math.floor(recent.length / 2)];
+
         const prev = noiseFloorRef.current;
         const floor = Math.max(
           FLOOR_MIN_DB,
           prev === null ? level : Math.min(level, prev + FLOOR_RISE_DB_PER_TICK)
         );
         noiseFloorRef.current = floor;
-        speech = level > ABSOLUTE_SPEECH_DB || level > floor + SPEECH_MARGIN_DB;
-        quiet = level < floor + SILENCE_MARGIN_DB;
+        const voice = speechLevelRef.current;
+
+        const aboveNoise = level > floor + SPEECH_MARGIN_DB && (voice === null || level > voice - SPEECH_BAND_DB);
+        const loudInQuietRoom = floor < QUIET_ROOM_FLOOR_DB && level > ABSOLUTE_SPEECH_DB;
+        speech = aboveNoise || loudInQuietRoom;
+        quiet = level < Math.max(floor + SILENCE_MARGIN_DB, voice === null ? -Infinity : voice - SPEECH_DROP_DB);
+        if (speech) speechLevelRef.current = voice === null ? level : voice * 0.8 + level * 0.2;
       }
+      const stats = detectorStatsRef.current;
+      if (speech) stats.speech++;
+      else if (quiet) stats.quiet++;
+      else stats.unsure++;
 
       if (speech) {
         hasSpokenRef.current = true;
