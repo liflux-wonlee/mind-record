@@ -10,6 +10,7 @@ import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import {
+  assignMemoryTopic,
   clearMemoryTopic,
   deleteMemory,
   listMemoriesByTopics,
@@ -18,6 +19,7 @@ import {
 } from '@/services/memories';
 import { deleteSession, type Session } from '@/services/sessions';
 import {
+  assignTaskTopic,
   clearTaskTopic,
   deleteTask,
   listTasksByTopics,
@@ -33,6 +35,7 @@ import {
   listSessionsUnclassifiedPage,
   listTopics,
   mergeTopics,
+  moveSessionToTopic,
   moveTopic,
   renameTopic,
   wouldCreateCycle,
@@ -58,6 +61,9 @@ function truncate(text: string, max = 90): string {
   const trimmed = text.trim().replace(/\s+/g, ' ');
   return trimmed.length > max ? `${trimmed.slice(0, max - 1)}…` : trimmed;
 }
+
+/** An item being moved to another topic via its long-press "Move to…". */
+type MoveItem = { kind: 'session' | 'task' | 'memory'; id: string; title: string; currentTopicId: string | null };
 
 type Sheet =
   | { kind: 'menu' }
@@ -86,6 +92,8 @@ export default function TopicDetailScreen() {
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
   const [itemMenu, setItemMenu] = useState<ItemMenu | null>(null);
   const closeItemMenu = () => setItemMenu(null);
+  const [moving, setMoving] = useState<MoveItem | null>(null);
+  const [movingBusy, setMovingBusy] = useState(false);
   // Unclassified sessions only -- real pagination, since a fixed cap here
   // would permanently hide older unclassified recordings (see
   // listSessionsUnclassifiedPage's own comment).
@@ -103,11 +111,13 @@ export default function TopicDetailScreen() {
 
     try {
       if (isUnclassified) {
-        const [sPage, t, m] = await Promise.all([
+        const [sPage, t, m, topics] = await Promise.all([
           listSessionsUnclassifiedPage(user.id),
           listTasksUnclassified(user.id),
           listMemoriesUnclassified(user.id),
+          listTopics(user.id),
         ]);
+        setAllTopics(topics);
         setSessions(sPage.sessions);
         setSessionsCursor(sPage.nextCursor);
         setTasks(t);
@@ -219,6 +229,36 @@ export default function TopicDetailScreen() {
     );
   };
 
+  // The topics an item shown here is being moved OUT of: this topic (and
+  // the sub-topics shown with it) -- nothing from Unclassified.
+  const scopeTopicIds = (): string[] =>
+    isUnclassified || !id ? [] : includeSubtopics ? descendantTopicIds(allTopics, id) : [id];
+
+  const moveTo = async (target: Topic) => {
+    if (!moving || movingBusy) return;
+    setMovingBusy(true);
+    try {
+      if (moving.kind === 'session') await moveSessionToTopic(moving.id, scopeTopicIds(), target.id);
+      else if (moving.kind === 'task') await assignTaskTopic(moving.id, target.id);
+      else await assignMemoryTopic(moving.id, target.id);
+      setMoving(null);
+      load();
+    } catch (e) {
+      Alert.alert('Could not move', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setMovingBusy(false);
+    }
+  };
+
+  const moveAction = (item: MoveItem): ItemMenuAction => ({
+    label: 'Move to…',
+    tone: 'neutral',
+    onPress: () => {
+      closeItemMenu();
+      setMoving(item);
+    },
+  });
+
   const sessionMenu = (session: Session) => {
     setItemMenu({
       title: session.title ?? capitalize(session.mode),
@@ -245,6 +285,7 @@ export default function TopicDetailScreen() {
             });
           },
         },
+        moveAction({ kind: 'session', id: session.id, title: session.title ?? capitalize(session.mode), currentTopicId: id ?? null }),
         {
           label: 'Delete',
           tone: 'delete',
@@ -267,6 +308,7 @@ export default function TopicDetailScreen() {
           setShareContent({ kicker: 'Task', title: task.title, body: task.title });
         },
       },
+      moveAction({ kind: 'task', id: task.id, title: task.title, currentTopicId: task.topic_id }),
     ];
     if (!isUnclassified) {
       actions.push({
@@ -303,6 +345,7 @@ export default function TopicDetailScreen() {
           setShareContent({ kicker: 'Idea', title: truncate(memory.content, 60), body: memory.content });
         },
       },
+      moveAction({ kind: 'memory', id: memory.id, title: truncate(memory.content, 60), currentTopicId: memory.topic_id }),
     ];
     if (!isUnclassified) {
       actions.push({
@@ -572,6 +615,26 @@ export default function TopicDetailScreen() {
 
       <ShareSheet content={shareContent} onClose={() => setShareContent(null)} />
 
+      {/* "Move to…" target picker for one recording/task/idea */}
+      <ActionModal visible={moving !== null} onClose={() => setMoving(null)} title={moving ? `Move "${truncate(moving.title, 40)}" to…` : ''}>
+        {allTopics.length === 0 ? (
+          <Text style={styles.hint}>No topics yet. Create one on the Topics tab first.</Text>
+        ) : (
+          <View style={{ gap: 4 }}>
+            {topicTreeOrder(allTopics).map((t) => (
+              <Button
+                key={t.id}
+                label={t.parent_topic_id ? `   ↳ ${t.name}` : t.name}
+                align="flex-start"
+                variant="secondary"
+                disabled={movingBusy || t.id === moving?.currentTopicId}
+                onPress={() => moveTo(t)}
+              />
+            ))}
+          </View>
+        )}
+      </ActionModal>
+
       {/* Per-item long-press menu -- pastel actions on a pale grey sheet,
           instead of the OS's own unstyleable action sheet. */}
       <BottomSheet
@@ -603,6 +666,17 @@ export default function TopicDetailScreen() {
       </BottomSheet>
     </Screen>
   );
+}
+
+/** Top-level topics A-Z, each followed by its sub-topics -- the tree as a flat list. */
+function topicTreeOrder(topics: Topic[]): Topic[] {
+  const byName = (a: Topic, b: Topic) => a.name.localeCompare(b.name);
+  const ordered: Topic[] = [];
+  for (const root of topics.filter((t) => !t.parent_topic_id).sort(byName)) {
+    ordered.push(root);
+    ordered.push(...topics.filter((t) => t.parent_topic_id === root.id).sort(byName));
+  }
+  return ordered;
 }
 
 function ActionModal({

@@ -292,6 +292,50 @@ export async function listVoiceFiledTopicIds(sessionId: string): Promise<Set<str
   return ids;
 }
 
+/**
+ * Moves a recording from one place in the topic tree to another ("Move
+ * to…" on a topic's screen). `fromTopicIds` are the topics it's being
+ * moved OUT of -- the topic being viewed (plus its sub-topics, when those
+ * are shown), or empty from "Unclassified". Its outline sections filed
+ * there are re-filed under `toTopicId` (from Unclassified: its unfiled
+ * sections), so Summary shows the same thing, and its session_topics link
+ * follows. Other topics it's also under are left alone, as are its tasks
+ * and ideas (each has its own topic).
+ */
+export async function moveSessionToTopic(sessionId: string, fromTopicIds: string[], toTopicId: string): Promise<void> {
+  const { data: session, error: sessionError } = await supabase
+    .from('sessions')
+    .select('outline')
+    .eq('id', sessionId)
+    .single();
+  if (sessionError) throw sessionError;
+
+  const from = new Set(fromTopicIds);
+  const fromUnclassified = from.size === 0;
+  const outline = session.outline ?? [];
+  let changed = false;
+  const nextOutline = outline.map((section) => {
+    const movesHere = section.topic_id ? from.has(section.topic_id) : fromUnclassified;
+    if (!movesHere) return section;
+    changed = true;
+    return { ...section, topic_id: toTopicId, topic_suggestion: null };
+  });
+  if (changed) {
+    const { error } = await supabase.from('sessions').update({ outline: nextOutline }).eq('id', sessionId);
+    if (error) throw error;
+  }
+
+  const leaving = fromTopicIds.filter((id) => id !== toTopicId);
+  if (leaving.length > 0) {
+    const { error } = await supabase.from('session_topics').delete().eq('session_id', sessionId).in('topic_id', leaving);
+    if (error) throw error;
+  }
+  const { error: linkError } = await supabase
+    .from('session_topics')
+    .upsert({ session_id: sessionId, topic_id: toTopicId }, { onConflict: 'session_id,topic_id', ignoreDuplicates: true });
+  if (linkError) throw linkError;
+}
+
 export async function listSessionTopics(sessionId: string): Promise<Topic[]> {
   const { data: links, error: linksError } = await supabase
     .from('session_topics')
