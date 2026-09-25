@@ -10,10 +10,11 @@
  * A Modal never gets resized by the keyboard (iOS never does; Android's
  * adjustResize is defeated by statusBarTranslucent), so the sheet sits in
  * a KeyboardAvoidingView -- without it the text inputs in the rename /
- * new-topic / task-edit sheets were hidden behind the keyboard.
+ * new-topic / task-edit sheets were hidden behind the keyboard. The body
+ * scrolls, so a sheet taller than maxHeight keeps its last buttons reachable.
  */
 import React from 'react';
-import { KeyboardAvoidingView, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, font } from '@/theme';
@@ -57,7 +58,17 @@ export function BottomSheet({
             <Text style={styles.title} numberOfLines={titleLines}>
               {title}
             </Text>
-            <View>{children}</View>
+            {/* Scrolls when the content is taller than maxHeight (e.g. Edit task
+                on a small screen) -- otherwise the overflow was drawn past the
+                sheet's bottom padding, under the navigation bar. */}
+            <ScrollView
+              style={styles.body}
+              bounces={false}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {children}
+            </ScrollView>
           </Pressable>
         </Pressable>
       </KeyboardAvoidingView>
@@ -79,6 +90,10 @@ const styles = StyleSheet.create({
     padding: 20,
     borderTopWidth: 2,
     borderTopColor: colors.divider,
+  },
+  body: {
+    flexGrow: 0,
+    flexShrink: 1,
   },
   title: {
     fontFamily: font.extrabold,
