@@ -41,7 +41,7 @@ export type ConverseAction = { type: string; label: string; newTopic?: boolean }
  */
 export async function converseTurn(
   sessionId: string,
-  audio: { storagePath: string } | { uri: string; mimeType: string },
+  audio: { storagePath: string } | { uri: string; mimeType: string; fileName: string },
   turnId?: string
 ): Promise<ConverseResult> {
   const timezone = deviceTimeZone();
@@ -55,7 +55,9 @@ export async function converseTurn(
     if (turnId) form.append('turnId', turnId);
     if (timezone) form.append('timezone', timezone);
     if (lang) form.append('lang', lang);
-    await appendFilePart(form, 'audio', audio.uri, 'segment.m4a', audio.mimeType);
+    // The file name's extension is what tells converse (and Whisper) the
+    // format: Android turns are WAV now, other platforms still m4a.
+    await appendFilePart(form, 'audio', audio.uri, audio.fileName, audio.mimeType);
     body = form;
   }
   const { data, error } = await supabase.functions.invoke('converse', { body });

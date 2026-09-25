@@ -419,8 +419,10 @@ function ConversationPanel({
       >
         {interruption && state === 'idle' ? (
           <Text style={styles.idle}>
-            {INTERRUPTION_TEXT[interruption]} Anything you were mid-way through saying wasn&apos;t sent. Tap Talk to
-            continue the conversation, or Save &amp; end to finish.
+            {interruption === 'no-speech'
+              ? 'Paused -- nothing was said for 3 minutes.'
+              : `${INTERRUPTION_TEXT[interruption]} Anything you were mid-way through saying wasn't sent.`}{' '}
+            Tap Talk to continue the conversation, or Save &amp; end to finish.
           </Text>
         ) : null}
         {turns.length === 0 && !interruption ? (

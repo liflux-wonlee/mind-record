@@ -34,3 +34,17 @@ export const DIRECT_AUDIO_UPLOAD_ENABLED = true;
  * through this path at all.
  */
 export const DIRECT_AUDIO_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Android: capture Conversation turns as raw PCM (expo-audio's
+ * useAudioStream) and end them with the PCM turn-end detector in
+ * src/lib/voiceActivity.ts, instead of MediaRecorder + its peak-level
+ * metering -- which could not tell a small voice from car rumble, so turns
+ * never ended while driving. The turn is uploaded as WAV (src/lib/wav.ts).
+ * Set false to go back to the MediaRecorder path everywhere; it also stays
+ * the automatic fallback when the stream can't start, and is always used on
+ * iOS/web. Trade-off: the stream records the plain mic, without the
+ * voice-call noise suppression the MediaRecorder path asks for, so Whisper
+ * gets unprocessed audio; WAV is also ~4x the bytes of the old m4a.
+ */
+export const PCM_TURN_CAPTURE_ENABLED = true;

@@ -71,6 +71,7 @@ import { PerfTurn, scheduleBackground } from '../_shared/perf.ts';
 import { localToday } from '../_shared/appData.ts';
 import { resolveUserTimeZone } from '../_shared/timezone.ts';
 import { recordUsage } from '../_shared/usage.ts';
+import { ALLOWED_VOICES, ttsModelFor } from '../_shared/voices.ts';
 import {
   describeActionLog,
   describeUserCatalog,
@@ -99,10 +100,6 @@ const NOTHING_HEARD_REPLY: Record<string, string> = {
   en: "I didn't quite catch that. Could you say it again?",
 };
 
-// Kept in sync with the `profiles_ai_voice_check` constraint
-// (supabase/migrations/20260918000001_ai_personalization.sql) and
-// preview-voice/index.ts's own ALLOWED_VOICES.
-const ALLOWED_VOICES = new Set(['alloy', 'echo', 'onyx', 'nova', 'shimmer']);
 const DEFAULT_VOICE = 'alloy';
 
 // ── time budget ────────────────────────────────────────────────────────
@@ -255,7 +252,14 @@ Deno.serve(async (req) => {
     const speak = async (text: string): Promise<string> => {
       const audio = await synthesizeWithRetry(text, voice, hardDeadline);
       background.push(
-        recordUsage(db, { userId, eventType: 'tts_synthesize', source: 'converse', sessionId, ttsCharacters: text.length })
+        recordUsage(db, {
+          userId,
+          eventType: 'tts_synthesize',
+          source: 'converse',
+          sessionId,
+          ttsCharacters: text.length,
+          model: ttsModelFor(voice),
+        })
       );
       return audio;
     };
@@ -355,8 +359,9 @@ Deno.serve(async (req) => {
       let transcribed: TranscribeResult;
       let backupStoragePath: string;
       if (audioFile) {
-        const contentType = audioFile.type || 'audio/m4a';
-        backupStoragePath = `${userId}/${sessionId}/${Date.now()}.m4a`;
+        const format = audioFormatOf(audioFile);
+        const contentType = format === 'wav' ? 'audio/wav' : audioFile.type || 'audio/m4a';
+        backupStoragePath = `${userId}/${sessionId}/${Date.now()}.${format}`;
         const backupPath = backupStoragePath;
         // The backup write and the transcription run concurrently -- the
         // backup is a safety net for the window between "we have the audio"
@@ -371,7 +376,7 @@ Deno.serve(async (req) => {
             if (error) logError(`could not write turn audio backup ${backupPath}`, error);
           })
           .catch((e) => logError(`could not write turn audio backup ${backupPath}`, e));
-        [transcribed] = await Promise.all([transcribeAudio(audioFile, 'segment.m4a'), backupWrite]);
+        [transcribed] = await Promise.all([transcribeAudio(audioFile, `segment.${format}`), backupWrite]);
       } else {
         transcribed = await transcribeAudio(storedAudio!, storagePath!);
         backupStoragePath = storagePath!;
@@ -736,6 +741,19 @@ async function saveReply(
 
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
 
+/**
+ * Which format a directly-sent turn is in: Android now captures turns as raw
+ * PCM and sends WAV ("segment.wav", audio/wav -- see the app's
+ * src/lib/wav.ts); everything else (older app builds included) is
+ * MediaRecorder's m4a. Whisper goes by the file name's extension, so it has
+ * to be right. Storage-path turns carry the extension in the path itself.
+ */
+function audioFormatOf(file: File): 'wav' | 'm4a' {
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  if (ext === 'wav' || /^audio\/(x-)?wav|^audio\/wave/i.test(file.type)) return 'wav';
+  return 'm4a';
+}
+
 // Deliberately no `language` hint: the user may speak any language (or mix
 // them) regardless of the app's settings, so Whisper auto-detects per turn.
 async function transcribeAudio(file: Blob, fileNameHint: string): Promise<TranscribeResult> {
@@ -791,7 +809,7 @@ async function synthesizeSpeech(text: string, voice: string, timeoutMs: number):
     {
       method: 'POST',
       headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'tts-1', voice, input: text, response_format: 'mp3' }),
+      body: JSON.stringify({ model: ttsModelFor(voice), voice, input: text, response_format: 'mp3' }),
     },
     timeoutMs,
     'Speech synthesis failed (timed out)'

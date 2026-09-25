@@ -12,6 +12,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 import { errorMessage } from '../_shared/errorMessage.ts';
 import { recordUsage } from '../_shared/usage.ts';
+import { ALLOWED_VOICES, ttsModelFor } from '../_shared/voices.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -22,11 +23,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
-
-// Kept in sync with the `profiles_ai_voice_check` constraint
-// (supabase/migrations/20260918000001_ai_personalization.sql) and
-// converse/index.ts's own ALLOWED_VOICES.
-const ALLOWED_VOICES = new Set(['alloy', 'echo', 'onyx', 'nova', 'shimmer']);
 
 const SAMPLES: Record<string, string> = {
   ko: '안녕하세요. 편하게 말씀해 주세요. 제가 기록하고 정리해 드릴게요.',
@@ -74,7 +70,7 @@ Deno.serve(async (req) => {
         Authorization: `Bearer ${OPENAI_API_KEY}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ model: 'tts-1', voice, input: text, response_format: 'mp3' }),
+      body: JSON.stringify({ model: ttsModelFor(voice), voice, input: text, response_format: 'mp3' }),
     });
     if (!res.ok) {
       console.error('OpenAI TTS (preview) failed:', res.status, await res.text());
@@ -87,6 +83,7 @@ Deno.serve(async (req) => {
       eventType: 'tts_synthesize',
       source: 'preview_voice',
       ttsCharacters: text.length,
+      model: ttsModelFor(voice),
     });
     return json({ audioBase64: arrayBufferToBase64(buffer) });
   } catch (e) {

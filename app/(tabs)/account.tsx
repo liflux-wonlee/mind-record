@@ -29,6 +29,7 @@ const VOICE_LABELS: Record<string, string> = {
   onyx: 'Male voice 2',
   nova: 'Female voice 1',
   shimmer: 'Female voice 2',
+  marin: 'Female voice 3 (Marin)',
 };
 
 export default function AccountScreen() {

@@ -24,6 +24,8 @@ export type UsageEvent = {
   inputTokens?: number;
   outputTokens?: number;
   ttsCharacters?: number;
+  /** The OpenAI model used, when it isn't the function's usual one (e.g. TTS voices on gpt-4o-mini-tts). */
+  model?: string;
   succeeded?: boolean;
   errorMessage?: string;
 };
@@ -49,6 +51,9 @@ export async function recordUsage(db: SupabaseClient, event: UsageEvent): Promis
       tts_characters: event.ttsCharacters ?? null,
       succeeded: event.succeeded ?? true,
       error_message: event.errorMessage ?? null,
+      // Only when set, so an insert still works before the column's
+      // migration (20260927000002_usage_events_model.sql) is applied.
+      ...(event.model ? { model: event.model } : {}),
     };
     if (event.dedupeKey) {
       const { error } = await db.from('usage_events').upsert(row, { onConflict: 'dedupe_key' });

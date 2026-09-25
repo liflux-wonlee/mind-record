@@ -20,6 +20,7 @@ const VOICE_OPTIONS: { voice: AiVoice; label: string; color: string }[] = [
   { voice: 'onyx', label: 'Male voice 2', color: colors.pastelLavender },
   { voice: 'nova', label: 'Female voice 1', color: colors.pastelPeach },
   { voice: 'shimmer', label: 'Female voice 2', color: colors.pastelPink },
+  { voice: 'marin', label: 'Female voice 3 (Marin)', color: colors.pastelGreen },
 ];
 
 // How long a pause in speech has to last before Conversation mode treats
@@ -295,6 +296,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
   },
   voiceLabel: {
+    // Wraps instead of pushing the Preview/Select buttons out of the row
+    // ("Female voice 3 (Marin)" doesn't fit beside them on a 360dp screen).
+    flexShrink: 1,
+    marginRight: 8,
     fontFamily: font.semibold,
     fontSize: 13,
     color: colors.text,

@@ -35,7 +35,7 @@ export type TaskStatus = 'open' | 'completed' | 'cancelled';
 export type TaskPriority = 'low' | 'normal' | 'high';
 export type AttachmentType = 'audio' | 'image' | 'document';
 /** The OpenAI TTS voices the app offers a preview for -- see preview-voice/converse Edge Functions. */
-export type AiVoice = 'alloy' | 'echo' | 'onyx' | 'nova' | 'shimmer';
+export type AiVoice = 'alloy' | 'echo' | 'onyx' | 'nova' | 'shimmer' | 'marin';
 
 export type Database = {
   public: {

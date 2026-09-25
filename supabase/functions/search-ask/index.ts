@@ -40,6 +40,7 @@ import { listTaskLists, listTasks, listTopics, TASK_SCOPES } from '../_shared/ap
 import { formatHits, searchRecords, splitKeywords, type SearchHit } from '../_shared/recordSearch.ts';
 import { resolveUserTimeZone } from '../_shared/timezone.ts';
 import { recordUsage } from '../_shared/usage.ts';
+import { ALLOWED_VOICES, ttsModelFor } from '../_shared/voices.ts';
 
 const OPENAI_API_KEY = Deno.env.get('OPENAI_API_KEY');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -51,7 +52,6 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-const ALLOWED_VOICES = new Set(['alloy', 'echo', 'onyx', 'nova', 'shimmer']);
 const DEFAULT_VOICE = 'alloy';
 
 const NOTHING_HEARD: Record<string, string> = {
@@ -233,6 +233,7 @@ Deno.serve(async (req) => {
             eventType: 'tts_synthesize',
             source: 'search_ask',
             ttsCharacters: nothingHeard.length,
+            model: ttsModelFor(voice),
           })
         );
       }
@@ -307,6 +308,7 @@ Deno.serve(async (req) => {
           eventType: 'tts_synthesize',
           source: 'search_ask',
           ttsCharacters: result.answer.length,
+          model: ttsModelFor(voice),
         })
       );
     }
@@ -526,7 +528,7 @@ async function synthesizeSpeech(text: string, voice: string): Promise<string> {
   const res = await fetch('https://api.openai.com/v1/audio/speech', {
     method: 'POST',
     headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'tts-1', voice, input: text, response_format: 'mp3' }),
+    body: JSON.stringify({ model: ttsModelFor(voice), voice, input: text, response_format: 'mp3' }),
   });
   if (!res.ok) throw new Error(`Speech synthesis failed (${res.status}): ${await res.text()}`);
   const buffer = await res.arrayBuffer();
