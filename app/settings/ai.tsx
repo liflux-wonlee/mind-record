@@ -2,13 +2,21 @@ import { useFocusEffect } from 'expo-router';
 import { createAudioPlayer } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
 import { Button, Kicker } from '@/components/ui';
 import { DEFAULT_SILENCE_DURATION_MS } from '@/hooks/useConversationSession';
 import { friendlyMessage } from '@/lib/friendlyError';
+import {
+  clearTurnDiagnostics,
+  getTurnDetectorChoice,
+  setTurnDetectorChoice,
+  shareTurnDiagnostics,
+  turnDiagnosticsCount,
+  type TurnDetectorChoice,
+} from '@/lib/turnDiagnostics';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile, updateProfile, type Profile } from '@/services/profiles';
 import { previewVoice } from '@/services/voicePreview';
@@ -257,6 +265,116 @@ function AiSettingsForm({
         <Text style={styles.fieldHint}>
           How long a silence in Conversation mode means you're done talking, before the AI replies.
         </Text>
+      </View>
+
+      {Platform.OS === 'android' ? <TurnDetectionCard /> : null}
+    </View>
+  );
+}
+
+const DETECTOR_OPTIONS: { choice: TurnDetectorChoice; label: string; color: string }[] = [
+  { choice: 'classic', label: 'Previous', color: colors.pastelGreen },
+  { choice: 'pcm', label: 'New (testing)', color: colors.pastelBlue },
+];
+
+/**
+ * Which turn-end detector Conversation mode uses, and the recent turns it
+ * keeps on this phone for tuning (see src/lib/turnDiagnostics.ts).
+ */
+function TurnDetectionCard() {
+  const [choice, setChoice] = useState<TurnDetectorChoice | null>(null);
+  const [count, setCount] = useState(() => turnDiagnosticsCount());
+  const [sharing, setSharing] = useState(false);
+
+  useEffect(() => {
+    getTurnDetectorChoice().then(setChoice);
+  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      setCount(turnDiagnosticsCount());
+    }, [])
+  );
+
+  const choose = async (next: TurnDetectorChoice) => {
+    setChoice(next);
+    try {
+      await setTurnDetectorChoice(next);
+    } catch (e) {
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
+    }
+  };
+
+  const share = async () => {
+    if (sharing) return;
+    setSharing(true);
+    try {
+      await shareTurnDiagnostics();
+    } catch (e) {
+      Alert.alert('Could not share', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSharing(false);
+    }
+  };
+
+  const clear = () => {
+    Alert.alert('Delete saved turns?', 'The recordings kept on this phone for tuning are deleted.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          try {
+            clearTurnDiagnostics();
+          } catch {
+            // Nothing to delete.
+          }
+          setCount(0);
+        },
+      },
+    ]);
+  };
+
+  return (
+    <View style={styles.card}>
+      <Kicker style={{ color: colors.neutral600, marginBottom: 10 }}>Turn detection</Kicker>
+      <View style={{ flexDirection: 'row', gap: 8, marginBottom: 10 }}>
+        {DETECTOR_OPTIONS.map(({ choice: c, label, color }) => {
+          const selected = choice === c;
+          return (
+            <Button
+              key={c}
+              label={label}
+              disabled={selected || choice === null}
+              onPress={() => choose(c)}
+              style={[styles.gapButton, { backgroundColor: color }, selected && styles.gapButtonSelected]}
+              textStyle={{ color: colors.text }}
+            />
+          );
+        })}
+      </View>
+      <Text style={styles.fieldHint}>
+        How Conversation mode decides you&apos;ve finished talking. Applies from the next turn.
+      </Text>
+      <Text style={[styles.fieldHint, { marginTop: 12 }]}>
+        The last {count} turn{count === 1 ? '' : 's'} (audio and how the pause was judged) are kept on this phone for
+        tuning. Share them to Google Drive when asked.
+      </Text>
+      <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+        <Button
+          variant="secondary"
+          label={sharing ? 'Preparing…' : 'Share turns'}
+          disabled={sharing || count === 0}
+          onPress={share}
+          style={{ flex: 1, minHeight: 40, borderRadius: radius.pastel }}
+        />
+        <Button
+          variant="ghost"
+          label="Delete"
+          disabled={count === 0}
+          onPress={clear}
+          style={{ minHeight: 40, paddingHorizontal: 12 }}
+          textStyle={{ color: colors.accent700 }}
+        />
       </View>
     </View>
   );

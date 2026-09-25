@@ -63,6 +63,7 @@ import { friendlyMessage } from '@/lib/friendlyError';
 import { functionErrorCode, isNetworkError } from '@/lib/functionsError';
 import { newTurnId, startPerfTurn, type PerfTurn } from '@/lib/perfLog';
 import { TurnEndDetector, type TurnEndMemory } from '@/lib/voiceActivity';
+import { getTurnDetectorChoice, saveTurnDiagnostics } from '@/lib/turnDiagnostics';
 import { encodeWav } from '@/lib/wav';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
@@ -282,6 +283,8 @@ export function useConversationSession(
   // Diagnostics for the perf log line: how this turn's readings were judged,
   // so a real drive's log shows why a pause was (or wasn't) detected.
   const detectorStatsRef = useRef({ speech: 0, quiet: 0, unsure: 0 });
+  // This turn's raw metering readings (classic detector), for saveTurnDiagnostics.
+  const meteringTraceRef = useRef<number[]>([]);
   const detectorSnapshot = (): Record<string, number | string | null> => {
     if (captureModeRef.current === 'pcm') return pcmDiagnosticsRef.current ?? {};
     const noise = noiseLevelRef.current;
@@ -453,7 +456,7 @@ export function useConversationSession(
 
   /** Stops the PCM stream (if this turn used it) and keeps the detector's
    *  noise memory and diagnostics. Returns the captured audio, or null. */
-  const stopPcmCapture = (): Int16Array[] | null => {
+  const stopPcmCapture = (reason: string): Int16Array[] | null => {
     if (!pcmActiveRef.current) return null;
     pcmActiveRef.current = false;
     try {
@@ -481,6 +484,17 @@ export function useConversationSession(
     }
     const chunks = pcmChunksRef.current;
     pcmChunksRef.current = [];
+    saveTurnDiagnostics(
+      { chunks, sampleRate: pcmRateRef.current },
+      {
+        captureMode: 'pcm',
+        reason,
+        pauseMs: silenceGapRef.current,
+        recordedMs: Date.now() - (recordingStartedAtRef.current ?? Date.now()),
+        detector: detector ? detector.diagnostics() : null,
+        trace: detector ? detector.trace() : null,
+      }
+    );
     return chunks;
   };
 
@@ -508,7 +522,7 @@ export function useConversationSession(
     if (recorderState.isRecording) {
       await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
     }
-    stopPcmCapture(); // a turn still being listened to is dropped, as with the recorder
+    stopPcmCapture('conversation-ended'); // a turn still being listened to is dropped, as with the recorder
     player.pause();
 
     const sessionId = sessionIdRef.current;
@@ -548,7 +562,7 @@ export function useConversationSession(
     if (recorderState.isRecording) {
       await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
     }
-    stopPcmCapture(); // a turn still being listened to is dropped, as with the recorder
+    stopPcmCapture('conversation-cancelled'); // a turn still being listened to is dropped, as with the recorder
     player.pause();
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
@@ -586,8 +600,9 @@ export function useConversationSession(
       // stops on backgrounding instead -- see useAudioInterruption below.
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
       const stream = streamRef.current;
+      const choice = stream ? await getTurnDetectorChoice() : 'classic';
       let mode: 'pcm' | 'recorder' =
-        stream && pcmStartFailuresRef.current < PCM_MAX_START_FAILURES ? 'pcm' : 'recorder';
+        stream && choice === 'pcm' && pcmStartFailuresRef.current < PCM_MAX_START_FAILURES ? 'pcm' : 'recorder';
       if (mode === 'pcm' && stream) {
         pcmChunksRef.current = [];
         turnDetectorRef.current = null;
@@ -635,7 +650,7 @@ export function useConversationSession(
       // background -- stop again and wait for a tap, like any interruption.
       const cut = startInterruptedRef.current ?? (AppState.currentState === 'background' ? 'background' : null);
       if (cut) {
-        stopPcmCapture();
+        stopPcmCapture('start-interrupted');
         if (recorder.isRecording) {
           recorder.stop().catch(() => {
             // Best-effort -- the recorder may already be gone.
@@ -651,6 +666,7 @@ export function useConversationSession(
       loudHistoryRef.current = [];
       loudRunRef.current = 0;
       detectorStatsRef.current = { speech: 0, quiet: 0, unsure: 0 };
+      meteringTraceRef.current = [];
       activeRef.current = true;
       abortedRef.current = false;
       hasContentRef.current = true;
@@ -728,7 +744,7 @@ export function useConversationSession(
               await new Promise((resolve) => setTimeout(resolve, PCM_MANUAL_TAIL_MS));
             }
             const spoke = turnDetectorRef.current?.hasSpoken ?? false;
-            const chunks = stopPcmCapture();
+            const chunks = stopPcmCapture(spoke || trigger !== 'maxDuration' ? trigger : 'maxDuration-no-speech');
             throwIfAborted();
             if (trigger === 'maxDuration' && !spoke) {
               // A whole turn's maximum length without a voice in it (the
@@ -769,6 +785,20 @@ export function useConversationSession(
             // written, throwing "No audio was captured" for a turn that really
             // did record something. See waitForRecorderUri's own comment.
             uri = await waitForRecorderUri(recorder);
+            if (uri) {
+              saveTurnDiagnostics(
+                { uri, extension: 'm4a' },
+                {
+                  captureMode: 'classic',
+                  reason: trigger,
+                  pauseMs: silenceGapMs,
+                  recordedMs: Date.now() - (recordingStartedAtRef.current ?? Date.now()),
+                  detector: detectorSnapshot(),
+                  // The metering readings the classic detector judged, one per 200 ms tick.
+                  metering: meteringTraceRef.current,
+                }
+              );
+            }
           }
           if (!uri) throw new Error('No audio was captured for that turn.');
           throwIfAborted();
@@ -960,6 +990,9 @@ export function useConversationSession(
 
       const raw = meteringRef.current;
       if (raw === undefined) return;
+      if (meteringTraceRef.current.length < MAX_TURN_RECORDING_MS / 200) {
+        meteringTraceRef.current.push(Math.round(raw * 10) / 10);
+      }
 
       let loud = false;
       let quiet = true;
@@ -1088,7 +1121,7 @@ export function useConversationSession(
           // Best-effort -- the recorder may already be gone.
         });
       }
-      stopPcmCapture();
+      stopPcmCapture(`interrupted:${reason}`);
     }
     player.pause();
     if (current !== 'thinking') setState('idle');
