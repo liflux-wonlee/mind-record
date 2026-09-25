@@ -14,6 +14,11 @@ export default function TabsLayout() {
   return (
     <Tabs
       tabBar={() => <BottomNav />}
+      // Back (the on-screen buttons, Android's back) returns to the screen
+      // something was opened from -- e.g. Account opened from Tasks goes back
+      // to Tasks, not Home. On iPhone these drill-down tabs have no swipe
+      // back, so their on-screen back buttons rely on this.
+      backBehavior="history"
       screenOptions={{
         headerShown: false,
         sceneStyle: { backgroundColor: colors.bg },

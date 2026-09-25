@@ -5,6 +5,7 @@
  * design tokens and primitives.
  */
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import React, { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
@@ -19,6 +20,7 @@ type Mode = 'sign-in' | 'sign-up';
 
 export default function EmailAuthScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<Mode>('sign-in');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -65,7 +67,7 @@ export default function EmailAuthScreen() {
           variant="ghost"
           label="Back"
           icon={<ChevronLeftIcon size={18} color={colors.accent} />}
-          onPress={() => router.replace('/login')}
+          onPress={() => (router.canGoBack() ? router.back() : router.replace('/login'))}
           style={styles.back}
           textStyle={{ fontSize: 12 }}
         />
@@ -92,13 +94,15 @@ export default function EmailAuthScreen() {
     <Screen safeBottom scroll={false}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        // See search.tsx: the Screen's top inset isn't part of the overlap math.
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
         style={styles.flex}
       >
         <Button
           variant="ghost"
           label="Back"
           icon={<ChevronLeftIcon size={18} color={colors.accent} />}
-          onPress={() => router.replace('/login')}
+          onPress={() => (router.canGoBack() ? router.back() : router.replace('/login'))}
           style={styles.back}
           textStyle={{ fontSize: 12 }}
         />

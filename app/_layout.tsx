@@ -97,7 +97,9 @@ function RootNavigator() {
         </Stack.Protected>
         <Stack.Protected guard={appActive}>
           <Stack.Screen name="(tabs)" options={{ animation: 'fade' }} />
-          <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom' }} />
+          {/* No iOS swipe-back: it skipped the "discard this recording?"
+              confirmation. Talk has its own Cancel / Done controls. */}
+          <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom', gestureEnabled: false }} />
           <Stack.Screen name="summary" />
           <Stack.Screen name="google-tasks/callback" options={{ animation: 'fade' }} />
           <Stack.Screen name="settings/ai" options={{ animation: 'slide_from_right' }} />

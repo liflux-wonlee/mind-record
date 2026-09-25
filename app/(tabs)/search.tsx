@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -41,6 +42,7 @@ const MUTE_STORAGE_KEY = 'mindrecord.search.answer_muted';
 
 export default function SearchScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -175,6 +177,10 @@ export default function SearchScreen() {
       <KeyboardAvoidingView
         style={styles.flexArea}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        // Screen pads its top by the safe-area inset, which the keyboard
+        // overlap calculation doesn't see -- without this the input row sat
+        // under the keyboard on notch / Dynamic Island iPhones.
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
       >
       <ScrollView style={styles.results} keyboardShouldPersistTaps="handled">
         {answer ? (

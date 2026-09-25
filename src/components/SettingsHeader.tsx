@@ -16,7 +16,9 @@ export function SettingsHeader({ title }: { title: string }) {
         variant="ghost"
         label="Account"
         icon={<ChevronLeftIcon size={18} color={colors.accent} />}
-        onPress={() => router.push('/account')}
+        // back(), not push: pushing /account from these root-stack pages
+        // stacked a second copy of the tabs (and iOS swipe then led back here).
+        onPress={() => (router.canGoBack() ? router.back() : router.navigate('/account'))}
         style={styles.back}
         textStyle={{ fontSize: 12 }}
       />

@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 
 import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { ChevronLeftIcon } from '@/components/Icon';
 import { Button, Kicker } from '@/components/ui';
 import { getBiometricSupport, isBiometricLockEnabled } from '@/lib/biometricLock';
 import { friendlyMessage } from '@/lib/friendlyError';
@@ -165,6 +166,15 @@ export default function AccountScreen() {
 
   return (
     <Screen showAccount={false}>
+      {/* iPhone has no system back button, and this drill-down tab has no swipe back. */}
+      <Button
+        variant="ghost"
+        label="Back"
+        icon={<ChevronLeftIcon size={18} color={colors.accent} />}
+        onPress={() => (router.canGoBack() ? router.back() : router.navigate('/'))}
+        style={{ alignSelf: 'flex-start', minHeight: 44, paddingLeft: 0, marginLeft: -4 }}
+        textStyle={{ fontSize: 12 }}
+      />
       <Kicker style={{ color: colors.neutral600 }}>Account</Kicker>
 
       <View style={styles.profile}>

@@ -876,6 +876,7 @@ function TaskEditSheet({
             onChangeText={(v) => setDueDate(v.trim() || null)}
             placeholder="Or type YYYY-MM-DD"
             placeholderTextColor={colors.neutral600}
+            keyboardType="numbers-and-punctuation"
           />
 
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>

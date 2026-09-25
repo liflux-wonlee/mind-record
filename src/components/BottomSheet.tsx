@@ -65,6 +65,7 @@ export function BottomSheet({
               style={styles.body}
               bounces={false}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
               showsVerticalScrollIndicator={false}
             >
               {children}

@@ -6,6 +6,7 @@ import { BottomSheet } from '@/components/BottomSheet';
 import { CheckIcon, ShareIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
+import { ChevronLeftIcon } from '@/components/Icon';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { dismissToTabs } from '@/nav';
@@ -608,6 +609,15 @@ export default function SummaryScreen() {
 
   return (
     <Screen safeBottom showAccount={false}>
+      {/* A way out at the top (the only other one is Done at the very bottom). */}
+      <Button
+        variant="ghost"
+        label="Back"
+        icon={<ChevronLeftIcon size={18} color={colors.accent} />}
+        onPress={() => (router.canGoBack() ? router.back() : dismissToTabs())}
+        style={{ alignSelf: 'flex-start', minHeight: 44, paddingLeft: 0, marginLeft: -4 }}
+        textStyle={{ fontSize: 12 }}
+      />
       {done ? (
         <View style={styles.tabRow}>
           <View style={styles.tabGroup}>

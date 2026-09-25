@@ -66,6 +66,10 @@ export function Screen({
           style={styles.flex}
           contentContainerStyle={box}
           keyboardShouldPersistTaps="handled"
+          // iOS doesn't resize the window for the keyboard (Android does):
+          // scroll the focused field into view and let a drag dismiss it.
+          automaticallyAdjustKeyboardInsets
+          keyboardDismissMode="interactive"
         >
           {children}
         </ScrollView>
@@ -78,6 +82,7 @@ export function Screen({
           accessibilityRole="button"
           accessibilityLabel="Account"
           onPress={() => router.push('/account')}
+          hitSlop={8}
           style={({ pressed }) => [
             styles.accountButton,
             { top: insets.top + 8 },
