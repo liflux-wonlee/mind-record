@@ -11,6 +11,7 @@ import { listSessionsForDay, type Session } from '@/services/sessions';
 import { listTasksCreatedInRange, type Task } from '@/services/tasks';
 import { listTopics, type Topic } from '@/services/topics';
 import { colors, font, h2 } from '@/theme';
+import { WithBottomNav } from '@/components/WithBottomNav';
 
 type TopicGroup = {
   key: string;
@@ -19,7 +20,15 @@ type TopicGroup = {
   memories: Memory[];
 };
 
-export default function JournalScreen() {
+export default function JournalScreenRoute() {
+  return (
+    <WithBottomNav>
+      <JournalScreen />
+    </WithBottomNav>
+  );
+}
+
+function JournalScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { date } = useLocalSearchParams<{ date?: string }>();

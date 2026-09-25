@@ -17,7 +17,7 @@ import { colors, font, h2 } from '@/theme';
  * navigator and can leave this screen with no real history to pop to --
  * `router.back()` then does nothing (and Android's hardware back doesn't
  * either, since it goes through the same navigation state). `canGoBack()`
- * plus a `replace('/')` fallback (same pattern as app/(tabs)/journal.tsx's
+ * plus a `replace('/')` fallback (same pattern as app/journal.tsx's
  * back button) always lands somewhere sane: `/` re-resolves through the
  * guards to whichever of Login/Home is actually correct right now.
  */

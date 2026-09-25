@@ -1,6 +1,6 @@
 /**
  * Device biometric/passcode lock gate for Settings -> biometric unlock (see
- * app/_layout.tsx's <LockGate> and app/(tabs)/account.tsx's toggle).
+ * app/_layout.tsx's <LockGate> and app/account.tsx's toggle).
  *
  * This is deliberately independent of Supabase's own session storage (see
  * src/lib/secureStorage.ts): a successful check here only decides whether

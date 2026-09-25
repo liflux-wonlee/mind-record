@@ -5,19 +5,17 @@ import { BottomNav } from '@/components/BottomNav';
 import { colors } from '@/theme';
 
 /**
- * The five visible tabs (Home/Records/Topics/Tasks/Search) plus the
- * drill-down screens that keep the nav visible without being a tab button
- * themselves: Account (reached from Home's profile icon), Inbox, Topic,
- * Thread, Journal. The bar itself is fully custom — see `BottomNav`.
+ * The five tabs (Home/Records/Topics/Tasks/Search). Their drill-down
+ * screens (Topic, Journal, Account) live on the root stack instead, so they
+ * slide in and get the iOS swipe back -- they draw the same bar themselves
+ * (see WithBottomNav). The bar itself is fully custom — see `BottomNav`.
  */
 export default function TabsLayout() {
   return (
     <Tabs
       tabBar={() => <BottomNav />}
-      // Back (the on-screen buttons, Android's back) returns to the screen
-      // something was opened from -- e.g. Account opened from Tasks goes back
-      // to Tasks, not Home. On iPhone these drill-down tabs have no swipe
-      // back, so their on-screen back buttons rely on this.
+      // Android's back on a tab returns to the previously used tab rather
+      // than always jumping to Home.
       backBehavior="history"
       screenOptions={{
         headerShown: false,
@@ -30,10 +28,6 @@ export default function TabsLayout() {
       <Tabs.Screen name="tasks" />
       <Tabs.Screen name="search" />
 
-      <Tabs.Screen name="account" options={{ href: null }} />
-      <Tabs.Screen name="inbox" options={{ href: null }} />
-      <Tabs.Screen name="topic" options={{ href: null }} />
-      <Tabs.Screen name="journal" options={{ href: null }} />
     </Tabs>
   );
 }

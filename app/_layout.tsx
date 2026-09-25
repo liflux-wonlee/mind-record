@@ -101,6 +101,11 @@ function RootNavigator() {
               confirmation. Talk has its own Cancel / Done controls. */}
           <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom', gestureEnabled: false }} />
           <Stack.Screen name="summary" />
+          {/* Tab drill-downs: pushed (swipe back on iOS), tab bar drawn by WithBottomNav. */}
+          <Stack.Screen name="topic" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="journal" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="account" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="inbox" options={{ animation: 'fade' }} />
           <Stack.Screen name="google-tasks/callback" options={{ animation: 'fade' }} />
           <Stack.Screen name="settings/ai" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/privacy" options={{ animation: 'slide_from_right' }} />

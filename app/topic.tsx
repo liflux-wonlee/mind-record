@@ -1,6 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, BackHandler, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronLeftIcon } from '@/components/Icon';
@@ -42,6 +42,7 @@ import {
   type Topic,
 } from '@/services/topics';
 import { colors, font, h2, radius } from '@/theme';
+import { WithBottomNav } from '@/components/WithBottomNav';
 
 type ItemMenuTone = 'share' | 'delete' | 'neutral';
 type ItemMenuAction = { label: string; tone: ItemMenuTone; onPress: () => void };
@@ -73,7 +74,15 @@ type Sheet =
   | { kind: 'merge' }
   | null;
 
-export default function TopicDetailScreen() {
+export default function TopicDetailScreenRoute() {
+  return (
+    <WithBottomNav>
+      <TopicDetailScreen />
+    </WithBottomNav>
+  );
+}
+
+function TopicDetailScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const { id, unclassified } = useLocalSearchParams<{ id?: string; unclassified?: string }>();
@@ -147,23 +156,6 @@ export default function TopicDetailScreen() {
     useCallback(() => {
       load();
     }, [load])
-  );
-
-  // `topic` is a hidden tab (see (tabs)/_layout.tsx's comment) rather than a
-  // pushed stack screen, so it doesn't have its own back-stack entry --
-  // Android's hardware back button falls through to the bottom-tab
-  // navigator's default behavior, which jumps straight to the FIRST tab
-  // (Home) instead of back to wherever this topic was opened from. Route it
-  // through the same "Topics" destination as the explicit back button above
-  // instead, so hardware back and the on-screen back arrow always agree.
-  useFocusEffect(
-    useCallback(() => {
-      const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-        router.push('/memory');
-        return true;
-      });
-      return () => sub.remove();
-    }, [router])
   );
 
   const loadMoreSessions = async () => {
@@ -395,9 +387,9 @@ export default function TopicDetailScreen() {
     <Screen>
       <Button
         variant="ghost"
-        label="Topics"
+        label="Back"
         icon={<ChevronLeftIcon size={18} color={colors.accent} />}
-        onPress={() => router.push('/memory')}
+        onPress={() => (router.canGoBack() ? router.back() : router.navigate('/memory'))}
         style={styles.back}
         textStyle={{ fontSize: 12 }}
       />

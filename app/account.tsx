@@ -16,6 +16,7 @@ import { getGoogleTasksStatus } from '@/services/googleTasks';
 import { getProfile, type Profile } from '@/services/profiles';
 import { getAccountStats, type AccountStats } from '@/services/stats';
 import { colors, font, radius } from '@/theme';
+import { WithBottomNav } from '@/components/WithBottomNav';
 
 const MENU_COLORS = [colors.pastelBlue, colors.pastelLavender, colors.pastelGreen, colors.pastelPeach];
 
@@ -33,7 +34,15 @@ const VOICE_LABELS: Record<string, string> = {
   marin: 'Female voice 3 (Marin)',
 };
 
-export default function AccountScreen() {
+export default function AccountScreenRoute() {
+  return (
+    <WithBottomNav>
+      <AccountScreen />
+    </WithBottomNav>
+  );
+}
+
+function AccountScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -166,7 +175,7 @@ export default function AccountScreen() {
 
   return (
     <Screen showAccount={false}>
-      {/* iPhone has no system back button, and this drill-down tab has no swipe back. */}
+      {/* iPhone has no system back button -- a visible Back alongside the edge swipe. */}
       <Button
         variant="ghost"
         label="Back"
