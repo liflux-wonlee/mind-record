@@ -1,10 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Animated,
+  Easing,
   KeyboardAvoidingView,
+  Modal,
+  Pressable,
   Platform,
   ScrollView,
   StyleSheet,
@@ -192,7 +196,7 @@ export default function SearchScreen() {
                   variant="ghost"
                   label="Stop"
                   onPress={voice.stopSpeaking}
-                  style={{ minHeight: 28, paddingHorizontal: 8 }}
+                  style={{ minHeight: 44, paddingHorizontal: 8 }}
                   textStyle={{ fontSize: 12 }}
                 />
               ) : null}
@@ -313,7 +317,65 @@ export default function SearchScreen() {
         />
       </View>
       </KeyboardAvoidingView>
+      <ListeningOverlay
+        visible={voice.state === 'recording'}
+        onDone={voice.stopRecordingAndAsk}
+        onCancel={voice.cancelRecording}
+      />
     </Screen>
+  );
+}
+
+/**
+ * While a voice question is being recorded: a whole-screen, unmissable
+ * "listening" state (a small mic tint was easy to miss), with the way out
+ * spelled out -- tap anywhere / Stop & ask sends the question, Cancel drops it.
+ */
+function ListeningOverlay({
+  visible,
+  onDone,
+  onCancel,
+}: {
+  visible: boolean;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const pulse = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    if (!visible) return;
+    pulse.setValue(0);
+    const loop = Animated.loop(
+      Animated.timing(pulse, { toValue: 1, duration: 1400, easing: Easing.out(Easing.quad), useNativeDriver: true })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [visible, pulse]);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" statusBarTranslucent onRequestClose={onCancel}>
+      <Pressable style={styles.overlay} onPress={onDone} accessibilityLabel="Stop and ask">
+        <View style={styles.overlayMicWrap}>
+          <Animated.View
+            style={[
+              styles.overlayRing,
+              {
+                opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 0] }),
+                transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.9] }) }],
+              },
+            ]}
+          />
+          <View style={styles.overlayMic}>
+            <MicIcon size={56} color={colors.bg} />
+          </View>
+        </View>
+        <Text style={styles.overlayTitle}>Listening…</Text>
+        <Text style={styles.overlayHint}>Ask your question. Tap anywhere to stop and ask.</Text>
+        <View style={styles.overlayButtons}>
+          <Button label="Cancel" variant="ghost" onPress={onCancel} textStyle={{ color: colors.text }} />
+          <Button label="Stop & ask" variant="save" onPress={onDone} style={{ paddingHorizontal: 24 }} />
+        </View>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -322,6 +384,55 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    // Clear of the Account button Screen draws in the top-right corner
+    // (36 wide + gutter), which used to cover the speaker toggle.
+    paddingRight: 48,
+  },
+  overlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 32,
+    backgroundColor: 'rgba(253,227,207,0.97)',
+  },
+  overlayMicWrap: {
+    width: 180,
+    height: 180,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 28,
+  },
+  overlayRing: {
+    position: 'absolute',
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: colors.accent,
+  },
+  overlayMic: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accent700,
+  },
+  overlayTitle: {
+    ...h2,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  overlayHint: {
+    fontFamily: font.regular,
+    fontSize: 16,
+    lineHeight: 23,
+    color: colors.neutral800,
+    textAlign: 'center',
+  },
+  overlayButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 32,
   },
   title: {
     ...h2,
@@ -329,8 +440,8 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   muteButton: {
-    minHeight: 36,
-    minWidth: 36,
+    minHeight: 44,
+    minWidth: 44,
     paddingHorizontal: 0,
     justifyContent: 'center',
   },

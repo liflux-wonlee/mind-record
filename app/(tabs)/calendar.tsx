@@ -397,7 +397,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   modeOpt: {
-    minHeight: 32,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
@@ -430,7 +430,7 @@ const styles = StyleSheet.create({
   },
   todayButton: {
     alignSelf: 'flex-start',
-    minHeight: 32,
+    minHeight: 44,
     marginBottom: 6,
     paddingHorizontal: 0,
   },

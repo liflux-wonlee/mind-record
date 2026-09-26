@@ -266,8 +266,8 @@ function AccountScreen() {
           align="flex-start"
           disabled={deleting}
           onPress={confirmDeleteAccount}
+          variant="danger"
           style={styles.deleteButton}
-          textStyle={{ color: colors.bg }}
         />
       </View>
     </Screen>
@@ -380,7 +380,6 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: radius.pastel,
     paddingHorizontal: 16,
-    backgroundColor: colors.accent700,
     alignSelf: 'flex-start',
   },
 });

@@ -102,7 +102,7 @@ export default function MemoryScreen() {
           variant="ghost"
           label="+ New topic"
           onPress={() => setSheet({ kind: 'createTop' })}
-          style={{ minHeight: 40, justifyContent: 'center' }}
+          style={{ minHeight: 44, justifyContent: 'center' }}
           textStyle={{ fontSize: 12 }}
         />
       </View>
@@ -184,8 +184,7 @@ export default function MemoryScreen() {
             <Button
               label="Delete"
               align="flex-start"
-              variant="secondary"
-              textStyle={{ color: colors.accent700 }}
+              variant="danger"
               onPress={() => {
                 const topic = sheet.topic;
                 Alert.alert('Delete topic?', `"${topic.name}" will be removed. Anything tagged with it keeps its content, just untagged.`, [
@@ -321,6 +320,7 @@ function NameModal({
         <Button label="Cancel" variant="ghost" onPress={onCancel} />
         <Button
           label={busy ? 'Saving…' : 'Save'}
+          variant="save"
           disabled={busy || !value.trim()}
           onPress={() => onSubmit(value.trim())}
         />

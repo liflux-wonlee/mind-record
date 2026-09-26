@@ -15,7 +15,7 @@
  */
 import React from 'react';
 import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { initialWindowMetrics, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, font } from '@/theme';
 
@@ -39,7 +39,6 @@ export function BottomSheet({
   backgroundColor?: string;
   children: React.ReactNode;
 }) {
-  const insets = useSafeAreaInsets();
   return (
     <Modal
       visible={visible}
@@ -49,31 +48,68 @@ export function BottomSheet({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView behavior="padding" style={styles.flex}>
-        <Pressable style={styles.backdrop} onPress={onClose}>
-          <Pressable
-            style={[styles.sheet, { maxHeight, backgroundColor, paddingBottom: 24 + insets.bottom }]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <Text style={styles.title} numberOfLines={titleLines}>
-              {title}
-            </Text>
-            {/* Scrolls when the content is taller than maxHeight (e.g. Edit task
-                on a small screen) -- otherwise the overflow was drawn past the
-                sheet's bottom padding, under the navigation bar. */}
-            <ScrollView
-              style={styles.body}
-              bounces={false}
-              keyboardShouldPersistTaps="handled"
-              keyboardDismissMode="interactive"
-              showsVerticalScrollIndicator={false}
-            >
-              {children}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </KeyboardAvoidingView>
+      {/* Its own provider: a Modal is a separate window, and the insets it
+          needs are that window's (on Android the app root's value didn't
+          keep the last row clear of the navigation bar). */}
+      <SafeAreaProvider>
+        <SheetBody
+          onClose={onClose}
+          title={title}
+          titleLines={titleLines}
+          maxHeight={maxHeight}
+          backgroundColor={backgroundColor}
+        >
+          {children}
+        </SheetBody>
+      </SafeAreaProvider>
     </Modal>
+  );
+}
+
+function SheetBody({
+  onClose,
+  title,
+  titleLines,
+  maxHeight,
+  backgroundColor,
+  children,
+}: {
+  onClose: () => void;
+  title: string;
+  titleLines?: number;
+  maxHeight: `${number}%`;
+  backgroundColor: string;
+  children: React.ReactNode;
+}) {
+  const insets = useSafeAreaInsets();
+  // Never less than the navigation bar measured at app start, in case the
+  // modal window reports no inset on some device.
+  const bottomInset = Math.max(insets.bottom, initialWindowMetrics?.insets.bottom ?? 0);
+  return (
+    <KeyboardAvoidingView behavior="padding" style={styles.flex}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable
+          style={[styles.sheet, { maxHeight, backgroundColor, paddingBottom: 24 + bottomInset }]}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <Text style={styles.title} numberOfLines={titleLines}>
+            {title}
+          </Text>
+          {/* Scrolls when the content is taller than maxHeight (e.g. Edit task
+              on a small screen) -- otherwise the overflow was drawn past the
+              sheet's bottom padding, under the navigation bar. */}
+          <ScrollView
+            style={styles.body}
+            bounces={false}
+            keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="interactive"
+            showsVerticalScrollIndicator={false}
+          >
+            {children}
+          </ScrollView>
+        </Pressable>
+      </Pressable>
+    </KeyboardAvoidingView>
   );
 }
 

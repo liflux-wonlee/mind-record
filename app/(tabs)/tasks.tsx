@@ -342,7 +342,7 @@ export default function TasksScreen() {
       ) : tasksState.status === 'error' ? (
         <View style={styles.centerBlock}>
           <Text style={styles.errorText}>{tasksState.message}</Text>
-          <Button variant="secondary" label="Retry" onPress={tasksState.refresh} style={{ minHeight: 40 }} />
+          <Button variant="secondary" label="Retry" onPress={tasksState.refresh} style={{ minHeight: 44 }} />
         </View>
       ) : (
         <>
@@ -448,8 +448,8 @@ export default function TasksScreen() {
             label={savingList ? 'Saving…' : 'Save'}
             disabled={savingList || !manageListName.trim()}
             onPress={saveListRename}
-            style={{ flex: 1, backgroundColor: colors.pastelGreen, borderRadius: radius.pastel }}
-            textStyle={{ color: colors.text }}
+            variant="save"
+            style={{ flex: 1 }}
           />
         </View>
 
@@ -468,7 +468,7 @@ export default function TasksScreen() {
                 variant="ghost"
                 label={googlePickerOpen ? 'Close' : 'Change'}
                 onPress={googlePickerOpen ? () => setGooglePickerOpen(false) : openGooglePicker}
-                style={{ minHeight: 32, paddingHorizontal: 6 }}
+                style={{ minHeight: 44, paddingHorizontal: 6 }}
                 textStyle={{ fontSize: 12 }}
               />
             </View>
@@ -502,14 +502,7 @@ export default function TasksScreen() {
           </>
         ) : null}
 
-        <Button
-          label="Delete list"
-          variant="ghost"
-          align="flex-start"
-          textStyle={{ color: colors.accent700 }}
-          onPress={confirmDeleteList}
-          style={{ marginTop: 10 }}
-        />
+        <Button label="Delete list" variant="danger" align="flex-start" onPress={confirmDeleteList} style={{ marginTop: 10 }} />
       </BottomSheet>
 
       <BottomSheet visible={creatingList} onClose={() => setCreatingList(false)} title="New list">
@@ -858,7 +851,7 @@ function TaskEditSheet({
               variant="ghost"
               label="Change"
               onPress={onChangeList}
-              style={{ minHeight: 32, paddingHorizontal: 6 }}
+              style={{ minHeight: 44, paddingHorizontal: 6 }}
               textStyle={{ fontSize: 12 }}
             />
           </View>
@@ -882,11 +875,11 @@ function TaskEditSheet({
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
             {task?.source_session_id ? (
               <Button
-                variant="secondary"
                 label="Open source recording"
                 align="flex-start"
                 onPress={() => task.source_session_id && onOpenSource(task.source_session_id)}
-                style={{ flex: 1 }}
+                style={{ flex: 1, backgroundColor: colors.pastelLavender, borderRadius: radius.pastel }}
+                textStyle={{ color: colors.text }}
               />
             ) : null}
             <Pressable
@@ -900,12 +893,12 @@ function TaskEditSheet({
           </View>
 
           <Button
-            variant="secondary"
             label={sending ? 'Sending…' : sendRecord ? 'Sent to Google Tasks ✓' : 'Send to Google Tasks'}
             align="flex-start"
             disabled={sending || !!sendRecord}
             onPress={send}
-            style={{ marginTop: 10 }}
+            style={{ marginTop: 10, backgroundColor: colors.pastelGreen, borderRadius: radius.pastel }}
+            textStyle={{ color: colors.text }}
           />
           {sendRecord ? (
             <Text style={styles.sendHint}>
@@ -914,18 +907,20 @@ function TaskEditSheet({
             </Text>
           ) : null}
 
-          <View style={{ flexDirection: 'row', gap: 8, marginTop: 14 }}>
+          {/* One row: Delete on the left, Cancel + Save on the right -- short
+              enough to stay above the navigation bar on small screens. */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 16 }}>
+            <Button label="Delete" variant="danger" onPress={confirmDelete} style={{ paddingHorizontal: 16 }} />
+            <View style={{ flex: 1 }} />
             <Button label="Cancel" variant="ghost" onPress={onClose} />
-            <Button label={saving ? 'Saving…' : 'Save'} disabled={saving || !title.trim()} onPress={save} />
+            <Button
+              label={saving ? 'Saving…' : 'Save'}
+              variant="save"
+              disabled={saving || !title.trim()}
+              onPress={save}
+              style={{ paddingHorizontal: 20 }}
+            />
           </View>
-          <Button
-            label="Delete task"
-            variant="ghost"
-            align="flex-start"
-            textStyle={{ color: colors.accent700 }}
-            onPress={confirmDelete}
-            style={{ marginTop: 10 }}
-          />
     </BottomSheet>
   );
 }
@@ -962,7 +957,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   listChip: {
-    minHeight: 34,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 14,
     borderRadius: radius.pastel,
@@ -1004,7 +999,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   filterOpt: {
-    minHeight: 32,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 12,
   },
@@ -1191,7 +1186,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   dateChip: {
-    minHeight: 32,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 10,
     borderWidth: 1,
@@ -1216,7 +1211,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   suggestButton: {
-    minHeight: 36,
+    minHeight: 44,
     paddingHorizontal: 12,
     borderRadius: radius.pastel,
   },

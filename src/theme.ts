@@ -42,6 +42,13 @@ export const colors = {
   pastelBlue: '#cfe0f5',
   pastelLavender: '#e1d8f5',
   pastelPeach: '#fde3cf',
+
+  // — action colors, app-wide: every Save is the blue, every Delete the red
+  // (deeper than the pastel blocks so they read as the main action) —
+  save: '#9dc0ea',
+  saveText: '#1b375a',
+  danger: '#f0a198',
+  dangerText: '#6c2019',
 } as const;
 
 /**

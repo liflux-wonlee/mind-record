@@ -201,7 +201,8 @@ function AiSettingsForm({
             disabled={savingNames}
             onPress={saveNames}
             align="flex-start"
-            style={{ minHeight: 40, borderRadius: radius.pastel, paddingHorizontal: 16 }}
+            variant="save"
+            style={{ paddingHorizontal: 16 }}
           />
         ) : null}
       </View>
@@ -227,7 +228,7 @@ function AiSettingsForm({
                     label={previewing === voice ? 'Playing…' : 'Preview'}
                     disabled={previewing !== null}
                     onPress={() => playPreview(voice)}
-                    style={{ minHeight: 36, paddingHorizontal: 8 }}
+                    style={{ minHeight: 44, paddingHorizontal: 8 }}
                     textStyle={{ fontSize: 12 }}
                   />
                   <Button
@@ -235,7 +236,7 @@ function AiSettingsForm({
                     label={savingVoice === voice ? '...' : selected ? 'Selected' : 'Select'}
                     disabled={selected || savingVoice !== null}
                     onPress={() => chooseVoice(voice)}
-                    style={{ minHeight: 36, borderRadius: radius.pastel, paddingHorizontal: 10 }}
+                    style={{ minHeight: 44, borderRadius: radius.pastel, paddingHorizontal: 10 }}
                     textStyle={{ fontSize: 12 }}
                   />
                 </View>
@@ -365,15 +366,14 @@ function TurnDetectionCard() {
           label={sharing ? 'Preparing…' : 'Share turns'}
           disabled={sharing || count === 0}
           onPress={share}
-          style={{ flex: 1, minHeight: 40, borderRadius: radius.pastel }}
+          style={{ flex: 1, minHeight: 44, borderRadius: radius.pastel }}
         />
         <Button
-          variant="ghost"
+          variant="danger"
           label="Delete"
           disabled={count === 0}
           onPress={clear}
-          style={{ minHeight: 40, paddingHorizontal: 12 }}
-          textStyle={{ color: colors.accent700 }}
+          style={{ paddingHorizontal: 14 }}
         />
       </View>
     </View>

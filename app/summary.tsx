@@ -98,8 +98,8 @@ function EditTextSheet({
           label={saving ? 'Saving…' : 'Save'}
           disabled={saving || !value.trim()}
           onPress={() => onSave(value.trim())}
-          style={{ flex: 1, backgroundColor: colors.pastelGreen, borderRadius: radius.pastel }}
-          textStyle={{ color: colors.text }}
+          variant="save"
+          style={{ flex: 1 }}
         />
       </View>
       {onDelete ? (
@@ -107,8 +107,8 @@ function EditTextSheet({
           label="Delete"
           disabled={saving}
           onPress={onDelete}
-          style={{ marginTop: 8, minHeight: 46, backgroundColor: colors.pastelPink, borderRadius: radius.pastel }}
-          textStyle={{ color: colors.accent700 }}
+          variant="danger"
+          style={{ marginTop: 8 }}
         />
       ) : null}
     </BottomSheet>
@@ -165,7 +165,7 @@ function SectionTopicPicker({
           label="Change"
           disabled={busy}
           onPress={onChange}
-          style={{ minHeight: 32, paddingHorizontal: 6 }}
+          style={{ minHeight: 44, paddingHorizontal: 6 }}
           textStyle={{ fontSize: 12 }}
         />
       </View>
@@ -948,7 +948,7 @@ const styles = StyleSheet.create({
   retryButton: {
     alignSelf: 'flex-start',
     marginTop: 12,
-    minHeight: 40,
+    minHeight: 44,
     borderRadius: radius.pastel,
   },
   processing: {
@@ -1019,7 +1019,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   suggestButton: {
-    minHeight: 36,
+    minHeight: 44,
     paddingHorizontal: 12,
     borderRadius: radius.pastel,
   },
@@ -1085,15 +1085,15 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   shareTabButton: {
-    minHeight: 40,
-    minWidth: 40,
+    minHeight: 44,
+    minWidth: 44,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: radius.pastel,
     backgroundColor: colors.surface,
   },
   tabOpt: {
-    minHeight: 40,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 16,
     borderRadius: radius.pastel,

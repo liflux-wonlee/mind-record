@@ -13,7 +13,7 @@ import {
   ViewStyle,
 } from 'react-native';
 
-import { cardKicker, colors, font, h6 } from '@/theme';
+import { cardKicker, colors, font, h6, radius } from '@/theme';
 
 /* ── type ─────────────────────────────────────────────────────────────── */
 
@@ -91,7 +91,8 @@ export function Tag({
 
 /* ── buttons ──────────────────────────────────────────────────────────── */
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost';
+/** 'save' / 'danger': the app-wide Save (deep pastel blue) and Delete (deep pastel red) buttons. */
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'save' | 'danger';
 
 export function Button({
   label,
@@ -123,6 +124,12 @@ export function Button({
     text.push({ color: colors.bg });
   } else if (variant === 'secondary') {
     box.push({ borderColor: colors.divider });
+  } else if (variant === 'save' || variant === 'danger') {
+    box.push({
+      backgroundColor: variant === 'save' ? colors.save : colors.danger,
+      borderRadius: radius.pastel,
+    });
+    text.push({ color: variant === 'save' ? colors.saveText : colors.dangerText });
   } else {
     box.push(styles.btnGhost);
     text.push({ color: colors.accent });
@@ -157,6 +164,9 @@ function pressedStyle(variant: ButtonVariant): ViewStyle {
       return { backgroundColor: colors.accent700 };
     case 'secondary':
       return { backgroundColor: 'rgba(46,42,40,0.14)' };
+    case 'save':
+    case 'danger':
+      return { opacity: 0.75 };
     default:
       return { backgroundColor: 'rgba(239,138,128,0.18)' };
   }
@@ -219,6 +229,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    // 44pt: the smallest comfortable tap target (Apple's guideline; also fine on Android).
+    minHeight: 44,
     paddingVertical: 8,
     paddingHorizontal: 14.4,
     borderWidth: 1,

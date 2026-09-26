@@ -159,6 +159,7 @@ export default function PrivacySettingsScreen() {
               disabled={changingPassword}
               onPress={changePassword}
               align="flex-start"
+              variant="save"
               style={styles.toggleButton}
             />
           ) : null}

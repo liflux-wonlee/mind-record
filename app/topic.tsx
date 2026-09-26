@@ -50,9 +50,22 @@ type ItemMenu = { title: string; actions: ItemMenuAction[] };
 
 const ITEM_MENU_TONE_COLOR: Record<ItemMenuTone, string> = {
   share: colors.pastelPeach,
-  delete: colors.pastelPink,
+  delete: colors.danger,
   neutral: colors.pastelLavender,
 };
+
+// Rounded pastel cards, cycling colors -- the same look as Records' list.
+const CARD_COLORS = [
+  colors.pastelPink,
+  colors.pastelBlue,
+  colors.pastelGreen,
+  colors.pastelYellow,
+  colors.pastelLavender,
+  colors.pastelPeach,
+];
+function cardColor(i: number): string {
+  return CARD_COLORS[i % CARD_COLORS.length];
+}
 
 function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
@@ -439,12 +452,12 @@ function TopicDetailScreen() {
               <Kicker style={{ color: colors.neutral600, marginTop: 10, marginBottom: 4 }}>
                 Recordings ({sessions.length})
               </Kicker>
-              {sessions.map((session) => (
+              {sessions.map((session, i) => (
                 <Row
                   key={session.id}
                   onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
                   onLongPress={() => sessionMenu(session)}
-                  style={styles.entryRow}
+                  style={[styles.entryRow, { backgroundColor: cardColor(i) }]}
                 >
                   <CardKicker>{capitalize(session.mode)}</CardKicker>
                   <Text style={styles.entryTitle} numberOfLines={1}>
@@ -474,7 +487,7 @@ function TopicDetailScreen() {
               <Kicker style={{ color: colors.neutral600, marginTop: 14, marginBottom: 4 }}>
                 Tasks ({tasks.length})
               </Kicker>
-              {tasks.map((task) => (
+              {tasks.map((task, i) => (
                 <Row
                   key={task.id}
                   onPress={
@@ -483,7 +496,7 @@ function TopicDetailScreen() {
                       : undefined
                   }
                   onLongPress={() => taskMenu(task)}
-                  style={styles.entryRow}
+                  style={[styles.entryRow, { backgroundColor: cardColor(i + 1) }]}
                 >
                   <CardKicker>{task.status === 'completed' ? 'Done' : 'Task'}</CardKicker>
                   <Text style={styles.entryTitle} numberOfLines={1}>
@@ -499,7 +512,7 @@ function TopicDetailScreen() {
               <Kicker style={{ color: colors.neutral600, marginTop: 14, marginBottom: 4 }}>
                 Ideas ({memories.length})
               </Kicker>
-              {memories.map((memory) => (
+              {memories.map((memory, i) => (
                 <Row
                   key={memory.id}
                   onPress={
@@ -508,7 +521,7 @@ function TopicDetailScreen() {
                       : undefined
                   }
                   onLongPress={() => memoryMenu(memory)}
-                  style={styles.entryRow}
+                  style={[styles.entryRow, { backgroundColor: cardColor(i + 2) }]}
                 >
                   <CardKicker>Idea</CardKicker>
                   <Text style={styles.entryTitle} numberOfLines={2}>
@@ -541,7 +554,7 @@ function TopicDetailScreen() {
           ) : null}
           <Button label="Move" align="flex-start" variant="secondary" onPress={() => setSheet({ kind: 'move' })} />
           <Button label="Merge into…" align="flex-start" variant="secondary" onPress={() => setSheet({ kind: 'merge' })} />
-          <Button label="Delete" align="flex-start" variant="secondary" textStyle={{ color: colors.accent700 }} onPress={confirmDeleteTopic} />
+          <Button label="Delete" align="flex-start" variant="danger" onPress={confirmDeleteTopic} />
         </View>
       </ActionModal>
 
@@ -644,7 +657,7 @@ function TopicDetailScreen() {
               align="flex-start"
               onPress={action.onPress}
               style={[styles.menuAction, { backgroundColor: ITEM_MENU_TONE_COLOR[action.tone] }]}
-              textStyle={styles.menuActionText}
+              textStyle={[styles.menuActionText, action.tone === 'delete' && { color: colors.dangerText }]}
             />
           ))}
           <Button
@@ -722,7 +735,7 @@ function NameModal({
       />
       <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
         <Button label="Cancel" variant="ghost" onPress={onCancel} />
-        <Button label={busy ? 'Saving…' : 'Save'} disabled={busy || !value.trim()} onPress={() => onSubmit(value.trim())} />
+        <Button variant="save" label={busy ? 'Saving…' : 'Save'} disabled={busy || !value.trim()} onPress={() => onSubmit(value.trim())} />
       </View>
     </BottomSheet>
   );
@@ -777,6 +790,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginTop: 10,
+    paddingHorizontal: 14,
+    minHeight: 48,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.surface,
   },
   subtopicLabel: {
     fontFamily: font.regular,
@@ -795,9 +812,9 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   entryRow: {
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+    padding: 12,
+    marginBottom: 8,
+    borderRadius: radius.pastel,
   },
   entryTitle: {
     fontFamily: font.semibold,

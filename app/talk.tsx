@@ -290,11 +290,11 @@ function CapturePanel({
           background={colors.pastelLavender}
         />
         <CircleButton
-          icon={<StopIcon size={26} color={colors.bg} />}
+          icon={<StopIcon size={26} color={colors.saveText} />}
           label="Done"
           onPress={onFinish}
           disabled={busy || !everRecorded}
-          background={colors.accent700}
+          background={colors.save}
           large
         />
         <CircleButton
@@ -467,11 +467,11 @@ function ConversationPanel({
           background={colors.pastelLavender}
         />
         <CircleButton
-          icon={<CheckIcon size={26} color={colors.bg} />}
+          icon={<CheckIcon size={26} color={colors.saveText} />}
           label="Save & end"
           onPress={onDone}
           disabled={endDisabled}
-          background={colors.accent700}
+          background={colors.save}
           large
         />
         <CircleButton

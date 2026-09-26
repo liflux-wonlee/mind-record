@@ -239,7 +239,7 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   segOpt: {
-    minHeight: 40,
+    minHeight: 44,
     justifyContent: 'center',
     paddingHorizontal: 14,
   },

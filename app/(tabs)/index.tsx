@@ -185,8 +185,7 @@ export default function HomeScreen() {
           <Button
             label="Delete"
             align="flex-start"
-            variant="secondary"
-            textStyle={{ color: colors.accent700 }}
+            variant="danger"
             onPress={() => menuSession && confirmDeleteSession(menuSession)}
           />
         </View>
