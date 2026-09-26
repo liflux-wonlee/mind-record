@@ -110,6 +110,9 @@ export default function MemoryScreen() {
       <RuleThick />
 
       <Row onPress={() => router.push('/topic?unclassified=1')} style={styles.topicRow}>
+        {/* Same empty chevron slot as a topic without sub-topics, so every
+            top-level name starts on one vertical line. */}
+        <View style={styles.chevron} />
         <Text style={[styles.topicName, { color: colors.neutral700 }]}>Unclassified</Text>
       </Row>
 
@@ -375,7 +378,9 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '90deg' }],
   },
   childRow: {
-    paddingLeft: 28,
+    // One step in from the top-level names (which start after the 20pt
+    // chevron slot + 8pt gap), so sub-topics read as nested.
+    paddingLeft: 48,
     minHeight: 44,
   },
   topicName: {
