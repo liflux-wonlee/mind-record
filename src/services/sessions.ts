@@ -85,6 +85,33 @@ export async function listSessionsPage(
   return data;
 }
 
+/** What a records list needs per row -- no transcript/outline (those can be long; the detail view loads them). */
+export type SessionListItem = Pick<Session, 'id' | 'title' | 'summary' | 'mode' | 'started_at' | 'processing_status'>;
+
+/**
+ * listSessionsPage's lightweight twin for the web records list: same
+ * ordering and (started_at, id) cursor, but only the columns a list row
+ * shows. listSessionsPage itself is unchanged for the mobile screens.
+ */
+export async function listSessionItemsPage(
+  userId: string,
+  { before, limit = 20 }: { before?: SessionsPageCursor; limit?: number } = {}
+): Promise<SessionListItem[]> {
+  let query = supabase
+    .from('sessions')
+    .select('id, title, summary, mode, started_at, processing_status')
+    .eq('user_id', userId)
+    .order('started_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit);
+  if (before) {
+    query = query.or(`started_at.lt.${before.startedAt},and(started_at.eq.${before.startedAt},id.lt.${before.id})`);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
 export async function getSession(sessionId: string): Promise<Session | null> {
   const { data, error } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
   if (error) throw error;

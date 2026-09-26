@@ -12,6 +12,7 @@
  * database password. See `.env.example`.
  */
 import { createClient } from '@supabase/supabase-js';
+import { Platform } from 'react-native';
 import 'react-native-url-polyfill/auto';
 
 import { secureAuthStorage } from '@/lib/secureStorage';
@@ -33,8 +34,15 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
     storage: secureAuthStorage,
     autoRefreshToken: true,
     persistSession: true,
-    // This app has no web build that needs to read tokens out of the URL bar;
-    // OAuth returns via a deep link instead (see src/lib/oauth.ts).
+    // Off on every platform: the one place a redirect's code/tokens are read
+    // is src/providers/AuthProvider.tsx (processAuthDeepLink) -- on mobile
+    // from the deep link, on the web from the /auth/callback page URL.
+    // Letting supabase-js also read the URL would exchange the same code
+    // twice (the second attempt fails and reports a bogus error).
     detectSessionInUrl: false,
+    // Web: PKCE, so the redirect back carries a one-time ?code= instead of
+    // the tokens themselves in the address bar/history. Mobile keeps the
+    // library's default (implicit) flow it has always used.
+    flowType: Platform.OS === 'web' ? 'pkce' : 'implicit',
   },
 });

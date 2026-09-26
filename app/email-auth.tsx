@@ -15,6 +15,7 @@ import { Button } from '@/components/ui';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { signInWithEmail, signUpWithEmail } from '@/services/auth';
 import { colors, font, h2 } from '@/theme';
+import { webColumn } from '@/web/webColumn';
 
 type Mode = 'sign-in' | 'sign-up';
 
@@ -62,7 +63,7 @@ export default function EmailAuthScreen() {
 
   if (checkEmail) {
     return (
-      <Screen safeBottom>
+      <Screen safeBottom contentStyle={webColumn}>
         <Button
           variant="ghost"
           label="Back"
@@ -91,7 +92,7 @@ export default function EmailAuthScreen() {
   }
 
   return (
-    <Screen safeBottom scroll={false}>
+    <Screen safeBottom scroll={false} contentStyle={webColumn}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         // See search.tsx: the Screen's top inset isn't part of the overlap math.

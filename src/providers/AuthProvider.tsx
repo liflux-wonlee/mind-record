@@ -7,7 +7,7 @@
 import type { Session, User } from '@supabase/supabase-js';
 import * as Linking from 'expo-linking';
 import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 
 import { processAuthDeepLink } from '@/lib/authLinking';
 import { supabase } from '@/lib/supabase';
@@ -17,13 +17,27 @@ type AuthState = {
   user: User | null;
   /** True until the very first `getSession()` call resolves. */
   loading: boolean;
+  /** Why the last sign-in link / OAuth redirect failed -- shown by app/auth/callback.tsx (web has no native alert). */
+  linkError: string | null;
 };
+
+// A sign-in code/token can only be exchanged once; the same URL can reach
+// the handler twice (initial URL + a 'url' event, a re-mounted provider).
+const handledAuthUrls = new Set<string>();
+
+/** Web: drop the code/tokens from the address bar and history once used. */
+function scrubAuthParamsFromAddressBar() {
+  if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+  const { pathname, search, hash } = window.location;
+  if (search || hash) window.history.replaceState(window.history.state, '', pathname);
+}
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -52,9 +66,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // src/lib/authLinking.ts for why this needs its own listener).
   useEffect(() => {
     const handleUrl = (url: string) => {
+      if (handledAuthUrls.has(url)) return;
+      handledAuthUrls.add(url);
       processAuthDeepLink(url).then((result) => {
+        if (result.status !== 'ignored') scrubAuthParamsFromAddressBar();
         if (result.status === 'error') {
-          Alert.alert('Sign-in link problem', result.message);
+          setLinkError(result.message);
+          if (Platform.OS !== 'web') Alert.alert('Sign-in link problem', result.message);
+        } else if (result.status === 'handled') {
+          setLinkError(null);
         }
       });
     };
@@ -68,8 +88,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ session, user: session?.user ?? null, loading }),
-    [session, loading]
+    () => ({ session, user: session?.user ?? null, loading, linkError }),
+    [session, loading, linkError]
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

@@ -8,6 +8,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useEffect } from 'react';
+import { Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { LockGate } from '@/components/LockGate';
@@ -40,6 +41,11 @@ export default function RootLayout() {
 }
 
 function RootNavigator() {
+  if (Platform.OS === 'web') return <WebRootNavigator />;
+  return <NativeRootNavigator />;
+}
+
+function NativeRootNavigator() {
   const { session, loading: authLoading } = useAuth();
   const onboardingDone = useOnboardingDone();
   const loading = authLoading || onboardingDone === null;
@@ -114,6 +120,11 @@ function RootNavigator() {
           <Stack.Screen name="legal/privacy-policy" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="legal/terms-of-service" options={{ animation: 'slide_from_right' }} />
         </Stack.Protected>
+        {/* The web build's read-only pages -- never part of the phone app. */}
+        <Stack.Protected guard={false}>
+          <Stack.Screen name="records/index" />
+          <Stack.Screen name="records/[id]" />
+        </Stack.Protected>
       </Stack>
       {/* Rendered as a sibling overlay, never a route -- a route change
           would unmount whatever screen is underneath (an in-progress
@@ -121,5 +132,61 @@ function RootNavigator() {
           never do. See src/components/LockGate.tsx. */}
       <LockGate active={appActive} />
     </>
+  );
+}
+
+/**
+ * The web build (see docs/WEB_PREPARATION.md): sign in, then a read-only
+ * view of the same account's records -- /records and /records/<id>. Every
+ * phone-only screen (recording, conversations, settings, the tabs) is
+ * declared in a group that is never available here, so typing its URL
+ * lands on sign-in or the records list instead of mounting it -- none of
+ * them can start the mic, edit, or run AI work from a browser yet. No
+ * onboarding (it's the phone app's intro) and no biometric LockGate (a
+ * phone-only feature; see src/lib/biometricLock.web.ts).
+ */
+function WebRootNavigator() {
+  const { session, loading } = useAuth();
+
+  useEffect(() => {
+    if (loading) return;
+    SplashScreen.hideAsync();
+  }, [loading]);
+
+  if (loading) return null;
+
+  const signedIn = !!session;
+  return (
+    <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
+      <Stack.Protected guard={!signedIn}>
+        <Stack.Screen name="login" />
+        <Stack.Screen name="email-auth" />
+        <Stack.Screen name="auth/callback" />
+        <Stack.Screen name="legal/privacy-policy" />
+        <Stack.Screen name="legal/terms-of-service" />
+      </Stack.Protected>
+      <Stack.Protected guard={signedIn}>
+        <Stack.Screen name="records/index" options={{ title: 'Records · Mind Record' }} />
+        <Stack.Screen name="records/[id]" options={{ title: 'Record · Mind Record' }} />
+        <Stack.Screen name="legal/privacy-policy" />
+        <Stack.Screen name="legal/terms-of-service" />
+      </Stack.Protected>
+      {/* Phone-only screens: declared so their URLs are known and blocked. */}
+      <Stack.Protected guard={false}>
+        <Stack.Screen name="onboarding" />
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="talk" />
+        <Stack.Screen name="summary" />
+        <Stack.Screen name="topic" />
+        <Stack.Screen name="journal" />
+        <Stack.Screen name="account" />
+        <Stack.Screen name="inbox" />
+        <Stack.Screen name="google-tasks/callback" />
+        <Stack.Screen name="settings/ai" />
+        <Stack.Screen name="settings/privacy" />
+        <Stack.Screen name="settings/google-tasks" />
+        <Stack.Screen name="settings/legal" />
+      </Stack.Protected>
+    </Stack>
   );
 }

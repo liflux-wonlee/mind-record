@@ -25,7 +25,7 @@ const TIMEOUT_MS = 8000;
 
 export default function AuthCallbackScreen() {
   const router = useRouter();
-  const { session } = useAuth();
+  const { session, linkError } = useAuth();
   const [timedOut, setTimedOut] = useState(false);
 
   useEffect(() => {
@@ -37,9 +37,10 @@ export default function AuthCallbackScreen() {
   return (
     <Screen scroll={false}>
       <View style={styles.center}>
-        {timedOut ? (
+        {timedOut || linkError ? (
           <>
             <Text style={styles.label}>Sign-in didn&apos;t finish.</Text>
+            {linkError ? <Text style={styles.label}>{linkError}</Text> : null}
             <Button label="Back to sign in" onPress={() => router.replace('/login')} />
           </>
         ) : (

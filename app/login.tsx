@@ -8,6 +8,7 @@ import { friendlyMessage } from '@/lib/friendlyError';
 import { signInWithOAuth } from '@/lib/oauth';
 import { AppleSignInUnavailableError, signInWithApple, signInWithGoogle } from '@/services/auth';
 import { colors, font, radius } from '@/theme';
+import { webColumn } from '@/web/webColumn';
 
 /**
  * Apple only ships a native "Sign in with Apple" SDK for iOS -- Android has
@@ -62,7 +63,7 @@ export default function LoginScreen() {
   };
 
   return (
-    <Screen scroll={false} safeBottom bottomPadding={24}>
+    <Screen scroll={false} safeBottom bottomPadding={24} contentStyle={webColumn}>
       <View style={styles.blocks}>
         {BLOCKS.map((block) => (
           <View
@@ -80,14 +81,18 @@ export default function LoginScreen() {
       <View style={styles.spacer} />
 
       <View style={styles.providers}>
-        <ProviderButton
-          label={busy === 'apple' ? 'Please wait…' : 'Continue with Apple'}
-          background={colors.text}
-          color={colors.bg}
-          icon={<AppleIcon size={20} color={colors.bg} />}
-          disabled={busy !== null}
-          onPress={withBusy('apple', signInWithAppleAnyPlatform)}
-        />
+        {/* Not on the web yet (no Apple web Services ID set up) -- see
+            src/services/socialAuth.web.ts. */}
+        {Platform.OS !== 'web' ? (
+          <ProviderButton
+            label={busy === 'apple' ? 'Please wait…' : 'Continue with Apple'}
+            background={colors.text}
+            color={colors.bg}
+            icon={<AppleIcon size={20} color={colors.bg} />}
+            disabled={busy !== null}
+            onPress={withBusy('apple', signInWithAppleAnyPlatform)}
+          />
+        ) : null}
         <ProviderButton
           label={busy === 'google' ? 'Please wait…' : 'Continue with Google'}
           background={colors.pastelBlue}
