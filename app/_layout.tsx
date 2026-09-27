@@ -106,6 +106,9 @@ function NativeRootNavigator() {
           {/* No iOS swipe-back: it skipped the "discard this recording?"
               confirmation. Talk has its own Cancel / Done controls. */}
           <Stack.Screen name="talk" options={{ animation: 'slide_from_bottom', gestureEnabled: false }} />
+          {/* Typed notes (Home's "Type instead"). Swipe-back stays on --
+              app/note.tsx asks before an unsaved note is thrown away. */}
+          <Stack.Screen name="note" options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="summary" />
           {/* Tab drill-downs: pushed (swipe back on iOS), tab bar drawn by WithBottomNav. */}
           <Stack.Screen name="topic" options={{ animation: 'slide_from_right' }} />
@@ -176,6 +179,7 @@ function WebRootNavigator() {
         <Stack.Screen name="onboarding" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="talk" />
+        <Stack.Screen name="note" />
         <Stack.Screen name="summary" />
         <Stack.Screen name="topic" />
         <Stack.Screen name="journal" />

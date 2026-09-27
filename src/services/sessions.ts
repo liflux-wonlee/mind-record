@@ -128,6 +128,48 @@ export async function createSession(userId: string, mode: SessionMode): Promise<
   return data;
 }
 
+/** How a session's mode reads to the user -- 'note' is a typed note
+ *  (app/note.tsx), the rest are voice modes shown as their own name. */
+export function sessionModeLabel(mode: string): string {
+  if (mode === 'note') return 'Typed note';
+  return mode ? mode[0].toUpperCase() + mode.slice(1) : mode;
+}
+
+/** The "Delete this recording?" confirmation body -- a typed note never had
+ *  any audio to delete along with it. */
+export function deleteSessionMessage(session: Pick<Session, 'title' | 'mode'>): string {
+  const name = session.title ?? sessionModeLabel(session.mode);
+  return session.mode === 'note'
+    ? `${name} will be permanently deleted. Tasks or ideas it already created are kept.`
+    : `${name} will be permanently deleted, including its audio. Tasks or ideas it already created are kept.`;
+}
+
+/**
+ * A typed note (app/note.tsx) -- a whole record in one insert: the user's
+ * text goes straight into raw_transcript, and it is already ended, so
+ * process-session can analyze it right away without any audio.
+ */
+export async function createNoteSession(userId: string, text: string): Promise<Session> {
+  const { data, error } = await supabase
+    .from('sessions')
+    .insert({ user_id: userId, mode: 'note', raw_transcript: text, ended_at: new Date().toISOString() })
+    .select()
+    .single();
+  if (error) {
+    // 23514 = check violation. sessions_mode_check means the server predates
+    // 20260927000003_session_note_mode.sql -- retrying can't help, so say so
+    // (friendlyMessage would only offer "Please try again").
+    if (error.code === '23514' && /sessions_mode_check/.test(error.message)) {
+      throw new Error("Typed notes aren't available yet -- the app needs a server update. Your text is kept as a draft.");
+    }
+    if (error.code === '23514' && /sessions_note_length/.test(error.message)) {
+      throw new Error('This note is too long to save. Try splitting it into shorter notes.');
+    }
+    throw error;
+  }
+  return data;
+}
+
 export async function endSession(sessionId: string): Promise<void> {
   const { error } = await supabase
     .from('sessions')

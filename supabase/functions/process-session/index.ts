@@ -4,6 +4,10 @@
 // everything back to `sessions` / `tasks` / `memories` / `topics` /
 // `session_topics`.
 //
+// A typed note (sessions.mode = 'note', written in app/note.tsx for when
+// the user can't talk) has no audio: its raw_transcript already holds the
+// user's text, so it skips Whisper and goes straight to the same analysis.
+//
 // Invoked by the app via
 //   supabase.functions.invoke('process-session', { body: { sessionId } })
 // right after src/hooks/useCaptureSession.ts ends a capture session (see
@@ -32,6 +36,10 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // auto-assigned) -- the app asks the user to confirm it on Summary instead
 // of silently filing something AI wasn't sure about.
 const TOPIC_CONFIDENCE_THRESHOLD = 0.6;
+// A typed note goes to the analysis in one call, so it is capped (same
+// limit as app/note.tsx's input and the sessions_note_length check) --
+// audio is bounded by Whisper's file limit, typed text needs its own.
+const NOTE_MAX_CHARS = 20000;
 // Same idea, for a task's list_name -- see resolveList.
 const LIST_CONFIDENCE_THRESHOLD = 0.6;
 
@@ -270,7 +278,28 @@ Deno.serve(async (req) => {
         .order('created_at', { ascending: true });
       if (attachmentsError) throw attachmentsError;
 
-      if (!attachments || attachments.length === 0) {
+      // A typed note (mode 'note', see app/note.tsx) has no audio at all --
+      // the user wrote raw_transcript themselves, so it IS the transcript.
+      // No Whisper call, so no transcribe usage event either, and
+      // detectedLanguage stays null: the analysis step then matches the
+      // language of the text itself. Only a capture with neither audio nor
+      // text is an error.
+      const typedText = (session.raw_transcript ?? '').trim();
+      if ((!attachments || attachments.length === 0) && typedText) {
+        if (typedText.length > NOTE_MAX_CHARS) {
+          // Retrying can't help, so say why instead of failing the analysis
+          // (and billing it) on every Retry.
+          await db
+            .from('sessions')
+            .update({
+              processing_status: 'error',
+              processing_error: `This note is too long to analyze (limit ${NOTE_MAX_CHARS.toLocaleString('en-US')} characters).`,
+            })
+            .eq('id', sessionId);
+          return json({ error: 'Note is too long to process.' }, 400);
+        }
+        transcript = typedText;
+      } else if (!attachments || attachments.length === 0) {
         await db
           .from('sessions')
           .update({
@@ -279,21 +308,21 @@ Deno.serve(async (req) => {
           })
           .eq('id', sessionId);
         return json({ error: 'No audio to process.' }, 400);
+      } else {
+        const transcriptParts: string[] = [];
+        for (const attachment of attachments) {
+          const { data: file, error: downloadError } = await db.storage
+            .from('recordings')
+            .download(attachment.storage_path);
+          if (downloadError) throw downloadError;
+          const result = await transcribeAudio(file, attachment.file_name);
+          transcribedSeconds += result.durationSeconds;
+          transcribedBytes += result.bytes;
+          if (result.text.trim()) transcriptParts.push(result.text.trim());
+          if (!detectedLanguage && result.language) detectedLanguage = result.language;
+        }
+        transcript = transcriptParts.join('\n\n');
       }
-
-      const transcriptParts: string[] = [];
-      for (const attachment of attachments) {
-        const { data: file, error: downloadError } = await db.storage
-          .from('recordings')
-          .download(attachment.storage_path);
-        if (downloadError) throw downloadError;
-        const result = await transcribeAudio(file, attachment.file_name);
-        transcribedSeconds += result.durationSeconds;
-        transcribedBytes += result.bytes;
-        if (result.text.trim()) transcriptParts.push(result.text.trim());
-        if (!detectedLanguage && result.language) detectedLanguage = result.language;
-      }
-      transcript = transcriptParts.join('\n\n');
     }
 
     if (transcribedSeconds > 0 || transcribedBytes > 0) {

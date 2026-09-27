@@ -51,13 +51,14 @@ export async function listTasksPendingTopicReview(userId: string): Promise<Task[
 
 export async function createTask(
   userId: string,
-  input: { title: string; dueDate?: string | null; listId?: string | null }
+  input: { title: string; description?: string | null; dueDate?: string | null; listId?: string | null }
 ): Promise<Task> {
   const { data, error } = await supabase
     .from('tasks')
     .insert({
       user_id: userId,
       title: input.title,
+      description: input.description ?? null,
       due_date: input.dueDate ?? null,
       list_id: input.listId ?? null,
     })

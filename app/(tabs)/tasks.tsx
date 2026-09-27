@@ -81,6 +81,7 @@ export default function TasksScreen() {
   // otherwise the id of the one list currently selected.
   const [selectedListId, setSelectedListId] = useState<string>('all');
   const [editing, setEditing] = useState<Task | null>(null);
+  const [newTaskSeed, setNewTaskSeed] = useState<NewTaskSeed | null>(null);
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
   const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
 
@@ -150,11 +151,30 @@ export default function TasksScreen() {
     try {
       await tasksState.add(title, undefined, selectedListId !== 'all' ? selectedListId : undefined);
       setNewTitle('');
+      setFilter('open');
     } catch (e) {
       Alert.alert('Could not add task', friendlyMessage(e, 'Please try again.'));
     } finally {
       setAdding(false);
     }
+  };
+
+  const openNewTask = (fromQuickAdd: boolean) =>
+    setNewTaskSeed({
+      title: fromQuickAdd ? newTitle.trim() : '',
+      listId: selectedListId !== 'all' ? selectedListId : null,
+      fromQuickAdd,
+    });
+
+  // Errors propagate to NewTaskSheet, which alerts and stays open.
+  const saveNewTask = async (input: NewTaskInput) => {
+    await tasksState.add(input.title, input.dueDate, input.listId, input.description);
+    if (newTaskSeed?.fromQuickAdd) setNewTitle('');
+    // Make sure the new task is on screen: it's open, and in the list shown
+    // (or under All, when it was saved with no list).
+    setFilter('open');
+    if (selectedListId !== 'all' && selectedListId !== input.listId) setSelectedListId(input.listId ?? 'all');
+    setNewTaskSeed(null);
   };
 
   const openManageList = (list: TaskList) => {
@@ -293,7 +313,19 @@ export default function TasksScreen() {
         <View style={{ height: 15 }} />
         <Text style={styles.openCount}>{tasksState.openCount} open</Text>
       </View>
-      <Text style={styles.title}>Tasks</Text>
+      {/* paddingRight keeps the pill clear of Screen's Account button,
+          same as the head row above. */}
+      <View style={[styles.titleRow, { paddingRight: 44 }]}>
+        <Text style={[styles.title, { marginTop: 0, marginBottom: 0 }]}>Tasks</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="New task"
+          onPress={() => openNewTask(false)}
+          style={styles.newTaskPill}
+        >
+          <Text style={styles.newTaskPillText}>+ New task</Text>
+        </Pressable>
+      </View>
 
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.listChipRow} contentContainerStyle={{ gap: 8 }}>
         <ListChip label="All" selected={selectedListId === 'all'} onPress={() => setSelectedListId('all')} />
@@ -320,6 +352,17 @@ export default function TasksScreen() {
           returnKeyType="done"
           editable={!adding}
         />
+        {/* Expands whatever's typed so far into the full New task sheet
+            (notes, due date, list). */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add with details"
+          onPress={() => openNewTask(true)}
+          disabled={adding}
+          style={styles.detailsButton}
+        >
+          <Text style={styles.detailsButtonText}>Details</Text>
+        </Pressable>
         <Button
           label={adding ? '…' : 'Add'}
           onPress={submitNewTask}
@@ -402,6 +445,8 @@ export default function TasksScreen() {
           {visibleTasks.length > 0 ? <Text style={styles.hint}>Hold a task to view or edit its details</Text> : null}
         </>
       )}
+
+      <NewTaskSheet seed={newTaskSeed} lists={lists} onClose={() => setNewTaskSeed(null)} onSave={saveNewTask} />
 
       <TaskEditSheet
         task={editing}
@@ -793,10 +838,7 @@ function TaskEditSheet({
 
   const save = async () => {
     if (!title.trim() || saving) return;
-    if (dueDate && !parseLocalDate(dueDate)) {
-      Alert.alert('Check the date', 'Use the format YYYY-MM-DD, e.g. 2026-09-19.');
-      return;
-    }
+    if (!checkDueDate(dueDate)) return;
     setSaving(true);
     try {
       await onSave({ title: title.trim(), description: description.trim() || null, dueDate });
@@ -819,10 +861,6 @@ function TaskEditSheet({
     ]);
   };
 
-  const today = isoDate(new Date());
-  const tomorrow = isoDate(new Date(Date.now() + 86_400_000));
-  const nextWeek = isoDate(new Date(Date.now() + 7 * 86_400_000));
-
   return (
     <BottomSheet visible={task !== null} onClose={onClose} title="Edit task" maxHeight="85%">
           <TextInput
@@ -833,16 +871,7 @@ function TaskEditSheet({
             placeholderTextColor={colors.neutral600}
           />
 
-          <Text style={styles.fieldLabel}>Details</Text>
-          <TextInput
-            style={[styles.input, styles.descriptionInput]}
-            value={description}
-            onChangeText={setDescription}
-            placeholder="Add notes for this task"
-            placeholderTextColor={colors.neutral600}
-            multiline
-            textAlignVertical="top"
-          />
+          <NotesField label="Details" value={description} onChange={setDescription} />
 
           <Text style={styles.fieldLabel}>List</Text>
           <View style={styles.listFieldRow}>
@@ -856,21 +885,7 @@ function TaskEditSheet({
             />
           </View>
 
-          <Text style={styles.fieldLabel}>Due date</Text>
-          <View style={styles.dateRow}>
-            <DateChip label="No date" selected={dueDate === null} onPress={() => setDueDate(null)} />
-            <DateChip label="Today" selected={dueDate === today} onPress={() => setDueDate(today)} />
-            <DateChip label="Tomorrow" selected={dueDate === tomorrow} onPress={() => setDueDate(tomorrow)} />
-            <DateChip label="+1 week" selected={dueDate === nextWeek} onPress={() => setDueDate(nextWeek)} />
-          </View>
-          <TextInput
-            style={styles.input}
-            value={dueDate ?? ''}
-            onChangeText={(v) => setDueDate(v.trim() || null)}
-            placeholder="Or type YYYY-MM-DD"
-            placeholderTextColor={colors.neutral600}
-            keyboardType="numbers-and-punctuation"
-          />
+          <DueDateField value={dueDate} onChange={setDueDate} />
 
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
             {task?.source_session_id ? (
@@ -925,6 +940,170 @@ function TaskEditSheet({
   );
 }
 
+/** Alerts and returns false for a typed due date that isn't a real YYYY-MM-DD. */
+function checkDueDate(dueDate: string | null): boolean {
+  if (dueDate && !parseLocalDate(dueDate)) {
+    Alert.alert('Check the date', 'Use the format YYYY-MM-DD, e.g. 2026-09-19.');
+    return false;
+  }
+  return true;
+}
+
+// The field blocks shared by the Edit task and New task sheets, so the two
+// stay identical to fill in.
+
+function NotesField({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <TextInput
+        style={[styles.input, styles.descriptionInput]}
+        value={value}
+        onChangeText={onChange}
+        placeholder="Add notes for this task"
+        placeholderTextColor={colors.neutral600}
+        multiline
+        textAlignVertical="top"
+      />
+    </>
+  );
+}
+
+function DueDateField({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
+  const today = isoDate(new Date());
+  const tomorrow = isoDate(new Date(Date.now() + 86_400_000));
+  const nextWeek = isoDate(new Date(Date.now() + 7 * 86_400_000));
+  return (
+    <>
+      <Text style={styles.fieldLabel}>Due date</Text>
+      <View style={styles.dateRow}>
+        <DateChip label="No date" selected={value === null} onPress={() => onChange(null)} />
+        <DateChip label="Today" selected={value === today} onPress={() => onChange(today)} />
+        <DateChip label="Tomorrow" selected={value === tomorrow} onPress={() => onChange(tomorrow)} />
+        <DateChip label="+1 week" selected={value === nextWeek} onPress={() => onChange(nextWeek)} />
+      </View>
+      <TextInput
+        style={styles.input}
+        value={value ?? ''}
+        onChangeText={(v) => onChange(v.trim() || null)}
+        placeholder="Or type YYYY-MM-DD"
+        placeholderTextColor={colors.neutral600}
+        keyboardType="numbers-and-punctuation"
+      />
+    </>
+  );
+}
+
+type NewTaskInput = { title: string; description: string | null; dueDate: string | null; listId: string | null };
+/** What the New task sheet opens with: a title typed into the quick-add row (or ''), and the list to start in. */
+type NewTaskSeed = { title: string; listId: string | null; fromQuickAdd: boolean };
+
+/** Create a task by typing -- the same fields as Edit task, plus a list picker. */
+function NewTaskSheet({
+  seed,
+  lists,
+  onClose,
+  onSave,
+}: {
+  seed: NewTaskSeed | null;
+  lists: TaskList[];
+  onClose: () => void;
+  onSave: (input: NewTaskInput) => Promise<void>;
+}) {
+  const [title, setTitle] = useState('');
+  const [description, setDescription] = useState('');
+  const [dueDate, setDueDate] = useState<string | null>(null);
+  const [listId, setListId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Fresh fields every time the sheet opens; a failed save leaves them as typed.
+  React.useEffect(() => {
+    if (seed) {
+      setTitle(seed.title);
+      setDescription('');
+      setDueDate(null);
+      setListId(seed.listId);
+    }
+  }, [seed]);
+
+  // Backdrop, Android back and Cancel all come through here: never while a
+  // save is in flight (a failure would have nowhere left to keep the fields),
+  // and only after asking when something was typed.
+  const close = () => {
+    if (saving) return;
+    const typed = (title.trim() && title.trim() !== seed?.title.trim()) || description.trim();
+    if (!typed) {
+      onClose();
+      return;
+    }
+    Alert.alert('Discard this task?', 'What you typed will be lost.', [
+      { text: 'Keep editing', style: 'cancel' },
+      { text: 'Discard', style: 'destructive', onPress: onClose },
+    ]);
+  };
+
+  const save = async () => {
+    if (!title.trim() || saving) return;
+    if (!checkDueDate(dueDate)) return;
+    setSaving(true);
+    try {
+      await onSave({ title: title.trim(), description: description.trim() || null, dueDate, listId });
+    } catch (e) {
+      Alert.alert('Could not add task', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <BottomSheet
+      visible={seed !== null}
+      onClose={close}
+      title="New task"
+      maxHeight="85%"
+      // Pinned, not at the end of the scrolling fields: with the title's
+      // keyboard up, Save would otherwise be scrolled out of sight.
+      footer={
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10 }}>
+          <View style={{ flex: 1 }} />
+          <Button label="Cancel" variant="ghost" onPress={close} disabled={saving} />
+          <Button
+            label={saving ? 'Saving…' : 'Save'}
+            variant="save"
+            disabled={saving || !title.trim()}
+            onPress={save}
+            style={{ paddingHorizontal: 20 }}
+          />
+        </View>
+      }
+    >
+      <TextInput
+        style={styles.input}
+        value={title}
+        onChangeText={setTitle}
+        placeholder="What needs doing?"
+        placeholderTextColor={colors.neutral600}
+        autoFocus
+        returnKeyType="done"
+        onSubmitEditing={save}
+        editable={!saving}
+      />
+
+      <NotesField label="Notes" value={description} onChange={setDescription} />
+
+      <DueDateField value={dueDate} onChange={setDueDate} />
+
+      <Text style={styles.fieldLabel}>List</Text>
+      <View style={styles.dateRow}>
+        <ListChip label="No list" selected={listId === null} onPress={() => setListId(null)} muted />
+        {lists.map((l) => (
+          <ListChip key={l.id} label={l.name} selected={listId === l.id} onPress={() => setListId(l.id)} />
+        ))}
+      </View>
+    </BottomSheet>
+  );
+}
+
 function DateChip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
   return (
     <Pressable
@@ -952,6 +1131,38 @@ const styles = StyleSheet.create({
     ...h2,
     marginTop: 6,
     marginBottom: 12,
+  },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 6,
+    marginBottom: 12,
+  },
+  newTaskPill: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.pastelGreen,
+  },
+  newTaskPillText: {
+    fontFamily: font.semibold,
+    fontSize: 13,
+    color: colors.text,
+  },
+  detailsButton: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.pastelLavender,
+  },
+  detailsButtonText: {
+    fontFamily: font.semibold,
+    fontSize: 13,
+    color: colors.text,
   },
   listChipRow: {
     marginBottom: 12,

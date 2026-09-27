@@ -39,6 +39,22 @@ export function MicIcon(props: IconProps) {
   );
 }
 
+export function KeyboardIcon(props: IconProps) {
+  return (
+    <Stroke {...props}>
+      <Rect width="20" height="16" x="2" y="4" rx="2" />
+      <Path d="M6 8h.01" />
+      <Path d="M10 8h.01" />
+      <Path d="M14 8h.01" />
+      <Path d="M18 8h.01" />
+      <Path d="M8 12h.01" />
+      <Path d="M12 12h.01" />
+      <Path d="M16 12h.01" />
+      <Path d="M7 16h10" />
+    </Stroke>
+  );
+}
+
 export function HomeIcon(props: IconProps) {
   return (
     <Stroke {...props}>

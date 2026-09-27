@@ -9,8 +9,10 @@ import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import {
   deleteSession,
+  deleteSessionMessage,
   listSessionsInMonth,
   listSessionsPage,
+  sessionModeLabel,
   type Session,
   type SessionsPageCursor,
 } from '@/services/sessions';
@@ -29,10 +31,6 @@ const CARD_COLORS = [
 ];
 function cardColor(i: number): string {
   return CARD_COLORS[i % CARD_COLORS.length];
-}
-
-function capitalize(s: string): string {
-  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
 /**
@@ -166,8 +164,8 @@ export default function RecordsScreen() {
 
   const confirmDeleteSession = (session: Session, onDone: () => void) => {
     Alert.alert(
-      'Delete this recording?',
-      `${session.title ?? session.mode} will be permanently deleted, including its audio. Tasks or ideas it already created are kept.`,
+      session.mode === 'note' ? 'Delete this note?' : 'Delete this recording?',
+      deleteSessionMessage(session),
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -293,7 +291,7 @@ export default function RecordsScreen() {
                     {new Date(session.started_at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
                   </Text>
                   <View style={styles.convoBody}>
-                    <CardKicker>{capitalize(session.mode)}</CardKicker>
+                    <CardKicker>{sessionModeLabel(session.mode)}</CardKicker>
                     <Text style={styles.convoTitle}>{session.title ?? session.summary ?? 'Untitled session'}</Text>
                     {session.processing_status !== 'done' ? <Text style={styles.convoMeta}>Processing…</Text> : null}
                   </View>
@@ -328,7 +326,7 @@ export default function RecordsScreen() {
                     {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                   </Text>
                   <View style={styles.convoBody}>
-                    <CardKicker>{capitalize(session.mode)}</CardKicker>
+                    <CardKicker>{sessionModeLabel(session.mode)}</CardKicker>
                     <Text style={styles.convoTitle}>{session.title ?? session.summary ?? 'Untitled session'}</Text>
                     {session.processing_status !== 'done' ? <Text style={styles.convoMeta}>Processing…</Text> : null}
                   </View>

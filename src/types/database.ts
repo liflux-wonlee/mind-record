@@ -15,7 +15,7 @@
 
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
-export type SessionMode = 'capture' | 'conversation' | 'driving';
+export type SessionMode = 'capture' | 'conversation' | 'driving' | 'note';
 export type SessionProcessingStatus = 'pending' | 'transcribing' | 'analyzing' | 'done' | 'error';
 /**
  * Full structured breakdown of a recording (see supabase/functions/process-session)

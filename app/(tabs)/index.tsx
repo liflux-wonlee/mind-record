@@ -3,14 +3,20 @@ import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
-import { MicIcon } from '@/components/Icon';
+import { KeyboardIcon, MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useRecentSessions } from '@/hooks/useRecentSessions';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
-import { deleteSession, listSessionsForDay, type Session } from '@/services/sessions';
+import {
+  deleteSession,
+  deleteSessionMessage,
+  listSessionsForDay,
+  sessionModeLabel,
+  type Session,
+} from '@/services/sessions';
 import { colors, font, h2, radius } from '@/theme';
 
 const RECENT_LIMIT = 10;
@@ -65,11 +71,16 @@ export default function HomeScreen() {
     router.push('/talk');
   };
 
+  /** For when talking out loud isn't an option -- see app/note.tsx. */
+  const startNote = () => {
+    router.push('/note');
+  };
+
   const confirmDeleteSession = (session: Session) => {
     setMenuSession(null);
     Alert.alert(
-      'Delete this recording?',
-      `${session.title ?? session.mode} will be permanently deleted, including its audio. Tasks or ideas it already created are kept.`,
+      session.mode === 'note' ? 'Delete this note?' : 'Delete this recording?',
+      deleteSessionMessage(session),
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -108,6 +119,15 @@ export default function HomeScreen() {
           <MicIcon size={56} color={colors.bg} />
         </Pressable>
         <Text style={styles.micLabel}>Tap to talk</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Type instead"
+          onPress={startNote}
+          style={({ pressed }) => [styles.typePill, pressed && { opacity: 0.75 }]}
+        >
+          <KeyboardIcon size={18} color={colors.saveText} />
+          <Text style={styles.typePillText}>Type instead</Text>
+        </Pressable>
       </View>
 
       {todayCount !== null && todayCount > 0 ? (
@@ -152,7 +172,7 @@ export default function HomeScreen() {
                 ]}
               >
                 <Text style={styles.continueTitle} numberOfLines={1}>
-                  {session.title ?? session.mode}
+                  {session.title ?? sessionModeLabel(session.mode)}
                 </Text>
                 <Text style={styles.continueMeta}>
                   {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
@@ -167,7 +187,7 @@ export default function HomeScreen() {
       <BottomSheet
         visible={menuSession !== null}
         onClose={() => setMenuSession(null)}
-        title={menuSession?.title ?? menuSession?.mode ?? ''}
+        title={menuSession ? menuSession.title ?? sessionModeLabel(menuSession.mode) : ''}
         titleLines={1}
       >
         <View style={{ gap: 10 }}>
@@ -224,6 +244,20 @@ const styles = StyleSheet.create({
     letterSpacing: 11 * 0.08,
     textTransform: 'uppercase',
     color: colors.neutral600,
+  },
+  typePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 18,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.pastelBlue,
+  },
+  typePillText: {
+    fontFamily: font.semibold,
+    fontSize: 14,
+    color: colors.saveText,
   },
   todayRow: {
     marginTop: 18,

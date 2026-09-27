@@ -17,7 +17,7 @@ import {
   listMemoriesUnclassified,
   type Memory,
 } from '@/services/memories';
-import { deleteSession, type Session } from '@/services/sessions';
+import { deleteSession, deleteSessionMessage, sessionModeLabel, type Session } from '@/services/sessions';
 import {
   assignTaskTopic,
   clearTaskTopic,
@@ -65,10 +65,6 @@ const CARD_COLORS = [
 ];
 function cardColor(i: number): string {
   return CARD_COLORS[i % CARD_COLORS.length];
-}
-
-function capitalize(s: string): string {
-  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }
 
 function truncate(text: string, max = 90): string {
@@ -218,8 +214,8 @@ function TopicDetailScreen() {
 
   const confirmDeleteSession = (session: Session) => {
     Alert.alert(
-      'Delete this recording?',
-      `${session.title ?? session.mode} will be permanently deleted, including its audio. Tasks or ideas it already created are kept.`,
+      session.mode === 'note' ? 'Delete this note?' : 'Delete this recording?',
+      deleteSessionMessage(session),
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -266,7 +262,7 @@ function TopicDetailScreen() {
 
   const sessionMenu = (session: Session) => {
     setItemMenu({
-      title: session.title ?? capitalize(session.mode),
+      title: session.title ?? sessionModeLabel(session.mode),
       actions: [
         {
           label: 'Share',
@@ -274,10 +270,10 @@ function TopicDetailScreen() {
           onPress: () => {
             closeItemMenu();
             setShareContent({
-              kicker: capitalize(session.mode),
-              title: session.title ?? 'Recording',
+              kicker: sessionModeLabel(session.mode),
+              title: session.title ?? (session.mode === 'note' ? 'Note' : 'Recording'),
               body: [
-                session.title ?? 'Untitled recording',
+                session.title ?? (session.mode === 'note' ? 'Untitled note' : 'Untitled recording'),
                 new Date(session.started_at).toLocaleDateString(undefined, {
                   year: 'numeric',
                   month: 'short',
@@ -290,7 +286,7 @@ function TopicDetailScreen() {
             });
           },
         },
-        moveAction({ kind: 'session', id: session.id, title: session.title ?? capitalize(session.mode), currentTopicId: id ?? null }),
+        moveAction({ kind: 'session', id: session.id, title: session.title ?? sessionModeLabel(session.mode), currentTopicId: id ?? null }),
         {
           label: 'Delete',
           tone: 'delete',
@@ -459,7 +455,7 @@ function TopicDetailScreen() {
                   onLongPress={() => sessionMenu(session)}
                   style={[styles.entryRow, { backgroundColor: cardColor(i) }]}
                 >
-                  <CardKicker>{capitalize(session.mode)}</CardKicker>
+                  <CardKicker>{sessionModeLabel(session.mode)}</CardKicker>
                   <Text style={styles.entryTitle} numberOfLines={1}>
                     {session.title ?? session.summary ?? 'Untitled session'}
                   </Text>

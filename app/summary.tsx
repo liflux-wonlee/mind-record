@@ -247,11 +247,21 @@ type StepState = 'done' | 'active' | 'pending';
  * already been uploaded (useCaptureSession/useConversationSession await
  * that before ever navigating here).
  */
-function ProcessingSteps({ status }: { status: Session['processing_status'] | undefined }) {
+function ProcessingSteps({
+  status,
+  isNote,
+}: {
+  status: Session['processing_status'] | undefined;
+  /** A typed note (app/note.tsx) has no audio -- nothing was uploaded or transcribed. */
+  isNote: boolean;
+}) {
   const transcribingDone = status === 'analyzing';
   const steps: { label: string; state: StepState }[] = [
-    { label: 'Uploading', state: 'done' },
-    { label: 'Transcribing your recording', state: transcribingDone ? 'done' : 'active' },
+    { label: isNote ? 'Saved' : 'Uploading', state: 'done' },
+    {
+      label: isNote ? 'Reading your note' : 'Transcribing your recording',
+      state: transcribingDone ? 'done' : 'active',
+    },
     { label: 'Finding tasks, ideas & topics', state: transcribingDone ? 'active' : 'pending' },
   ];
   return (
@@ -312,7 +322,7 @@ export default function SummaryScreen() {
   }, [picking]);
 
   const recordingHeader = (s: Session): string => {
-    const title = s.title || 'Untitled recording';
+    const title = s.title || (s.mode === 'note' ? 'Untitled note' : 'Untitled recording');
     const date = new Date(s.started_at).toLocaleDateString(undefined, {
       year: 'numeric',
       month: 'short',
@@ -335,8 +345,8 @@ export default function SummaryScreen() {
     if (tab === 'transcript') {
       if (!session.raw_transcript) return;
       setShareContent({
-        kicker: 'Recording · Transcript',
-        title: session.title || 'Recording',
+        kicker: session.mode === 'note' ? 'Your note' : 'Recording · Transcript',
+        title: session.title || (session.mode === 'note' ? 'Note' : 'Recording'),
         body: `${header}\n\n${session.raw_transcript}`,
       });
       return;
@@ -348,7 +358,8 @@ export default function SummaryScreen() {
       ? `Notable quotes\n${session.notable_quotes.map((q) => `"${q}"`).join('\n')}`
       : '';
     const body = [header, session.summary, outlineText, quotesText].filter(Boolean).join('\n\n');
-    setShareContent({ kicker: 'Recording · Summary', title: session.title || 'Recording', body });
+    const noun = session.mode === 'note' ? 'Note' : 'Recording';
+    setShareContent({ kicker: `${noun} · Summary`, title: session.title || noun, body });
   };
 
   const saveSummaryEdit = async (text: string) => {
@@ -495,6 +506,7 @@ export default function SummaryScreen() {
       topicSuggestion: m.topic_suggestion,
     })),
   ];
+  const isNote = session?.mode === 'note';
   const processing =
     !!sessionId && session?.processing_status !== 'done' && session?.processing_status !== 'error';
   const done = !!sessionId && !loadError && session?.processing_status === 'done';
@@ -628,7 +640,7 @@ export default function SummaryScreen() {
               onPress={() => setTab('summary')}
             />
             <TabOption
-              label="Transcript"
+              label={isNote ? 'Your note' : 'Transcript'}
               color={colors.pastelBlue}
               selected={tab === 'transcript'}
               onPress={() => setTab('transcript')}
@@ -636,7 +648,7 @@ export default function SummaryScreen() {
           </View>
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Share this recording"
+            accessibilityLabel={isNote ? 'Share this note' : 'Share this recording'}
             onPress={shareCurrentView}
             style={styles.shareTabButton}
             hitSlop={8}
@@ -664,15 +676,23 @@ export default function SummaryScreen() {
         </View>
       ) : processing ? (
         <>
-          <ProcessingSteps status={session?.processing_status} />
+          <ProcessingSteps status={session?.processing_status} isNote={isNote} />
           <Text style={[styles.footnote, { textAlign: 'center' }]}>
             You can leave this screen — it keeps processing in the background.
           </Text>
         </>
       ) : session?.processing_status === 'error' ? (
         <View style={[styles.summaryCard, { backgroundColor: colors.pastelPink }]}>
-          <Kicker style={{ color: colors.accent700 }}>Couldn&apos;t process this recording</Kicker>
-          <Text style={styles.summaryText}>{session.processing_error ?? 'Something went wrong.'}</Text>
+          <Kicker style={{ color: colors.accent700 }}>
+            {isNote ? "Couldn't process this note" : "Couldn't process this recording"}
+          </Kicker>
+          <Text style={styles.summaryText}>
+            {/* An out-of-date process-session reads a note as audio-less --
+                never show audio wording for a typed note. */}
+            {isNote && /^No audio/.test(session.processing_error ?? '')
+              ? 'The server needs an update before notes can be processed. Try again later.'
+              : (session.processing_error ?? 'Something went wrong.')}
+          </Text>
           <Button
             label="Retry"
             onPress={retryProcessing}
@@ -794,7 +814,9 @@ export default function SummaryScreen() {
             </>
           ) : (session?.outline ?? []).length === 0 ? (
             <Text style={styles.footnote}>
-              Nothing to file as a task or idea — tap Transcript to see the full recording.
+              {isNote
+                ? 'Nothing to file as a task or idea — tap Your note to see everything you wrote.'
+                : 'Nothing to file as a task or idea — tap Transcript to see the full recording.'}
             </Text>
           ) : null}
         </>
@@ -811,9 +833,10 @@ export default function SummaryScreen() {
           style={[styles.actionButton, { backgroundColor: colors.pastelGreen }]}
           textStyle={styles.pastelText}
         />
+        {/* A note's natural next step is another note, not the mic. */}
         <Button
-          label="New recording"
-          onPress={() => router.replace('/talk')}
+          label={isNote ? 'New note' : 'New recording'}
+          onPress={() => router.replace(isNote ? '/note' : '/talk')}
           style={[styles.actionButton, { backgroundColor: colors.pastelLavender }]}
           textStyle={styles.pastelText}
         />

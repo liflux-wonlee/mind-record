@@ -11,7 +11,9 @@
  * adjustResize is defeated by statusBarTranslucent), so the sheet sits in
  * a KeyboardAvoidingView -- without it the text inputs in the rename /
  * new-topic / task-edit sheets were hidden behind the keyboard. The body
- * scrolls, so a sheet taller than maxHeight keeps its last buttons reachable.
+ * scrolls, so a sheet taller than maxHeight keeps its last buttons reachable;
+ * a form whose Save must stay visible above the keyboard passes it as
+ * `footer`, which sits under the scrolling body instead of inside it.
  */
 import React from 'react';
 import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
@@ -28,6 +30,7 @@ export function BottomSheet({
   /** Override the sheet's own background -- e.g. a pale grey for an item
    *  action menu, distinct from the app's default cream. */
   backgroundColor = colors.bg,
+  footer,
   children,
 }: {
   visible: boolean;
@@ -37,6 +40,8 @@ export function BottomSheet({
   titleLines?: number;
   maxHeight?: `${number}%`;
   backgroundColor?: string;
+  /** Pinned below the scrolling body -- e.g. a form's Cancel/Save row. */
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -58,6 +63,7 @@ export function BottomSheet({
           titleLines={titleLines}
           maxHeight={maxHeight}
           backgroundColor={backgroundColor}
+          footer={footer}
         >
           {children}
         </SheetBody>
@@ -72,6 +78,7 @@ function SheetBody({
   titleLines,
   maxHeight,
   backgroundColor,
+  footer,
   children,
 }: {
   onClose: () => void;
@@ -79,6 +86,7 @@ function SheetBody({
   titleLines?: number;
   maxHeight: `${number}%`;
   backgroundColor: string;
+  footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
   const insets = useSafeAreaInsets();
@@ -107,6 +115,7 @@ function SheetBody({
           >
             {children}
           </ScrollView>
+          {footer}
         </Pressable>
       </Pressable>
     </KeyboardAvoidingView>
