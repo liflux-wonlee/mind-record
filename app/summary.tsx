@@ -89,6 +89,9 @@ function EditTextSheet({
         value={value}
         onChangeText={setValue}
         multiline
+        // Grows instead of scrolling inside itself, so a drag on it scrolls
+        // the sheet (a scrollable field keeps the touch on Android/iOS).
+        scrollEnabled={false}
         autoFocus
         textAlignVertical="top"
       />
@@ -935,8 +938,9 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   editInput: {
+    // No maxHeight: the field grows with its text (scrollEnabled={false})
+    // and the sheet's own ScrollView scrolls a long summary.
     minHeight: 120,
-    maxHeight: 320,
     padding: 12,
     fontFamily: font.regular,
     fontSize: 14,

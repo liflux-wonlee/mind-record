@@ -16,7 +16,7 @@
  * `footer`, which sits under the scrolling body instead of inside it.
  */
 import React from 'react';
-import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { initialWindowMetrics, SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { colors, font } from '@/theme';
@@ -95,38 +95,36 @@ function SheetBody({
   const bottomInset = Math.max(insets.bottom, initialWindowMetrics?.insets.bottom ?? 0);
   return (
     <KeyboardAvoidingView behavior="padding" style={styles.flex}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable
-          style={[styles.sheet, { maxHeight, backgroundColor, paddingBottom: 24 + bottomInset }]}
-          onPress={(e) => e.stopPropagation()}
+      {/* The backdrop is a sibling behind the sheet, not its parent. It
+          used to wrap the sheet, which then had to sit in a Pressable of its
+          own to swallow taps -- so every drag in the sheet began as that
+          Pressable's touch and had to be won back by the ScrollView. As a
+          sibling, a touch on the sheet never reaches the backdrop at all. */}
+      <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close" />
+      <View style={[styles.sheet, { maxHeight, backgroundColor, paddingBottom: 24 + bottomInset }]}>
+        <Text style={styles.title} numberOfLines={titleLines}>
+          {title}
+        </Text>
+        {/* Scrolls when the content is taller than maxHeight (e.g. Edit task
+            on a small screen) -- otherwise the overflow was drawn past the
+            sheet's bottom padding, under the navigation bar. */}
+        <ScrollView
+          style={styles.body}
+          bounces={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.title} numberOfLines={titleLines}>
-            {title}
-          </Text>
-          {/* Scrolls when the content is taller than maxHeight (e.g. Edit task
-              on a small screen) -- otherwise the overflow was drawn past the
-              sheet's bottom padding, under the navigation bar. */}
-          <ScrollView
-            style={styles.body}
-            bounces={false}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="interactive"
-            showsVerticalScrollIndicator={false}
-          >
-            {children}
-          </ScrollView>
-          {footer}
-        </Pressable>
-      </Pressable>
+          {children}
+        </ScrollView>
+        {footer}
+      </View>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   flex: {
-    flex: 1,
-  },
-  backdrop: {
     flex: 1,
     backgroundColor: 'rgba(32,30,29,0.5)',
     justifyContent: 'flex-end',

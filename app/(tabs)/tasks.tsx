@@ -30,6 +30,20 @@ type ListPickTarget = { taskId: string; onDone?: () => void };
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * A task title in the Edit/New task sheets wraps onto more lines instead of
+ * scrolling sideways. On Android a text field that can scroll (a long
+ * single-line title can, horizontally) keeps the touch for itself, so a
+ * drag that started on it never scrolled the sheet -- which is why the
+ * sheet only scrolled "sometimes". Return still means done, not a new line.
+ */
+const SHEET_TITLE_INPUT_PROPS = {
+  multiline: true,
+  scrollEnabled: false,
+  submitBehavior: 'blurAndSubmit',
+  returnKeyType: 'done',
+} as const;
+
 const PICKER_COLORS = [
   colors.pastelGreen,
   colors.pastelBlue,
@@ -327,7 +341,12 @@ export default function TasksScreen() {
         </Pressable>
       </View>
 
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.listChipRow} contentContainerStyle={{ gap: 8 }}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.listChipRow}
+        contentContainerStyle={styles.listChipContent}
+      >
         <ListChip label="All" selected={selectedListId === 'all'} onPress={() => setSelectedListId('all')} />
         {lists.map((l) => (
           <ListChip
@@ -864,11 +883,12 @@ function TaskEditSheet({
   return (
     <BottomSheet visible={task !== null} onClose={onClose} title="Edit task" maxHeight="85%">
           <TextInput
-            style={styles.input}
+            style={[styles.input, styles.titleInput]}
             value={title}
             onChangeText={setTitle}
             placeholder="Task title"
             placeholderTextColor={colors.neutral600}
+            {...SHEET_TITLE_INPUT_PROPS}
           />
 
           <NotesField label="Details" value={description} onChange={setDescription} />
@@ -963,6 +983,9 @@ function NotesField({ label, value, onChange }: { label: string; value: string; 
         placeholder="Add notes for this task"
         placeholderTextColor={colors.neutral600}
         multiline
+        // Grows with its text instead of scrolling inside itself, so a drag
+        // that starts on it scrolls the sheet (see SHEET_TITLE_INPUT_PROPS).
+        scrollEnabled={false}
         textAlignVertical="top"
       />
     </>
@@ -1078,15 +1101,15 @@ function NewTaskSheet({
       }
     >
       <TextInput
-        style={styles.input}
+        style={[styles.input, styles.titleInput]}
         value={title}
         onChangeText={setTitle}
         placeholder="What needs doing?"
         placeholderTextColor={colors.neutral600}
         autoFocus
-        returnKeyType="done"
         onSubmitEditing={save}
         editable={!saving}
+        {...SHEET_TITLE_INPUT_PROPS}
       />
 
       <NotesField label="Notes" value={description} onChange={setDescription} />
@@ -1165,7 +1188,15 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   listChipRow: {
+    // A horizontal ScrollView defaults to flexGrow: 1, and Screen's content
+    // grows to fill the screen -- with only a few tasks the leftover height
+    // went to this row and stretched every chip into a tall block.
+    flexGrow: 0,
     marginBottom: 12,
+  },
+  listChipContent: {
+    gap: 8,
+    alignItems: 'center',
   },
   listChip: {
     minHeight: 44,
@@ -1320,6 +1351,11 @@ const styles = StyleSheet.create({
     borderColor: colors.divider,
     borderRadius: radius.pastel,
     marginBottom: 10,
+  },
+  titleInput: {
+    paddingTop: 12,
+    paddingBottom: 12,
+    textAlignVertical: 'top',
   },
   descriptionInput: {
     minHeight: 80,
