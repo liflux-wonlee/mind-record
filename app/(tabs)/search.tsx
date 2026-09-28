@@ -278,8 +278,6 @@ export default function SearchScreen() {
           <View style={styles.listeningDot} />
           <Text style={styles.listeningText}>Listening… tap the mic again when you&apos;re done.</Text>
         </View>
-      ) : voice.state === 'thinking' ? (
-        <Text style={styles.interruptionText}>Thinking…</Text>
       ) : voice.state === 'speaking' ? (
         <Text style={styles.interruptionText}>Playing the answer… tap the mic to stop.</Text>
       ) : null}
@@ -316,6 +314,17 @@ export default function SearchScreen() {
           style={[styles.voiceButton, voice.state === 'recording' && styles.voiceButtonActive]}
         />
       </View>
+        {voice.state === 'thinking' ? (
+          // Centered and large: the old small line above the input was easy
+          // to miss, so it looked like nothing happened after speaking. Not
+          // a Modal and it doesn't take touches -- the screen stays usable.
+          <View style={styles.thinkingLayer} pointerEvents="none">
+            <View style={styles.thinkingCard} accessibilityLiveRegion="polite">
+              <ActivityIndicator size="large" color={colors.accent700} />
+              <Text style={styles.thinkingText}>Thinking…</Text>
+            </View>
+          </View>
+        ) : null}
       </KeyboardAvoidingView>
       <ListeningOverlay
         visible={voice.state === 'recording'}
@@ -387,6 +396,33 @@ const styles = StyleSheet.create({
     // Clear of the Account button Screen draws in the top-right corner
     // (36 wide + gutter), which used to cover the speaker toggle.
     paddingRight: 48,
+  },
+  thinkingLayer: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    bottom: 0,
+    left: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  thinkingCard: {
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 28,
+    paddingHorizontal: 44,
+    borderRadius: 28,
+    backgroundColor: colors.pastelPeach,
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  thinkingText: {
+    fontFamily: font.extrabold,
+    fontSize: 26,
+    color: colors.text,
   },
   overlay: {
     flex: 1,

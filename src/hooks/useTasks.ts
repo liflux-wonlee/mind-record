@@ -56,9 +56,15 @@ export function useTasks() {
   );
 
   const add = useCallback(
-    async (title: string, dueDate?: string | null, listId?: string | null, description?: string | null) => {
+    async (
+      title: string,
+      dueDate?: string | null,
+      listId?: string | null,
+      description?: string | null,
+      starred?: boolean
+    ) => {
       if (!user) return;
-      const created = await createTask(user.id, { title, description, dueDate, listId });
+      const created = await createTask(user.id, { title, description, dueDate, listId, starred });
       setState((prev) => (prev.status === 'ready' ? { ...prev, tasks: [created, ...prev.tasks] } : prev));
       return created;
     },

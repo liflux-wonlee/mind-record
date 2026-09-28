@@ -1,12 +1,23 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
-import { ShareIcon, StarIcon } from '@/components/Icon';
+import { CheckIcon, ShareIcon, StarIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
-import { Button, RuleThick, Tag } from '@/components/ui';
+import { Button, Tag } from '@/components/ui';
 import { useTasks } from '@/hooks/useTasks';
 import {
   getGoogleTasksSendRecord,
@@ -20,9 +31,28 @@ import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { confirmListSuggestion, type TaskList } from '@/services/taskLists';
 import type { Task } from '@/services/tasks';
-import { colors, font, h2, radius } from '@/theme';
+import { colors, font, GUTTER, h2, radius } from '@/theme';
 
-type Filter = 'open' | 'completed';
+/** Page keys for the two tabs that aren't lists; every other page's key is its list id. */
+const STARRED_KEY = '__starred';
+const ALL_KEY = '__all';
+
+/** A page's pastel card color and the deeper shade of it used for the
+ *  selected tab, the check circles and the + button. */
+type Tone = { bg: string; deep: string };
+const STARRED_TONE: Tone = { bg: colors.pastelYellow, deep: '#b98f1f' };
+const ALL_TONE: Tone = { bg: colors.pastelBlue, deep: '#4f83a8' };
+// Each list gets the next of these by position, so neighbouring tabs differ.
+const LIST_TONES: readonly Tone[] = [
+  { bg: colors.pastelPink, deep: '#c9584d' },
+  { bg: colors.pastelGreen, deep: '#4f9468' },
+  { bg: colors.pastelLavender, deep: '#7c62a8' },
+  { bg: colors.pastelPeach, deep: '#d1793f' },
+  { bg: colors.pastelBlue, deep: '#4f83a8' },
+  { bg: colors.pastelYellow, deep: '#b98f1f' },
+];
+
+type TaskPage = { key: string; title: string; tone: Tone; list: TaskList | undefined };
 // Same picker-target shape whether the sheet was opened from the "Needs a
 // list" section or from a task's own edit sheet -- both just want to end
 // up calling the same assign function.
@@ -88,12 +118,17 @@ export default function TasksScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const tasksState = useTasks();
-  const [newTitle, setNewTitle] = useState('');
-  const [adding, setAdding] = useState(false);
-  const [filter, setFilter] = useState<Filter>('open');
-  // 'all' shows every list (plus the "needs a list" review section);
-  // otherwise the id of the one list currently selected.
-  const [selectedListId, setSelectedListId] = useState<string>('all');
+  // Which page the pager shows: STARRED_KEY, ALL_KEY (every task, plus
+  // the "needs a list" review section), or a list's id.
+  const [selectedKey, setSelectedKey] = useState<string>(ALL_KEY);
+  // Pages whose "Completed (n)" section is expanded (collapsed by default,
+  // like Google Tasks).
+  const [expandedCompleted, setExpandedCompleted] = useState<ReadonlySet<string>>(new Set());
+  const { width: pageWidth } = useWindowDimensions();
+  const pagerRef = React.useRef<FlatList<TaskPage>>(null);
+  const tabBarRef = React.useRef<ScrollView>(null);
+  // Each tab's x in the tab bar, to keep the selected one scrolled into view.
+  const tabOffsets = React.useRef<Record<string, number>>({});
   const [editing, setEditing] = useState<Task | null>(null);
   const [newTaskSeed, setNewTaskSeed] = useState<NewTaskSeed | null>(null);
   const [shareContent, setShareContent] = useState<ShareContent | null>(null);
@@ -129,7 +164,7 @@ export default function TasksScreen() {
   }, [picking]);
 
   // Search deep-links to a task with ?edit=<id>: open its sheet once the
-  // list has loaded, and switch the filter so it's visible behind it.
+  // list has loaded, on the All page with its section open behind it.
   const { edit } = useLocalSearchParams<{ edit?: string }>();
   const [consumedEdit, setConsumedEdit] = useState<string | null>(null);
   useEffect(() => {
@@ -137,8 +172,8 @@ export default function TasksScreen() {
     const target = tasksState.tasks.find((t) => t.id === edit);
     if (!target) return;
     setConsumedEdit(edit);
-    setFilter(target.status === 'completed' ? 'completed' : 'open');
-    setSelectedListId('all');
+    setSelectedKey(ALL_KEY);
+    if (target.status === 'completed') setExpandedCompleted((prev) => new Set(prev).add(ALL_KEY));
     setEditing(target);
   }, [edit, consumedEdit, tasksState]);
 
@@ -146,48 +181,56 @@ export default function TasksScreen() {
   const tasks = tasksState.status === 'ready' ? tasksState.tasks : [];
   const listById = (id: string | null) => (id ? lists.find((l) => l.id === id) : undefined);
 
-  const statusFiltered = tasks.filter((t) => (filter === 'open' ? t.status !== 'completed' : t.status === 'completed'));
-  // Extracted from a recording but not confident enough about which list --
-  // kept separate from the ordinary list below instead of dumped in
-  // wherever they'd otherwise sort, so they don't get lost among filed tasks.
-  const needsListReview = selectedListId === 'all' ? statusFiltered.filter((t) => !t.list_id && t.list_suggestion) : [];
-  const needsReviewIds = new Set(needsListReview.map((t) => t.id));
-  const visibleTasks = statusFiltered.filter((t) => {
-    if (needsReviewIds.has(t.id)) return false;
-    if (selectedListId === 'all') return true;
-    return t.list_id === selectedListId;
-  });
+  // One page per tab, in tab order: Starred, All, then each list. Each gets
+  // its own pastel tone (lists by position, cycling).
+  const pages: TaskPage[] = [
+    { key: STARRED_KEY, title: 'Starred', tone: STARRED_TONE, list: undefined },
+    { key: ALL_KEY, title: 'All tasks', tone: ALL_TONE, list: undefined },
+    ...lists.map((l, i) => ({ key: l.id, title: l.name, tone: LIST_TONES[i % LIST_TONES.length], list: l })),
+  ];
+  // A list deleted elsewhere (or on another device) falls back to All.
+  const selectedIndex = Math.max(
+    0,
+    pages.findIndex((p) => p.key === selectedKey) === -1 ? 1 : pages.findIndex((p) => p.key === selectedKey)
+  );
+  const selectedPage = pages[selectedIndex];
 
-  const submitNewTask = async () => {
-    const title = newTitle.trim();
-    if (!title || adding) return;
-    setAdding(true);
-    try {
-      await tasksState.add(title, undefined, selectedListId !== 'all' ? selectedListId : undefined);
-      setNewTitle('');
-      setFilter('open');
-    } catch (e) {
-      Alert.alert('Could not add task', friendlyMessage(e, 'Please try again.'));
-    } finally {
-      setAdding(false);
-    }
-  };
+  // A tab tap (or a new/deleted list) moves the pager to that page, and the
+  // tab bar follows a swipe so the selected tab stays in view. After a
+  // swipe the pager is already there, so its scroll is a no-op.
+  const selectedPageKey = selectedPage.key;
+  useEffect(() => {
+    pagerRef.current?.scrollToOffset({ offset: selectedIndex * pageWidth, animated: true });
+    const x = tabOffsets.current[selectedPageKey];
+    if (x !== undefined) tabBarRef.current?.scrollTo({ x: Math.max(0, x - 40), animated: true });
+  }, [selectedIndex, selectedPageKey, pageWidth]);
 
-  const openNewTask = (fromQuickAdd: boolean) =>
+  const tasksForPage = (key: string) =>
+    key === STARRED_KEY ? tasks.filter((t) => t.starred) : key === ALL_KEY ? tasks : tasks.filter((t) => t.list_id === key);
+  const openCountFor = (key: string) => tasksForPage(key).filter((t) => t.status !== 'completed').length;
+
+  const toggleCompleted = (key: string) =>
+    setExpandedCompleted((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // The + button: a new task in the list on screen (starred, on Starred).
+  const openNewTask = () =>
     setNewTaskSeed({
-      title: fromQuickAdd ? newTitle.trim() : '',
-      listId: selectedListId !== 'all' ? selectedListId : null,
-      fromQuickAdd,
+      title: '',
+      listId: selectedPage.list?.id ?? null,
+      starred: selectedPage.key === STARRED_KEY,
     });
 
   // Errors propagate to NewTaskSheet, which alerts and stays open.
   const saveNewTask = async (input: NewTaskInput) => {
-    await tasksState.add(input.title, input.dueDate, input.listId, input.description);
-    if (newTaskSeed?.fromQuickAdd) setNewTitle('');
-    // Make sure the new task is on screen: it's open, and in the list shown
-    // (or under All, when it was saved with no list).
-    setFilter('open');
-    if (selectedListId !== 'all' && selectedListId !== input.listId) setSelectedListId(input.listId ?? 'all');
+    await tasksState.add(input.title, input.dueDate, input.listId, input.description, newTaskSeed?.starred ?? false);
+    // Saved into a different list than the one on screen: follow it there
+    // (or to All, when it has no list) so the new task is visible.
+    if (selectedPage.list && selectedPage.list.id !== input.listId) setSelectedKey(input.listId ?? ALL_KEY);
     setNewTaskSeed(null);
   };
 
@@ -254,7 +297,7 @@ export default function TasksScreen() {
         onPress: async () => {
           try {
             await tasksState.removeList(list);
-            if (selectedListId === list.id) setSelectedListId('all');
+            if (selectedKey === list.id) setSelectedKey(ALL_KEY);
             setManagingList(null);
           } catch (e) {
             Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'));
@@ -270,7 +313,7 @@ export default function TasksScreen() {
       const list = await tasksState.addList(newListName.trim());
       setNewListName('');
       setCreatingList(false);
-      if (list) setSelectedListId(list.id);
+      if (list) setSelectedKey(list.id);
     } catch (e) {
       Alert.alert('Could not create list', friendlyMessage(e, 'Please try again.'));
     }
@@ -318,98 +361,59 @@ export default function TasksScreen() {
   const toggleStar = (task: Task) =>
     tasksState.toggleStar(task).catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')));
 
-  return (
-    <Screen>
-      <View style={[styles.head, { paddingRight: 44 }]}>
-        {/* Spacer, not removed outright -- keeps the row's height (and so
-            the big title below it) exactly where the small "Tasks" kicker
-            this used to show left it, while letting "open" sit flush right. */}
-        <View style={{ height: 15 }} />
-        <Text style={styles.openCount}>{tasksState.openCount} open</Text>
-      </View>
-      {/* paddingRight keeps the pill clear of Screen's Account button,
-          same as the head row above. */}
-      <View style={[styles.titleRow, { paddingRight: 44 }]}>
-        <Text style={[styles.title, { marginTop: 0, marginBottom: 0 }]}>Tasks</Text>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="New task"
-          onPress={() => openNewTask(false)}
-          style={styles.newTaskPill}
-        >
-          <Text style={styles.newTaskPillText}>+ New task</Text>
-        </Pressable>
-      </View>
+  const renderPage = (page: TaskPage) => {
+    const pageTasks = tasksForPage(page.key);
+    // Extracted from a recording but not confident enough about which list
+    // -- kept in their own section on All instead of mixed in with filed
+    // tasks, so they don't get lost.
+    const needsListReview =
+      page.key === ALL_KEY ? pageTasks.filter((t) => t.status !== 'completed' && !t.list_id && t.list_suggestion) : [];
+    const reviewIds = new Set(needsListReview.map((t) => t.id));
+    const open = pageTasks.filter((t) => t.status !== 'completed' && !reviewIds.has(t.id));
+    const completed = pageTasks.filter((t) => t.status === 'completed');
+    const showCompleted = expandedCompleted.has(page.key);
+    // Which list a task is in only matters on the pages that mix lists.
+    const showListTag = page.list === undefined;
+    const row = (task: Task) => (
+      <TaskRow
+        key={task.id}
+        task={task}
+        list={showListTag ? listById(task.list_id) : undefined}
+        accent={page.tone.deep}
+        onToggle={() =>
+          tasksState.toggle(task).catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
+        }
+        onOpen={() => setEditing(task)}
+        onToggleStar={() => toggleStar(task)}
+      />
+    );
 
+    return (
       <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.listChipRow}
-        contentContainerStyle={styles.listChipContent}
+        style={{ width: pageWidth }}
+        contentContainerStyle={styles.pageContent}
+        showsVerticalScrollIndicator={false}
       >
-        <ListChip label="All" selected={selectedListId === 'all'} onPress={() => setSelectedListId('all')} />
-        {lists.map((l) => (
-          <ListChip
-            key={l.id}
-            label={l.name}
-            selected={selectedListId === l.id}
-            onPress={() => setSelectedListId(l.id)}
-            onLongPress={() => openManageList(l)}
-          />
-        ))}
-        <ListChip label="+ New list" selected={false} onPress={() => setCreatingList(true)} muted />
-      </ScrollView>
+        <View style={[styles.card, { backgroundColor: page.tone.bg }]}>
+          <View style={styles.cardHead}>
+            <Text style={styles.cardTitle} numberOfLines={1}>
+              {page.title}
+            </Text>
+            {page.list ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Edit list ${page.title}`}
+                onPress={() => page.list && openManageList(page.list)}
+                hitSlop={6}
+                style={styles.cardMenu}
+              >
+                <Text style={styles.cardMenuText}>⋮</Text>
+              </Pressable>
+            ) : null}
+          </View>
 
-      <View style={styles.addRow}>
-        <TextInput
-          style={styles.addInput}
-          value={newTitle}
-          onChangeText={setNewTitle}
-          placeholder="Add a task"
-          placeholderTextColor={colors.neutral600}
-          onSubmitEditing={submitNewTask}
-          returnKeyType="done"
-          editable={!adding}
-        />
-        {/* Expands whatever's typed so far into the full New task sheet
-            (notes, due date, list). */}
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add with details"
-          onPress={() => openNewTask(true)}
-          disabled={adding}
-          style={styles.detailsButton}
-        >
-          <Text style={styles.detailsButtonText}>Details</Text>
-        </Pressable>
-        <Button
-          label={adding ? '…' : 'Add'}
-          onPress={submitNewTask}
-          disabled={adding || !newTitle.trim()}
-          style={styles.addButton}
-        />
-      </View>
-
-      <View style={styles.filterSeg}>
-        <FilterOption label="Open" selected={filter === 'open'} onPress={() => setFilter('open')} />
-        <FilterOption label="Completed" selected={filter === 'completed'} onPress={() => setFilter('completed')} divided />
-      </View>
-
-      <RuleThick />
-
-      {tasksState.status === 'loading' ? (
-        <View style={styles.centerBlock}>
-          <ActivityIndicator color={colors.accent} />
-        </View>
-      ) : tasksState.status === 'error' ? (
-        <View style={styles.centerBlock}>
-          <Text style={styles.errorText}>{tasksState.message}</Text>
-          <Button variant="secondary" label="Retry" onPress={tasksState.refresh} style={{ minHeight: 44 }} />
-        </View>
-      ) : (
-        <>
           {needsListReview.length > 0 ? (
-            <View style={{ marginBottom: 10 }}>
+            <View style={{ marginBottom: 6 }}>
               <Text style={styles.sectionHeading}>Needs a list</Text>
               {needsListReview.map((task) => (
                 <View key={task.id} style={styles.reviewCard}>
@@ -438,30 +442,148 @@ export default function TasksScreen() {
             </View>
           ) : null}
 
-          {visibleTasks.length === 0 && needsListReview.length === 0 ? (
-            <View style={styles.centerBlock}>
-              <Text style={styles.emptyText}>
-                {filter === 'open' ? 'Nothing here yet — add your first task above.' : 'No completed tasks yet.'}
-              </Text>
-            </View>
+          {open.length === 0 && needsListReview.length === 0 ? (
+            <Text style={styles.emptyText}>
+              {page.key === STARRED_KEY
+                ? 'Star a task to see it here.'
+                : completed.length > 0
+                  ? 'All done here.'
+                  : 'No tasks yet. Tap + to add one.'}
+            </Text>
           ) : (
-            visibleTasks.map((task, i) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                list={selectedListId === 'all' ? listById(task.list_id) : undefined}
-                color={i % 2 === 0 ? colors.pastelYellow : colors.pastelGreen}
-                onToggle={() =>
-                  tasksState
-                    .toggle(task)
-                    .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
-                }
-                onOpen={() => setEditing(task)}
-                onToggleStar={() => toggleStar(task)}
-              />
-            ))
+            open.map(row)
           )}
-          {visibleTasks.length > 0 ? <Text style={styles.hint}>Hold a task to view or edit its details</Text> : null}
+
+          {completed.length > 0 ? (
+            <>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showCompleted }}
+                onPress={() => toggleCompleted(page.key)}
+                style={styles.completedHead}
+              >
+                <Text style={styles.completedHeadText}>Completed ({completed.length})</Text>
+                <Text style={styles.completedChevron}>{showCompleted ? '▴' : '▾'}</Text>
+              </Pressable>
+              {showCompleted ? completed.map(row) : null}
+            </>
+          ) : null}
+        </View>
+      </ScrollView>
+    );
+  };
+
+  return (
+    <Screen scroll={false} padded={false} bottomPadding={0}>
+      {/* paddingRight keeps the title clear of Screen's Account button. */}
+      <View style={styles.header}>
+        <Text style={styles.title}>Tasks</Text>
+      </View>
+
+      {tasksState.status === 'loading' ? (
+        <View style={styles.centerBlock}>
+          <ActivityIndicator color={colors.accent} />
+        </View>
+      ) : tasksState.status === 'error' ? (
+        <View style={styles.centerBlock}>
+          <Text style={styles.errorText}>{tasksState.message}</Text>
+          <Button variant="secondary" label="Retry" onPress={tasksState.refresh} style={{ minHeight: 44 }} />
+        </View>
+      ) : (
+        <>
+          {/* Google Tasks' layout: a swipeable row of list tabs (Starred,
+              All, each list, then + for a new list), the selected list's
+              tasks in a card below, and a + button for a new task. */}
+          <ScrollView
+            ref={tabBarRef}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.tabBar}
+            contentContainerStyle={styles.tabBarContent}
+          >
+            {pages.map((page, i) => {
+              const selected = i === selectedIndex;
+              const count = openCountFor(page.key);
+              return (
+                <Pressable
+                  key={page.key}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={page.key === STARRED_KEY ? 'Starred' : page.title}
+                  onPress={() => setSelectedKey(page.key)}
+                  onLongPress={page.list ? () => page.list && openManageList(page.list) : undefined}
+                  onLayout={(e) => {
+                    tabOffsets.current[page.key] = e.nativeEvent.layout.x;
+                  }}
+                  style={styles.tab}
+                >
+                  <View style={styles.tabLabelRow}>
+                    {page.key === STARRED_KEY ? (
+                      <StarIcon size={20} filled color={selected ? page.tone.deep : colors.neutral500} />
+                    ) : (
+                      <Text
+                        style={[styles.tabText, selected && { color: page.tone.deep, fontFamily: font.extrabold }]}
+                        numberOfLines={1}
+                      >
+                        {page.key === ALL_KEY ? 'All' : page.title}
+                      </Text>
+                    )}
+                    {count > 0 && page.key !== STARRED_KEY ? (
+                      <View style={[styles.tabCount, { backgroundColor: page.tone.bg }]}>
+                        <Text style={styles.tabCountText}>{count}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={[styles.tabUnderline, selected && { backgroundColor: page.tone.deep }]} />
+                </Pressable>
+              );
+            })}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="New list"
+              onPress={() => setCreatingList(true)}
+              style={styles.tab}
+            >
+              <View style={styles.tabLabelRow}>
+                <Text style={styles.newListTabText}>+ New list</Text>
+              </View>
+              <View style={styles.tabUnderline} />
+            </Pressable>
+          </ScrollView>
+          <View style={styles.tabBarRule} />
+
+          <FlatList
+            ref={pagerRef}
+            data={pages}
+            keyExtractor={(p) => p.key}
+            horizontal
+            pagingEnabled
+            showsHorizontalScrollIndicator={false}
+            initialScrollIndex={selectedIndex}
+            getItemLayout={(_, index) => ({ length: pageWidth, offset: pageWidth * index, index })}
+            onMomentumScrollEnd={(e) => {
+              const index = Math.round(e.nativeEvent.contentOffset.x / pageWidth);
+              const page = pages[index];
+              if (page && page.key !== selectedKey) setSelectedKey(page.key);
+            }}
+            renderItem={({ item }) => renderPage(item)}
+            // Re-render pages when anything they show changes, not only `pages`.
+            extraData={[tasks, expandedCompleted, busyTaskId, lists]}
+            style={styles.pager}
+          />
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="New task"
+            onPress={openNewTask}
+            style={({ pressed }) => [
+              styles.fab,
+              { backgroundColor: selectedPage.tone.deep },
+              pressed && { opacity: 0.85 },
+            ]}
+          >
+            <Text style={styles.fabText}>+</Text>
+          </Pressable>
         </>
       )}
 
@@ -679,29 +801,6 @@ function GoogleListOption({
   );
 }
 
-function FilterOption({
-  label,
-  selected,
-  onPress,
-  divided,
-}: {
-  label: string;
-  selected: boolean;
-  onPress: () => void;
-  divided?: boolean;
-}) {
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={[styles.filterOpt, divided && styles.filterDivider, selected && { backgroundColor: colors.accent }]}
-    >
-      <Text style={[styles.filterText, selected && { color: colors.bg }]}>{label}</Text>
-    </Pressable>
-  );
-}
-
 function ListChip({
   label,
   selected,
@@ -735,43 +834,46 @@ function ListChip({
 function TaskRow({
   task,
   list,
-  color,
+  accent,
   onToggle,
   onOpen,
   onToggleStar,
 }: {
   task: Task;
   list: TaskList | undefined;
-  color: string;
+  /** The page's deeper tone, for the check circle. */
+  accent: string;
   onToggle: () => void;
   onOpen: () => void;
   onToggleStar: () => void;
 }) {
   const done = task.status === 'completed';
+  const due = task.due_date ? formatDueDate(task.due_date) : null;
   return (
-    <View style={[styles.task, { backgroundColor: done ? colors.neutral200 : color }]}>
+    <View style={styles.task}>
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked: done }}
         accessibilityLabel={task.title}
         onPress={onToggle}
-        style={[styles.checkbox, done && { backgroundColor: colors.text }]}
-      />
-      <Pressable style={styles.taskBody} onPress={onOpen} onLongPress={onOpen}>
-        <Text style={[styles.taskTitle, done && { textDecorationLine: 'line-through', color: colors.neutral500 }]}>
-          {task.title}
-        </Text>
-        <View style={styles.metaRow}>
-          <Text style={[styles.meta, { color: !done && task.due_date ? colors.accent : colors.neutral700 }]}>
-            {task.due_date
-              ? formatDueDate(task.due_date)
-              : `Added ${new Date(task.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`}
-          </Text>
-          {list ? <Tag variant="neutral">{list.name}</Tag> : null}
+        hitSlop={6}
+        style={styles.checkHit}
+      >
+        <View style={[styles.checkCircle, { borderColor: accent }, done && { backgroundColor: accent }]}>
+          {done ? <CheckIcon size={14} color={colors.bg} /> : null}
         </View>
-        {task.description ? (
-          <View style={styles.quoteBox}>
-            <Text style={styles.quote}>{task.description}</Text>
+      </Pressable>
+      <Pressable style={styles.taskBody} onPress={onOpen} onLongPress={onOpen}>
+        <Text style={[styles.taskTitle, done && styles.taskTitleDone]}>{task.title}</Text>
+        {task.description && !done ? (
+          <Text style={styles.taskNotes} numberOfLines={1}>
+            {task.description}
+          </Text>
+        ) : null}
+        {(due && !done) || list ? (
+          <View style={styles.metaRow}>
+            {due && !done ? <Text style={[styles.dueBadge, { color: accent, borderColor: accent }]}>{due}</Text> : null}
+            {list ? <Tag variant="neutral">{list.name}</Tag> : null}
           </View>
         ) : null}
       </Pressable>
@@ -779,10 +881,10 @@ function TaskRow({
         accessibilityRole="button"
         accessibilityLabel={task.starred ? 'Unstar task' : 'Star task'}
         onPress={onToggleStar}
-        hitSlop={8}
+        hitSlop={6}
         style={styles.starButton}
       >
-        <StarIcon size={20} filled={task.starred} color={task.starred ? colors.accent700 : colors.neutral500} />
+        <StarIcon size={22} filled={task.starred} color={task.starred ? '#e0a526' : colors.neutral500} />
       </Pressable>
     </View>
   );
@@ -1019,7 +1121,8 @@ function DueDateField({ value, onChange }: { value: string | null; onChange: (v:
 
 type NewTaskInput = { title: string; description: string | null; dueDate: string | null; listId: string | null };
 /** What the New task sheet opens with: a title typed into the quick-add row (or ''), and the list to start in. */
-type NewTaskSeed = { title: string; listId: string | null; fromQuickAdd: boolean };
+/** A new task starts in the list on screen -- and starred when added from the Starred page. */
+type NewTaskSeed = { title: string; listId: string | null; starred: boolean };
 
 /** Create a task by typing -- the same fields as Edit task, plus a list picker. */
 function NewTaskSheet({
@@ -1140,63 +1243,150 @@ function DateChip({ label, selected, onPress }: { label: string; selected: boole
 }
 
 const styles = StyleSheet.create({
-  head: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-  },
-  openCount: {
-    fontFamily: font.regular,
-    fontSize: 11,
-    color: colors.neutral600,
+  header: {
+    paddingHorizontal: GUTTER,
+    // Clear of Screen's Account button, top-right.
+    paddingRight: GUTTER + 44,
   },
   title: {
     ...h2,
     marginTop: 6,
-    marginBottom: 12,
+    marginBottom: 6,
   },
-  titleRow: {
+  tabBar: {
+    // A horizontal ScrollView defaults to flexGrow: 1 -- it must not take
+    // the page's height from the pager below.
+    flexGrow: 0,
+  },
+  tabBarContent: {
+    paddingHorizontal: GUTTER - 6,
+    alignItems: 'flex-end',
+  },
+  tab: {
+    minHeight: 48,
+    paddingHorizontal: 12,
+    justifyContent: 'flex-end',
+  },
+  tabLabelRow: {
+    // Fixed height so a tab without a count badge (or the star) lines up
+    // with the ones that have one.
+    height: 32,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+  },
+  tabText: {
+    fontFamily: font.semibold,
+    fontSize: 15,
+    color: colors.neutral700,
+    maxWidth: 160,
+  },
+  tabCount: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabCountText: {
+    fontFamily: font.semibold,
+    fontSize: 12,
+    color: colors.text,
+  },
+  tabUnderline: {
+    height: 3,
+    borderTopLeftRadius: 3,
+    borderTopRightRadius: 3,
+    backgroundColor: 'transparent',
+  },
+  newListTabText: {
+    fontFamily: font.semibold,
+    fontSize: 15,
+    color: colors.neutral600,
+  },
+  tabBarRule: {
+    height: 1,
+    backgroundColor: colors.neutral300,
+  },
+  pager: {
+    flex: 1,
+  },
+  pageContent: {
+    paddingHorizontal: GUTTER - 4,
+    paddingTop: 14,
+    // Room for the + button over the end of the list.
+    paddingBottom: 96,
+  },
+  card: {
+    borderRadius: 24,
+    paddingHorizontal: 14,
+    paddingTop: 6,
+    paddingBottom: 10,
+  },
+  cardHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 48,
+    paddingLeft: 6,
+  },
+  cardTitle: {
+    flex: 1,
+    fontFamily: font.extrabold,
+    fontSize: 19,
+    color: colors.text,
+  },
+  cardMenu: {
+    width: 44,
+    height: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cardMenuText: {
+    fontFamily: font.extrabold,
+    fontSize: 22,
+    color: colors.neutral700,
+  },
+  completedHead: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 12,
-    marginTop: 6,
-    marginBottom: 12,
+    minHeight: 48,
+    paddingHorizontal: 6,
+    marginTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(32,30,29,0.12)',
   },
-  newTaskPill: {
-    minHeight: 44,
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    borderRadius: radius.pastel,
-    backgroundColor: colors.pastelGreen,
-  },
-  newTaskPillText: {
+  completedHeadText: {
     fontFamily: font.semibold,
-    fontSize: 13,
-    color: colors.text,
+    fontSize: 14,
+    color: colors.neutral700,
   },
-  detailsButton: {
-    minHeight: 44,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-    borderRadius: radius.pastel,
-    backgroundColor: colors.pastelLavender,
+  completedChevron: {
+    fontSize: 16,
+    color: colors.neutral700,
   },
-  detailsButtonText: {
-    fontFamily: font.semibold,
-    fontSize: 13,
-    color: colors.text,
-  },
-  listChipRow: {
-    // A horizontal ScrollView defaults to flexGrow: 1, and Screen's content
-    // grows to fill the screen -- with only a few tasks the leftover height
-    // went to this row and stretched every chip into a tall block.
-    flexGrow: 0,
-    marginBottom: 12,
-  },
-  listChipContent: {
-    gap: 8,
+  fab: {
+    position: 'absolute',
+    right: GUTTER,
+    bottom: 18,
+    width: 60,
+    height: 60,
+    borderRadius: 20,
     alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 3 },
+  },
+  fabText: {
+    fontFamily: font.regular,
+    fontSize: 34,
+    lineHeight: 38,
+    color: colors.bg,
   },
   listChip: {
     minHeight: 44,
@@ -1209,53 +1399,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.text,
   },
-  addRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 14,
-  },
-  addInput: {
-    flex: 1,
-    minHeight: 44,
-    paddingHorizontal: 10,
-    fontFamily: font.regular,
-    fontSize: 14,
-    color: colors.text,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.divider,
-    borderRadius: radius.pastel,
-  },
-  addButton: {
-    minHeight: 44,
-    paddingHorizontal: 18,
-    borderRadius: radius.pastel,
-  },
-  filterSeg: {
-    flexDirection: 'row',
-    alignSelf: 'flex-start',
-    borderWidth: 1,
-    borderColor: colors.divider,
-    borderRadius: radius.pastel,
-    overflow: 'hidden',
-    marginBottom: 8,
-  },
-  filterOpt: {
-    minHeight: 44,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  filterDivider: {
-    borderLeftWidth: 1,
-    borderLeftColor: colors.divider,
-  },
-  filterText: {
-    fontFamily: font.regular,
-    fontSize: 12,
-    color: colors.text,
-  },
   centerBlock: {
     paddingVertical: 24,
+    paddingHorizontal: GUTTER,
     alignItems: 'center',
     gap: 10,
   },
@@ -1269,76 +1415,89 @@ const styles = StyleSheet.create({
     fontFamily: font.regular,
     fontSize: 14,
     lineHeight: 21,
-    color: colors.neutral600,
+    color: colors.neutral700,
     textAlign: 'center',
+    paddingVertical: 18,
   },
   sectionHeading: {
     fontFamily: font.semibold,
     fontSize: 11,
     letterSpacing: 11 * 0.08,
     textTransform: 'uppercase',
-    color: colors.neutral600,
+    color: colors.neutral700,
     marginBottom: 8,
+    paddingLeft: 6,
   },
   reviewCard: {
-    backgroundColor: colors.pastelPeach,
+    backgroundColor: 'rgba(255,255,255,0.55)',
     borderRadius: radius.pastel,
     padding: 12,
     marginBottom: 8,
   },
   task: {
     flexDirection: 'row',
-    gap: 12,
-    padding: 12,
-    marginBottom: 8,
-    borderRadius: radius.pastel,
+    alignItems: 'flex-start',
+    minHeight: 52,
   },
-  checkbox: {
-    width: 24,
-    height: 24,
-    marginTop: 2,
-    borderRadius: 6,
+  checkHit: {
+    width: 44,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     borderWidth: 2,
-    borderColor: colors.text,
-    backgroundColor: 'transparent',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   taskBody: {
     flex: 1,
     minWidth: 0,
-  },
-  starButton: {
-    paddingTop: 2,
+    paddingVertical: 12,
     paddingLeft: 4,
   },
+  starButton: {
+    width: 44,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   taskTitle: {
-    fontFamily: font.semibold,
-    fontSize: 15,
+    fontFamily: font.regular,
+    fontSize: 16,
     lineHeight: 22,
     color: colors.text,
+  },
+  taskTitleDone: {
+    textDecorationLine: 'line-through',
+    color: colors.neutral600,
+  },
+  taskNotes: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.neutral700,
+    marginTop: 2,
   },
   metaRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    marginTop: 3,
-  },
-  meta: {
-    fontFamily: font.regular,
-    fontSize: 11,
-    lineHeight: 16,
-    color: colors.neutral700,
-  },
-  quoteBox: {
+    flexWrap: 'wrap',
+    gap: 6,
     marginTop: 6,
-    borderLeftWidth: 2,
-    borderLeftColor: colors.neutral300,
-    paddingLeft: 8,
   },
-  quote: {
-    fontFamily: font.regular,
+  dueBadge: {
+    fontFamily: font.semibold,
     fontSize: 12,
-    lineHeight: 18,
-    color: colors.neutral700,
+    lineHeight: 16,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderRadius: 10,
+    overflow: 'hidden',
   },
   input: {
     minHeight: 48,
@@ -1488,12 +1647,5 @@ const styles = StyleSheet.create({
     color: colors.text,
     backgroundColor: colors.bg,
     borderRadius: radius.pastel,
-  },
-  hint: {
-    fontFamily: font.regular,
-    fontSize: 11,
-    color: colors.neutral600,
-    marginTop: 2,
-    textAlign: 'center',
   },
 });

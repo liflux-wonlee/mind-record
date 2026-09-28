@@ -51,7 +51,13 @@ export async function listTasksPendingTopicReview(userId: string): Promise<Task[
 
 export async function createTask(
   userId: string,
-  input: { title: string; description?: string | null; dueDate?: string | null; listId?: string | null }
+  input: {
+    title: string;
+    description?: string | null;
+    dueDate?: string | null;
+    listId?: string | null;
+    starred?: boolean;
+  }
 ): Promise<Task> {
   const { data, error } = await supabase
     .from('tasks')
@@ -61,6 +67,7 @@ export async function createTask(
       description: input.description ?? null,
       due_date: input.dueDate ?? null,
       list_id: input.listId ?? null,
+      starred: input.starred ?? false,
     })
     .select()
     .single();
