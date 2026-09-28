@@ -478,6 +478,7 @@ function ModeOption({
       accessibilityRole="radio"
       accessibilityState={{ selected }}
       onPress={onPress}
+      hitSlop={{ top: 4, bottom: 4 }}
       style={[styles.modeOpt, divided && styles.modeDivider, selected && { backgroundColor: colors.accent }]}
     >
       <Text style={[styles.modeText, selected && { color: colors.bg }]}>{label}</Text>
@@ -492,10 +493,10 @@ const styles = StyleSheet.create({
     paddingLeft: 0,
     marginLeft: -4,
   },
+  // Title on its own line, the three view tabs full-width below it --
+  // side by side they crowded the title and ran off the right edge.
   headRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 10,
   },
   modeSeg: {
     flexDirection: 'row',
@@ -505,17 +506,21 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   modeOpt: {
-    minHeight: 44,
+    flex: 1,
+    // Shorter than the usual 44pt; hitSlop on the tab keeps the touch
+    // target at full size.
+    minHeight: 36,
+    alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 8,
   },
   modeDivider: {
     borderLeftWidth: 1,
     borderLeftColor: colors.divider,
   },
   modeText: {
-    fontFamily: font.regular,
-    fontSize: 12,
+    fontFamily: font.semibold,
+    fontSize: 13,
     color: colors.text,
   },
   monthRow: {
