@@ -13,10 +13,12 @@ import {
 import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { StarToggle } from '@/components/StarToggle';
 import { Button, Row, RuleThick } from '@/components/ui';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import {
+  setTopicStarred,
   createTopic,
   deleteTopic,
   listTopics,
@@ -26,7 +28,7 @@ import {
   wouldCreateCycle,
   type Topic,
 } from '@/services/topics';
-import { colors, font, h2 } from '@/theme';
+import { colors, font, h2, radius } from '@/theme';
 
 type Sheet =
   | { kind: 'menu'; topic: Topic }
@@ -72,6 +74,20 @@ export default function MemoryScreen() {
     }, [reload])
   );
 
+  // Favorite a topic. Optimistic: the star flips at once, back on failure.
+  const toggleStar = (topic: Topic) => {
+    const next = !topic.starred;
+    const flip = (value: boolean) =>
+      setTopics((prev) => prev.map((t) => (t.id === topic.id ? { ...t, starred: value } : t)));
+    flip(next);
+    setTopicStarred(topic.id, next).catch((e) => {
+      flip(!next);
+      Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'));
+    });
+  };
+
+  const favorites = topics.filter((t) => t.starred);
+  const nameOf = (id: string | null) => (id ? topics.find((t) => t.id === id)?.name : undefined);
   const roots = topics.filter((t) => !t.parent_topic_id);
   const childrenOf = (id: string) => topics.filter((t) => t.parent_topic_id === id);
 
@@ -108,6 +124,32 @@ export default function MemoryScreen() {
       </View>
 
       <RuleThick />
+
+      {favorites.length > 0 ? (
+        <View style={styles.favorites}>
+          <Text style={styles.favoritesHeading}>★ Favorites</Text>
+          {favorites.map((topic) => (
+            <Row
+              key={topic.id}
+              onPress={() => router.push(`/topic?id=${topic.id}`)}
+              onLongPress={() => setSheet({ kind: 'menu', topic })}
+              style={styles.favoriteRow}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={styles.favoriteName} numberOfLines={1}>
+                  {topic.name}
+                </Text>
+                {topic.parent_topic_id ? (
+                  <Text style={styles.favoriteParent} numberOfLines={1}>
+                    in {nameOf(topic.parent_topic_id)}
+                  </Text>
+                ) : null}
+              </View>
+              <StarToggle starred onToggle={() => toggleStar(topic)} label="topic" />
+            </Row>
+          ))}
+        </View>
+      ) : null}
 
       <Row onPress={() => router.push('/topic?unclassified=1')} style={styles.topicRow}>
         {/* Same empty chevron slot as a topic without sub-topics, so every
@@ -151,6 +193,7 @@ export default function MemoryScreen() {
                   <View style={styles.chevron} />
                 )}
                 <Text style={styles.topicName}>{topic.name}</Text>
+                <StarToggle starred={topic.starred} onToggle={() => toggleStar(topic)} label="topic" />
               </Row>
               {!isCollapsed &&
                 children.map((child) => (
@@ -161,6 +204,7 @@ export default function MemoryScreen() {
                     style={[styles.topicRow, styles.childRow]}
                   >
                     <Text style={styles.childName}>{child.name}</Text>
+                    <StarToggle starred={child.starred} onToggle={() => toggleStar(child)} label="topic" size={20} />
                   </Row>
                 ))}
             </View>
@@ -361,6 +405,40 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: 'center',
   },
+  favorites: {
+    marginTop: 12,
+    marginBottom: 6,
+    padding: 10,
+    paddingRight: 4,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.pastelYellow,
+  },
+  favoritesHeading: {
+    fontFamily: font.semibold,
+    fontSize: 11,
+    letterSpacing: 11 * 0.08,
+    textTransform: 'uppercase',
+    color: colors.neutral700,
+    marginLeft: 4,
+    marginBottom: 2,
+  },
+  favoriteRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 48,
+    paddingLeft: 4,
+    borderRadius: radius.pastel,
+  },
+  favoriteName: {
+    fontFamily: font.extrabold,
+    fontSize: 16,
+    color: colors.text,
+  },
+  favoriteParent: {
+    fontFamily: font.regular,
+    fontSize: 12,
+    color: colors.neutral700,
+  },
   topicRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -384,11 +462,13 @@ const styles = StyleSheet.create({
     minHeight: 44,
   },
   topicName: {
+    flex: 1,
     fontFamily: font.extrabold,
     fontSize: 17,
     color: colors.text,
   },
   childName: {
+    flex: 1,
     fontFamily: font.semibold,
     fontSize: 14,
     color: colors.neutral800,

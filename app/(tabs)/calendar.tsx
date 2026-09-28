@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 
 import { ChevronLeftIcon, ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { StarToggle } from '@/components/StarToggle';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
@@ -12,7 +13,9 @@ import {
   deleteSessionMessage,
   listSessionsInMonth,
   listSessionsPage,
+  listStarredSessionsPage,
   sessionModeLabel,
+  setSessionStarred,
   type Session,
   type SessionsPageCursor,
 } from '@/services/sessions';
@@ -57,7 +60,7 @@ function weeksOf(leadingBlanks: number, daysInMonth: number): (number | null)[][
   return weeks;
 }
 
-type ViewMode = 'calendar' | 'list';
+type ViewMode = 'calendar' | 'list' | 'starred';
 
 export default function RecordsScreen() {
   const router = useRouter();
@@ -158,6 +161,68 @@ export default function RecordsScreen() {
       .finally(() => setListLoadingMore(false));
   };
 
+  // The Starred view: favorite records only, newest first, paged like List.
+  const [starredSessions, setStarredSessions] = useState<Session[]>([]);
+  const [starredLoading, setStarredLoading] = useState(true);
+  const [starredLoadingMore, setStarredLoadingMore] = useState(false);
+  const [starredHasMore, setStarredHasMore] = useState(false);
+  const [starredError, setStarredError] = useState(false);
+
+  const loadStarred = useCallback(() => {
+    if (!user) return;
+    setStarredLoading(true);
+    setStarredError(false);
+    listStarredSessionsPage(user.id, { limit: LIST_PAGE_SIZE })
+      .then((sessions) => {
+        setStarredSessions(sessions);
+        setStarredHasMore(sessions.length === LIST_PAGE_SIZE);
+      })
+      .catch(() => setStarredError(true))
+      .finally(() => setStarredLoading(false));
+  }, [user]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (mode === 'starred') loadStarred();
+    }, [mode, loadStarred])
+  );
+
+  const loadMoreStarred = () => {
+    if (!user || starredLoadingMore || starredSessions.length === 0) return;
+    setStarredLoadingMore(true);
+    const last = starredSessions[starredSessions.length - 1];
+    listStarredSessionsPage(user.id, { before: { startedAt: last.started_at, id: last.id }, limit: LIST_PAGE_SIZE })
+      .then((sessions) => {
+        setStarredSessions((prev) => [...prev, ...sessions]);
+        setStarredHasMore(sessions.length === LIST_PAGE_SIZE);
+      })
+      .catch(() => setStarredError(true))
+      .finally(() => setStarredLoadingMore(false));
+  };
+
+  // Star/unstar from any view: update every loaded copy of the row in place
+  // (unstarring in the Starred view drops it from that view).
+  const toggleStar = (session: Session) => {
+    setSessionStarred(session.id, !session.starred)
+      .then((updated) => {
+        const swap = (list: Session[]) => list.map((s) => (s.id === updated.id ? updated : s));
+        setListSessions(swap);
+        setSessionsByDay((prev) => {
+          const next = new Map<number, Session[]>();
+          prev.forEach((list, day) => next.set(day, swap(list)));
+          return next;
+        });
+        setStarredSessions((prev) =>
+          updated.starred
+            ? prev.some((s) => s.id === updated.id)
+              ? swap(prev)
+              : prev
+            : prev.filter((s) => s.id !== updated.id)
+        );
+      })
+      .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')));
+  };
+
   const dayConversations = sessionsByDay.get(selectedDate.getDate()) ?? [];
   const selectedInViewMonth =
     selectedDate.getFullYear() === viewYear && selectedDate.getMonth() === viewMonth;
@@ -195,6 +260,7 @@ export default function RecordsScreen() {
         <View style={styles.modeSeg}>
           <ModeOption label="Calendar" selected={mode === 'calendar'} onPress={() => setMode('calendar')} />
           <ModeOption label="List" selected={mode === 'list'} onPress={() => setMode('list')} divided />
+          <ModeOption label="★ Starred" selected={mode === 'starred'} onPress={() => setMode('starred')} divided />
         </View>
       </View>
 
@@ -295,10 +361,53 @@ export default function RecordsScreen() {
                     <Text style={styles.convoTitle}>{session.title ?? session.summary ?? 'Untitled session'}</Text>
                     {session.processing_status !== 'done' ? <Text style={styles.convoMeta}>Processing…</Text> : null}
                   </View>
+                  <StarToggle starred={session.starred} onToggle={() => toggleStar(session)} label="record" style={styles.star} />
                 </Row>
               ))}
               {dayConversations.length > 0 ? <Text style={styles.hint}>Hold a conversation for more options</Text> : null}
               {dayConversations.length === 0 ? <Text style={styles.empty}>No conversations on this day.</Text> : null}
+            </>
+          )}
+        </>
+      ) : mode === 'starred' ? (
+        <>
+          {starredLoading ? (
+            <View style={styles.center}>
+              <ActivityIndicator color={colors.accent} />
+            </View>
+          ) : starredError ? (
+            <Text style={styles.empty}>Couldn&apos;t load your starred records.</Text>
+          ) : starredSessions.length === 0 ? (
+            <Text style={styles.empty}>No starred records yet. Tap the ☆ on a record to keep it here.</Text>
+          ) : (
+            <>
+              <RuleThick style={{ marginTop: 10, marginBottom: 20 }} />
+              {starredSessions.map((session, i) => (
+                <Row
+                  key={session.id}
+                  onPress={() => router.push({ pathname: '/summary', params: { sessionId: session.id } })}
+                  onLongPress={() => confirmDeleteSession(session, loadStarred)}
+                  style={[styles.convo, { backgroundColor: cardColor(i) }]}
+                >
+                  <Text style={styles.convoDate}>
+                    {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                  </Text>
+                  <View style={styles.convoBody}>
+                    <CardKicker>{sessionModeLabel(session.mode)}</CardKicker>
+                    <Text style={styles.convoTitle}>{session.title ?? session.summary ?? 'Untitled session'}</Text>
+                  </View>
+                  <StarToggle starred={session.starred} onToggle={() => toggleStar(session)} label="record" style={styles.star} />
+                </Row>
+              ))}
+              {starredHasMore ? (
+                <Button
+                  variant="secondary"
+                  label={starredLoadingMore ? 'Loading…' : 'Load more'}
+                  disabled={starredLoadingMore}
+                  onPress={loadMoreStarred}
+                  style={{ marginTop: 14, minHeight: 48 }}
+                />
+              ) : null}
             </>
           )}
         </>
@@ -330,6 +439,7 @@ export default function RecordsScreen() {
                     <Text style={styles.convoTitle}>{session.title ?? session.summary ?? 'Untitled session'}</Text>
                     {session.processing_status !== 'done' ? <Text style={styles.convoMeta}>Processing…</Text> : null}
                   </View>
+                  <StarToggle starred={session.starred} onToggle={() => toggleStar(session)} label="record" style={styles.star} />
                 </Row>
               ))}
               <Text style={styles.hint}>Hold a conversation for more options</Text>
@@ -529,6 +639,11 @@ const styles = StyleSheet.create({
   },
   convoBody: {
     flex: 1,
+  },
+  star: {
+    // Sits in the card's padding so the title keeps its width.
+    marginTop: -10,
+    marginRight: -10,
   },
   convoTitle: {
     fontFamily: font.semibold,

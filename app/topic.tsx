@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, TextInpu
 import { BottomSheet } from '@/components/BottomSheet';
 import { ChevronLeftIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { StarToggle } from '@/components/StarToggle';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { Button, CardKicker, Kicker, Row, RuleThick } from '@/components/ui';
 import { friendlyMessage } from '@/lib/friendlyError';
@@ -34,6 +35,7 @@ import {
   listSessionsByTopics,
   listSessionsUnclassifiedPage,
   listTopics,
+  setTopicStarred,
   mergeTopics,
   moveSessionToTopic,
   moveTopic,
@@ -121,6 +123,22 @@ function TopicDetailScreen() {
   const topic = id ? allTopics.find((t) => t.id === id) ?? null : null;
   const parent = topic?.parent_topic_id ? allTopics.find((t) => t.id === topic.parent_topic_id) ?? null : null;
   const hasChildren = id ? allTopics.some((t) => t.parent_topic_id === id) : false;
+
+  // Favorite this topic (optimistic, reverted if the save fails). `topic` is
+  // derived from allTopics, so flipping it there updates the header too.
+  const toggleTopicStar = () => {
+    if (!id) return;
+    const current = allTopics.find((t) => t.id === id);
+    if (!current) return;
+    const next = !current.starred;
+    const flip = (value: boolean) =>
+      setAllTopics((prev) => prev.map((t) => (t.id === id ? { ...t, starred: value } : t)));
+    flip(next);
+    setTopicStarred(id, next).catch((e) => {
+      flip(!next);
+      Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'));
+    });
+  };
 
   const load = useCallback(async () => {
     if (!user) return;
@@ -408,6 +426,9 @@ function TopicDetailScreen() {
         <Text style={styles.title} numberOfLines={2}>
           {title}
         </Text>
+        {!isUnclassified && topic ? (
+          <StarToggle starred={topic.starred} onToggle={toggleTopicStar} label="topic" />
+        ) : null}
         {!isUnclassified && topic ? (
           <Pressable
             accessibilityRole="button"

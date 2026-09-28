@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View 
 
 import { BottomSheet } from '@/components/BottomSheet';
 import { CheckIcon, ShareIcon } from '@/components/Icon';
+import { StarToggle } from '@/components/StarToggle';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { ChevronLeftIcon } from '@/components/Icon';
@@ -13,7 +14,13 @@ import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
 import { assignMemoryTopic, listMemoriesBySession, type Memory } from '@/services/memories';
 import { processSession } from '@/services/processing';
-import { getSession, updateSessionOutline, updateSessionSummary, type Session } from '@/services/sessions';
+import {
+  getSession,
+  setSessionStarred,
+  updateSessionOutline,
+  updateSessionSummary,
+  type Session,
+} from '@/services/sessions';
 import { assignTaskTopic, listTasksBySession, type Task } from '@/services/tasks';
 import {
   confirmTopicSuggestion,
@@ -342,6 +349,18 @@ export default function SummaryScreen() {
   // plus either its summary+outline or its full transcript, matching the
   // spec's "recording share = title/date/chosen summary-or-transcript"
   // (the tab toggle already above this screen IS that choice).
+  // Favorite this record. Optimistic: the star flips at once and flips back
+  // if the save fails.
+  const toggleStarred = () => {
+    if (!session) return;
+    const next = !session.starred;
+    setSession((s) => (s ? { ...s, starred: next } : s));
+    setSessionStarred(session.id, next).catch((e) => {
+      setSession((s) => (s ? { ...s, starred: !next } : s));
+      Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'));
+    });
+  };
+
   const shareCurrentView = () => {
     if (!session) return;
     const header = recordingHeader(session);
@@ -649,15 +668,25 @@ export default function SummaryScreen() {
               onPress={() => setTab('transcript')}
             />
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={isNote ? 'Share this note' : 'Share this recording'}
-            onPress={shareCurrentView}
-            style={styles.shareTabButton}
-            hitSlop={8}
-          >
-            <ShareIcon size={18} color={colors.neutral700} />
-          </Pressable>
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {session ? (
+              <StarToggle
+                starred={session.starred}
+                onToggle={toggleStarred}
+                label={isNote ? 'note' : 'record'}
+                size={20}
+              />
+            ) : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={isNote ? 'Share this note' : 'Share this recording'}
+              onPress={shareCurrentView}
+              style={styles.shareTabButton}
+              hitSlop={8}
+            >
+              <ShareIcon size={18} color={colors.neutral700} />
+            </Pressable>
+          </View>
         </View>
       ) : null}
 

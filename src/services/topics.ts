@@ -36,6 +36,13 @@ export async function createTopic(
   return data;
 }
 
+/** Stars (favorites) or un-stars a topic -- starred ones are listed first on Topics. */
+export async function setTopicStarred(topicId: string, starred: boolean): Promise<Topic> {
+  const { data, error } = await supabase.from('topics').update({ starred }).eq('id', topicId).select().single();
+  if (error) throw error;
+  return data;
+}
+
 export async function renameTopic(topicId: string, name: string): Promise<Topic> {
   const { data, error } = await supabase
     .from('topics')

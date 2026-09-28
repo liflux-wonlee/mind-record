@@ -86,6 +86,7 @@ export type Database = {
           outline: SessionOutlineSection[] | null;
           /** Standout, verbatim lines worth pulling out on their own -- empty (not null) when nothing qualified. */
           notable_quotes: string[];
+          starred: boolean;
           processing_status: SessionProcessingStatus;
           processing_error: string | null;
           /** AI's best-guess topic for the whole recording when it wasn't confident enough to file it; null once filed. */
@@ -105,6 +106,7 @@ export type Database = {
           summary?: string | null;
           outline?: SessionOutlineSection[] | null;
           notable_quotes?: string[];
+          starred?: boolean;
           processing_status?: SessionProcessingStatus;
           processing_error?: string | null;
           created_at?: string;
@@ -147,6 +149,7 @@ export type Database = {
           description: string | null;
           color: string | null;
           parent_topic_id: string | null;
+          starred: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -157,6 +160,7 @@ export type Database = {
           description?: string | null;
           color?: string | null;
           parent_topic_id?: string | null;
+          starred?: boolean;
           created_at?: string;
           updated_at?: string;
         };

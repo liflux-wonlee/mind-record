@@ -112,6 +112,37 @@ export async function listSessionItemsPage(
   return data;
 }
 
+/**
+ * Records' Starred view: the user's favorite records, newest first, paged
+ * with the same (started_at, id) cursor as listSessionsPage.
+ */
+export async function listStarredSessionsPage(
+  userId: string,
+  { before, limit = 20 }: { before?: SessionsPageCursor; limit?: number } = {}
+): Promise<Session[]> {
+  let query = supabase
+    .from('sessions')
+    .select('*')
+    .eq('user_id', userId)
+    .eq('starred', true)
+    .order('started_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit);
+  if (before) {
+    query = query.or(`started_at.lt.${before.startedAt},and(started_at.eq.${before.startedAt},id.lt.${before.id})`);
+  }
+  const { data, error } = await query;
+  if (error) throw error;
+  return data;
+}
+
+/** Stars (favorites) or un-stars a record. */
+export async function setSessionStarred(sessionId: string, starred: boolean): Promise<Session> {
+  const { data, error } = await supabase.from('sessions').update({ starred }).eq('id', sessionId).select().single();
+  if (error) throw error;
+  return data;
+}
+
 export async function getSession(sessionId: string): Promise<Session | null> {
   const { data, error } = await supabase.from('sessions').select('*').eq('id', sessionId).maybeSingle();
   if (error) throw error;
