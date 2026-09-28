@@ -102,6 +102,13 @@ export async function clearMemoryTopic(memoryId: string): Promise<Memory> {
   return data;
 }
 
+/** Stars (favorites) or un-stars an idea. */
+export async function setMemoryStarred(memoryId: string, starred: boolean): Promise<Memory> {
+  const { data, error } = await supabase.from('memories').update({ starred }).eq('id', memoryId).select().single();
+  if (error) throw error;
+  return data;
+}
+
 export async function deleteMemory(memoryId: string): Promise<void> {
   const { error } = await supabase.from('memories').delete().eq('id', memoryId);
   if (error) throw error;

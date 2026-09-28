@@ -5,6 +5,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 import { BottomSheet } from '@/components/BottomSheet';
 import { KeyboardIcon, MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
+import { StarToggle } from '@/components/StarToggle';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
 import { useRecentSessions } from '@/hooks/useRecentSessions';
 import { friendlyMessage } from '@/lib/friendlyError';
@@ -15,6 +16,7 @@ import {
   deleteSessionMessage,
   listSessionsForDay,
   sessionModeLabel,
+  setSessionStarred,
   type Session,
 } from '@/services/sessions';
 import { colors, font, h2, radius } from '@/theme';
@@ -177,6 +179,17 @@ export default function HomeScreen() {
                 <Text style={styles.continueMeta}>
                   {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                 </Text>
+                <StarToggle
+                  starred={session.starred}
+                  onToggle={() =>
+                    setSessionStarred(session.id, !session.starred)
+                      .then(() => recentSessions.refresh())
+                      .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
+                  }
+                  label="record"
+                  size={20}
+                  style={{ marginRight: -10 }}
+                />
               </Row>
             ))}
             <Text style={styles.hint}>Hold a conversation for more options</Text>

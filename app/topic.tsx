@@ -17,14 +17,22 @@ import {
   listMemoriesByTopics,
   listMemoriesUnclassified,
   type Memory,
+  setMemoryStarred,
 } from '@/services/memories';
-import { deleteSession, deleteSessionMessage, sessionModeLabel, type Session } from '@/services/sessions';
+import {
+  deleteSession,
+  deleteSessionMessage,
+  sessionModeLabel,
+  setSessionStarred,
+  type Session,
+} from '@/services/sessions';
 import {
   assignTaskTopic,
   clearTaskTopic,
   deleteTask,
   listTasksByTopics,
   listTasksUnclassified,
+  setTaskStarred,
   type Task,
 } from '@/services/tasks';
 import type { SessionsPageCursor } from '@/services/sessions';
@@ -123,6 +131,23 @@ function TopicDetailScreen() {
   const topic = id ? allTopics.find((t) => t.id === id) ?? null : null;
   const parent = topic?.parent_topic_id ? allTopics.find((t) => t.id === topic.parent_topic_id) ?? null : null;
   const hasChildren = id ? allTopics.some((t) => t.parent_topic_id === id) : false;
+
+  // Star a recording/task/idea right from its card (optimistic, reverted if
+  // the save fails) -- the list shows the same star the item's own screen does.
+  const starItem = <T extends { id: string; starred: boolean }>(
+    item: T,
+    setList: React.Dispatch<React.SetStateAction<T[]>>,
+    save: (id: string, starred: boolean) => Promise<unknown>
+  ) => {
+    const next = !item.starred;
+    const flip = (value: boolean) =>
+      setList((prev) => prev.map((x) => (x.id === item.id ? { ...x, starred: value } : x)));
+    flip(next);
+    save(item.id, next).catch((e) => {
+      flip(!next);
+      Alert.alert('Could not update', friendlyMessage(e, 'Please try again.'));
+    });
+  };
 
   // Favorite this topic (optimistic, reverted if the save fails). `topic` is
   // derived from allTopics, so flipping it there updates the header too.
@@ -483,6 +508,12 @@ function TopicDetailScreen() {
                   <Text style={styles.entryMeta}>
                     {new Date(session.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
                   </Text>
+                  <StarToggle
+                    starred={session.starred}
+                    onToggle={() => starItem(session, setSessions, setSessionStarred)}
+                    label="recording"
+                    style={styles.entryStar}
+                  />
                 </Row>
               ))}
               {isUnclassified && sessionsCursor ? (
@@ -519,6 +550,12 @@ function TopicDetailScreen() {
                   <Text style={styles.entryTitle} numberOfLines={1}>
                     {task.title}
                   </Text>
+                  <StarToggle
+                    starred={task.starred}
+                    onToggle={() => starItem(task, setTasks, setTaskStarred)}
+                    label="task"
+                    style={styles.entryStar}
+                  />
                 </Row>
               ))}
             </>
@@ -544,6 +581,12 @@ function TopicDetailScreen() {
                   <Text style={styles.entryTitle} numberOfLines={2}>
                     {memory.content}
                   </Text>
+                  <StarToggle
+                    starred={memory.starred}
+                    onToggle={() => starItem(memory, setMemories, setMemoryStarred)}
+                    label="idea"
+                    style={styles.entryStar}
+                  />
                 </Row>
               ))}
             </>
@@ -830,8 +873,15 @@ const styles = StyleSheet.create({
   },
   entryRow: {
     padding: 12,
+    // Room for the star in the top-right corner.
+    paddingRight: 48,
     marginBottom: 8,
     borderRadius: radius.pastel,
+  },
+  entryStar: {
+    position: 'absolute',
+    top: 2,
+    right: 2,
   },
   entryTitle: {
     fontFamily: font.semibold,

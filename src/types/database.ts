@@ -257,6 +257,7 @@ export type Database = {
           importance: number | null;
           topic_id: string | null;
           topic_suggestion: string | null;
+          starred: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -269,6 +270,7 @@ export type Database = {
           importance?: number | null;
           topic_id?: string | null;
           topic_suggestion?: string | null;
+          starred?: boolean;
           created_at?: string;
           updated_at?: string;
         };
