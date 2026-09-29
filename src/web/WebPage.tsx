@@ -38,7 +38,7 @@ export function WebPage({ children }: { children: React.ReactNode }) {
       <View style={styles.column}>
         <View style={styles.header}>
           <Link href="/records" style={styles.wordmark}>
-            Mind Record
+            JoaAssistant
           </Link>
           <Button
             variant="ghost"

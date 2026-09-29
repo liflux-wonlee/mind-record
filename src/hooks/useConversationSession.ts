@@ -408,7 +408,7 @@ export function useConversationSession(
     if (!permission.granted) {
       Alert.alert(
         'Microphone access needed',
-        'Mind Record needs microphone access to talk with you. You can enable it in Settings.'
+        'JoaAssistant needs microphone access to talk with you. You can enable it in Settings.'
       );
       return;
     }

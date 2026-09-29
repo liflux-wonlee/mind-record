@@ -5,12 +5,12 @@
  * hand when editing, since the HTML pages can't import TS at build time.
  *
  * COMPANY_NAME/CONTACT_EMAIL/GOVERNING_LAW are drawn from what's already in
- * the app (bundle id com.liflux.mindrecord) or left as placeholders -- see
+ * the app (bundle id com.liflux.joaassistant) or left as placeholders -- see
  * the deployment note where these are used for what still needs sign-off
  * before this goes in front of app reviewers.
  */
 export const COMPANY_NAME = 'Liflux';
-export const APP_NAME = 'Mind Record';
+export const APP_NAME = 'JoaAssistant';
 export const CONTACT_EMAIL = 'mindrecord@joasuite.com';
 export const GOVERNING_LAW = 'the State of New Jersey, USA, without regard to its conflict-of-laws principles';
 export const EFFECTIVE_DATE = 'September 20, 2026';

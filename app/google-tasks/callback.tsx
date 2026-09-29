@@ -1,6 +1,6 @@
 /**
  * Landing spot for the Google Tasks OAuth redirect
- * (mindrecord://google-tasks/callback). On Android, Chrome Custom Tabs
+ * (joaassistant://google-tasks/callback). On Android, Chrome Custom Tabs
  * routinely hands a custom-scheme redirect off to the OS's normal intent
  * dispatch instead of back to the WebBrowser session that opened it (see
  * src/services/googleTasks.ts's connectGoogleTasks() for the same quirk

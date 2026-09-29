@@ -30,7 +30,7 @@ export async function signUpWithEmail(
     password,
     options: {
       // Must be listed verbatim under Supabase -> Auth -> URL Configuration
-      // -> Redirect URLs (mindrecord://auth/callback), or the confirmation
+      // -> Redirect URLs (joaassistant://auth/callback), or the confirmation
       // link falls back to the dashboard's Site URL and never reaches the app.
       emailRedirectTo: Linking.createURL('auth/callback'),
       data: trimmedName ? { display_name: trimmedName } : undefined,

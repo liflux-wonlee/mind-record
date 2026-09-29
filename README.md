@@ -1,4 +1,4 @@
-# Mind Record
+# JoaAssistant (formerly Mind Record)
 
 Voice memory & action assistant — *Don't organize your life. Just talk. AI organizes it for you.*
 

@@ -24,9 +24,9 @@ import { colors, font, radius } from '@/theme';
 
 const PAGES = [
   {
-    kicker: 'Mind Record',
+    kicker: 'JoaAssistant',
     title: 'Just talk. It gets organized.',
-    body: 'Say whatever is on your mind — in any language. Mind Record writes it down, sums it up, and pulls out the tasks and ideas so you don’t have to.',
+    body: 'Say whatever is on your mind — in any language. JoaAssistant writes it down, sums it up, and pulls out the tasks and ideas so you don’t have to.',
     color: colors.pastelYellow,
   },
   {

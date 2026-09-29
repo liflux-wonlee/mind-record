@@ -159,3 +159,7 @@ reminders-dispatch:
 **별도 검토 후에만 (호환성 영향)**
 - URL scheme `mindrecord://` (Supabase Auth Redirect URL, Google Tasks 콜백 `google-tasks-callback`), Expo `slug`, 저장소 이름·도메인 — 바꾸면 신·구 콜백을 한동안 같이 등록하는 전환 계획 필요
 - 표시 이름·권한 문구·알림 채널 이름은 **네이티브 재빌드**가 필요 (JS 업데이트만으로 안 바뀜)
+
+### 적용됨 (2026-09-30): JoaAssistant
+- 표시 이름 `JoaAssistant`, 패키지/번들 ID `com.liflux.joaassistant`, URL scheme `joaassistant://` (스토어 출시 전이라 식별자까지 변경).
+- 그대로 둔 것: Expo `slug`(`mind-record`, EAS projectId와 묶여 있음), Supabase 프로젝트·DB·키, 로컬 저장 키(`mindrecord.*`), 연락 이메일, 배포된 마이그레이션 주석.

@@ -79,7 +79,7 @@ export async function signInWithOAuth(provider: OAuthProvider): Promise<void> {
     // No error, no code, no tokens -- fall through to the poll below.
   }
 
-  // On Android, Chrome Custom Tabs sometimes hands the mindrecord://
+  // On Android, Chrome Custom Tabs sometimes hands the joaassistant://
   // redirect straight to the OS instead of back to this browser session
   // (the app then opens app/auth/callback.tsx directly, and this promise
   // resolves with type 'dismiss' or a URL with no usable payload). The

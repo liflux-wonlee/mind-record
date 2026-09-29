@@ -4,7 +4,7 @@
 // -- that's a completely separate OAuth client/token, on purpose (the spec
 // is explicit that a Google Tasks connection must never reuse the login
 // ID token, and must survive independently of which provider the user
-// actually signed into Mind Record with).
+// actually signed into JoaAssistant with).
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 export const GOOGLE_TASKS_CLIENT_ID = Deno.env.get('GOOGLE_TASKS_CLIENT_ID');
@@ -361,7 +361,7 @@ export async function sendToGoogleTasks(
 export type GoogleSendRef = { google_task_list_id: string; google_task_id: string };
 
 /**
- * Deletes these sent tasks from Google Tasks (undo), and Mind Record's own
+ * Deletes these sent tasks from Google Tasks (undo), and JoaAssistant's own
  * record of each send. A task already gone from Google counts as removed.
  * Never throws for Google-side trouble -- reports what couldn't be removed.
  */

@@ -41,7 +41,7 @@ export function LockScreen({ onUnlocked }: { onUnlocked: () => void }) {
   const tryUnlock = async () => {
     if (status === 'checking') return;
     setStatus('checking');
-    const ok = await authenticate('Unlock Mind Record');
+    const ok = await authenticate('Unlock JoaAssistant');
     if (ok) {
       onUnlocked();
       return;

@@ -73,7 +73,7 @@ export default function LoginScreen() {
         ))}
       </View>
 
-      <Text style={styles.wordmark}>Mind Record</Text>
+      <Text style={styles.wordmark}>JoaAssistant</Text>
       <Text style={styles.tagline}>
         {"Don't organize your life.\nJust talk. AI organizes it for you."}
       </Text>

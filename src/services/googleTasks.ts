@@ -51,7 +51,7 @@ export class GoogleTasksCancelledError extends Error {
  * Connects Google Tasks -- entirely separate from login's Google Sign-In
  * (src/services/auth.ts), with its own consent screen and its own tokens
  * (see supabase/functions/google-tasks-connect-start/callback). Available
- * no matter which provider the user actually signed into Mind Record
+ * no matter which provider the user actually signed into JoaAssistant
  * with.
  */
 export async function connectGoogleTasks(): Promise<void> {
@@ -71,7 +71,7 @@ export async function connectGoogleTasks(): Promise<void> {
     throw new Error(message ? `Could not connect Google Tasks (${message}).` : 'Could not connect Google Tasks.');
   }
 
-  // On Android, the final mindrecord:// redirect sometimes goes straight to
+  // On Android, the final joaassistant:// redirect sometimes goes straight to
   // the OS instead of back to this browser session (same quirk src/lib/
   // oauth.ts documents for Apple's Android login path) -- the connection
   // may have completed on the server a moment after this promise settles,

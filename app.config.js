@@ -2,7 +2,7 @@
  * Dynamic layer over app.json (which stays the source of truth).
  *
  * Android push (FCM) needs google-services.json from the Firebase project
- * for com.liflux.mindrecord. It is a per-environment file that is NOT
+ * for com.liflux.joaassistant. It is a per-environment file that is NOT
  * committed (see .gitignore): put it at ./google-services.json locally, or
  * provide it to EAS as a file environment variable named
  * GOOGLE_SERVICES_JSON. Builds without it still work -- they just can't

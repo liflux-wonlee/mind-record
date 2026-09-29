@@ -25,7 +25,7 @@ export async function ensureBackgroundRecordingAllowed(): Promise<boolean> {
       PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS, {
         title: 'Keep recording with the screen off',
         message:
-          'Mind Record shows a small "Recording" notification so Android lets it keep listening while the screen is off or you switch apps. Without it, recording pauses whenever you leave the app.',
+          'JoaAssistant shows a small "Recording" notification so Android lets it keep listening while the screen is off or you switch apps. Without it, recording pauses whenever you leave the app.',
         buttonPositive: 'Allow',
         buttonNegative: 'Not now',
       })

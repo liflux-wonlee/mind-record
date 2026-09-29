@@ -95,7 +95,7 @@ export default function RecordsListScreen() {
         <Button variant="ghost" label="Refresh" disabled={loading} onPress={loadFirst} />
       </View>
       <Text style={styles.note}>
-        Read-only on the web for now. Recording, conversations and editing are in the Mind Record app.
+        Read-only on the web for now. Recording, conversations and editing are in the JoaAssistant app.
       </Text>
 
       {loading ? (

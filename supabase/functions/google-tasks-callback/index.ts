@@ -13,7 +13,7 @@
 // only ever learns "connected, as whom" via google-tasks-status. Verifies
 // the connected Google account through Google's own userinfo endpoint
 // (the server-verified sub/email), never trusting anything client-sent.
-// Finishes by redirecting the browser to mindrecord://google-tasks/callback
+// Finishes by redirecting the browser to joaassistant://google-tasks/callback
 // so src/lib/oauth.ts-style WebBrowser.openAuthSessionAsync() on the app
 // side resolves and the app can check the result.
 //
@@ -40,7 +40,7 @@ import { GOOGLE_TASKS_CLIENT_ID, GOOGLE_TASKS_CLIENT_SECRET } from '../_shared/g
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-const APP_REDIRECT = 'mindrecord://google-tasks/callback';
+const APP_REDIRECT = 'joaassistant://google-tasks/callback';
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);

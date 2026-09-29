@@ -22,7 +22,7 @@ import { colors, font, radius } from '@/theme';
 
 /**
  * Available regardless of which provider (Google/Apple/email) the user
- * actually signed into Mind Record with -- this is a completely separate
+ * actually signed into JoaAssistant with -- this is a completely separate
  * consent/connection (see src/services/googleTasks.ts), never the login
  * token. "Send" (not "sync"): sending a task never links it to keep
  * updating both ways -- see the Tasks screen's own send action for the

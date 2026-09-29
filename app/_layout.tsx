@@ -185,8 +185,8 @@ function WebRootNavigator() {
         <Stack.Screen name="legal/terms-of-service" />
       </Stack.Protected>
       <Stack.Protected guard={signedIn}>
-        <Stack.Screen name="records/index" options={{ title: 'Records · Mind Record' }} />
-        <Stack.Screen name="records/[id]" options={{ title: 'Record · Mind Record' }} />
+        <Stack.Screen name="records/index" options={{ title: 'Records · JoaAssistant' }} />
+        <Stack.Screen name="records/[id]" options={{ title: 'Record · JoaAssistant' }} />
         <Stack.Screen name="legal/privacy-policy" />
         <Stack.Screen name="legal/terms-of-service" />
       </Stack.Protected>

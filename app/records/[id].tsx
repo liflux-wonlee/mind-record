@@ -88,7 +88,7 @@ function RecordBody({ session }: { session: Session }) {
       {status ? (
         <Text style={styles.status}>
           {status}
-          {session.processing_status === 'error' ? ' -- retry it from the Mind Record app.' : ''}
+          {session.processing_status === 'error' ? ' -- retry it from the JoaAssistant app.' : ''}
         </Text>
       ) : null}
 

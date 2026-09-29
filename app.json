@@ -1,9 +1,9 @@
 {
   "expo": {
-    "name": "Mind Record",
+    "name": "JoaAssistant",
     "slug": "mind-record",
     "version": "1.0.0",
-    "scheme": "mindrecord",
+    "scheme": "joaassistant",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -11,10 +11,10 @@
     "backgroundColor": "#f7f4f2",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.liflux.mindrecord"
+      "bundleIdentifier": "com.liflux.joaassistant"
     },
     "android": {
-      "package": "com.liflux.mindrecord",
+      "package": "com.liflux.joaassistant",
       "adaptiveIcon": {
         "backgroundColor": "#f7f4f2",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -48,7 +48,7 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Mind Record uses your microphone to record what you say.",
+          "microphonePermission": "JoaAssistant uses your microphone to record what you say.",
           "enableBackgroundPlayback": false,
           "enableBackgroundRecording": true
         }
@@ -56,13 +56,13 @@
       [
         "expo-local-authentication",
         {
-          "faceIDPermission": "Mind Record uses Face ID to unlock your records after you turn this on in Settings."
+          "faceIDPermission": "JoaAssistant uses Face ID to unlock your records after you turn this on in Settings."
         }
       ],
       [
         "expo-secure-store",
         {
-          "faceIDPermission": "Mind Record uses Face ID to unlock your records after you turn this on in Settings."
+          "faceIDPermission": "JoaAssistant uses Face ID to unlock your records after you turn this on in Settings."
         }
       ],
       [

@@ -190,7 +190,7 @@ export function useCaptureSession() {
         if (!permission.granted) {
           Alert.alert(
             'Microphone access needed',
-            'Mind Record needs microphone access to record. You can enable it in Settings.'
+            'JoaAssistant needs microphone access to record. You can enable it in Settings.'
           );
           return false;
         }

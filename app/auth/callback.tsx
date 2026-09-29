@@ -1,5 +1,5 @@
 /**
- * Landing spot for Supabase's OAuth redirect (mindrecord://auth/callback).
+ * Landing spot for Supabase's OAuth redirect (joaassistant://auth/callback).
  * On iOS this URL is normally intercepted by the in-app browser session
  * before it ever reaches Expo Router (see src/lib/oauth.ts) -- but on
  * Android, Chrome Custom Tabs routinely hands a custom-scheme redirect off

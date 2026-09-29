@@ -70,7 +70,7 @@ export function useVoiceSearch(
     if (!permission.granted) {
       Alert.alert(
         'Microphone access needed',
-        'Mind Record needs microphone access to search by voice. You can enable it in Settings.'
+        'JoaAssistant needs microphone access to search by voice. You can enable it in Settings.'
       );
       return;
     }
