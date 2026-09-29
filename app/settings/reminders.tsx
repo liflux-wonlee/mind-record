@@ -2,20 +2,30 @@
  * Reminder settings: this phone's notification permission, the default
  * reminder time, day-before / day-of, quiet hours, lock-screen preview and a
  * real test push (reminders-dispatch in test mode -- the result shown is
- * what the server actually did, not an assumed success).
+ * what the server actually did, not an assumed success: why this phone got
+ * nothing, or what Google/Apple said about it within a few seconds; see
+ * src/lib/pushDiagnostics.ts for the wording).
  *
  * Everything but the permission lives on the profile, so it applies to all
  * of the account's phones; the DB recomputes unsent reminders on change.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
 import { Button, Kicker } from '@/components/ui';
 import { usePushPermission } from '@/hooks/useReminders';
 import { friendlyMessage } from '@/lib/friendlyError';
-import { openNotificationSettings, registerPushInstallation } from '@/lib/push';
+import { isNetworkError } from '@/lib/functionsError';
+import {
+  getInstallationId,
+  getPushState,
+  openNotificationSettings,
+  registerPushInstallation,
+  type PushState,
+} from '@/lib/push';
+import { describeTestPush, describeTestPushFailure, tokenErrorText, type PushNote } from '@/lib/pushDiagnostics';
 import { useAuth } from '@/providers/AuthProvider';
 import {
   clockMinutes,
@@ -34,6 +44,15 @@ const DEFAULT_QUIET = { start: '22:00:00', end: '08:00:00' };
 
 type Editable = Omit<ReminderSettings, 'timezone'>;
 
+/** Sends this phone's current token + permission to the server (never prompts). */
+async function refreshRegistration(): Promise<{ state: PushState | null; error: string | null }> {
+  try {
+    return { state: await registerPushInstallation(), error: null };
+  } catch (e) {
+    return { state: null, error: friendlyMessage(e, 'Registration failed.') };
+  }
+}
+
 export default function ReminderSettingsScreen() {
   const { user } = useAuth();
   const permission = usePushPermission();
@@ -41,7 +60,7 @@ export default function ReminderSettingsScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<PushNote | null>(null);
   // Quiet hours switched off and on again in one visit get their old times back.
   const lastQuiet = useRef<{ start: string; end: string } | null>(null);
   const pending = useRef<Partial<Editable>>({});
@@ -137,25 +156,43 @@ export default function ReminderSettingsScreen() {
     setTesting(true);
     setTestResult(null);
     try {
-      // Make sure this phone's latest token is on the server first.
-      if (permission.granted) await registerPushInstallation().catch(() => {});
-      const result = await sendTestPush();
-      // `sent` counts attempts; each result says what Expo Push actually did.
-      const accepted = result.results.filter((r) => r.status === 'accepted' || r.status === 'delivered').length;
-      const failure = result.results.find((r) => r.error)?.error;
-      if (result.installations === 0) {
-        setTestResult('No device with notifications on. Turn on notifications above, then try again.');
-      } else if (accepted === 0) {
-        setTestResult(`Couldn’t send it${failure ? `: ${failure}` : '.'}`);
-      } else {
-        setTestResult(
-          `Sent to ${accepted} ${accepted === 1 ? 'device' : 'devices'} — it can take a few seconds to arrive.` +
-            (accepted < result.installations ? ` ${result.installations - accepted} could not be reached.` : '')
-        );
+      const installationId = permission.supported ? await getInstallationId().catch(() => null) : null;
+      // Make sure the server has this phone's latest token and permission first.
+      let reg = permission.supported ? await refreshRegistration() : null;
+      let result = await sendTestPush(installationId);
+      // The server doesn't know this phone, has no address for it, or switched
+      // it off: register once more and retry once -- only when nothing went
+      // out, so another device never gets the test twice.
+      if (
+        permission.supported &&
+        result.installations === 0 &&
+        (result.reason === 'not_registered' || result.reason === 'no_token' || result.reason === 'disabled')
+      ) {
+        reg = await refreshRegistration();
+        result = await sendTestPush(installationId);
       }
+      const state = reg?.state ?? (permission.supported ? await getPushState().catch(() => null) : null);
+      setTestResult(
+        describeTestPush(result, {
+          installationId,
+          platform: Platform.OS,
+          permissionGranted: state?.permission === 'granted',
+          tokenError: state?.tokenError ?? null,
+          registerError: reg?.error ?? null,
+        })
+      );
     } catch (e) {
-      setTestResult(friendlyMessage(e, 'Could not send a test notification.'));
+      const status = (e as { status?: unknown } | null)?.status;
+      setTestResult(
+        describeTestPushFailure({
+          message: friendlyMessage(e, 'Could not send a test notification.'),
+          status: typeof status === 'number' ? status : undefined,
+          network: isNetworkError(e),
+        })
+      );
     } finally {
+      // The card shows the latest token error, if registering just hit one.
+      permission.refresh();
       setTesting(false);
     }
   };
@@ -176,13 +213,20 @@ export default function ReminderSettingsScreen() {
           <ActivityIndicator color={colors.accent} style={{ alignSelf: 'flex-start' }} />
         ) : push.permission === 'granted' ? (
           <>
-            <Text style={styles.body}>On. Reminders can reach this phone.</Text>
             {push.tokenError ? (
-              <Text style={styles.warn}>
-                But this phone couldn’t register for push notifications ({push.tokenError}). Reminders still show in
-                the app.
-              </Text>
-            ) : null}
+              <>
+                <Text style={styles.body}>On — but reminders can’t reach this phone yet.</Text>
+                <Text style={styles.warn}>{tokenErrorText(push.tokenError, Platform.OS)}</Text>
+                <Text selectable style={styles.detail}>
+                  Details: {push.tokenError}
+                </Text>
+              </>
+            ) : testResult?.blocked ? (
+              <Text style={styles.body}>On — but the test below shows reminders can’t reach this phone yet.</Text>
+            ) : (
+              // Having a token isn't proof pushes get through -- the test is.
+              <Text style={styles.body}>On. Reminders are sent to this phone as notifications.</Text>
+            )}
             <Button
               label="Open system settings"
               variant="ghost"
@@ -301,7 +345,22 @@ export default function ReminderSettingsScreen() {
               onPress={runTest}
               style={styles.pill}
             />
-            {testResult ? <Text style={[styles.body, { marginTop: 10, marginBottom: 0 }]}>{testResult}</Text> : null}
+            {testing ? (
+              <Text style={styles.hint}>
+                Sending, then waiting a few seconds for {Platform.OS === 'ios' ? 'Apple' : 'Google'} to confirm it…
+              </Text>
+            ) : testResult ? (
+              <>
+                <Text style={[styles.body, styles.testResult, !testResult.ok && { color: colors.accent800 }]}>
+                  {testResult.text}
+                </Text>
+                {testResult.detail ? (
+                  <Text selectable style={styles.detail}>
+                    Details: {testResult.detail}
+                  </Text>
+                ) : null}
+              </>
+            ) : null}
           </View>
 
           <Text style={[styles.hint, { marginTop: 16 }]}>
@@ -395,6 +454,18 @@ const styles = StyleSheet.create({
     lineHeight: 17,
     color: colors.neutral700,
     marginTop: 6,
+  },
+  /** Raw error text under a plain-words explanation, for support. */
+  detail: {
+    fontFamily: font.regular,
+    fontSize: 11,
+    lineHeight: 15,
+    color: colors.neutral700,
+    marginTop: 4,
+  },
+  testResult: {
+    marginTop: 10,
+    marginBottom: 0,
   },
   pill: {
     borderRadius: radius.pastel,

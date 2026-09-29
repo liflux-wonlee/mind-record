@@ -155,7 +155,7 @@ npx expo export --platform web --output-dir dist  # production 빌드 → dist/
   - 업로드 경로(`src/services/recordings.ts`, `conversation.ts`)도 파일 URI 전제를 Blob 전제로 바꿔야 한다.
 - **모바일 전제로 짠 부분:**
   - 녹음 크기 확인(`localRecordingSize`)과 TTS 응답 재생이 앱 캐시 파일을 전제로 한다(`useConversationSession`, `useVoiceSearch`). 웹에서는 Blob URL이나 `<audio>`로 재생해야 한다.
-  - 발언 종료 감지(`src/lib/voiceActivity.ts`)는 순수 TypeScript라 재사용할 수 있다. 다만 입력은 WebAudio로 받은 PCM을 AudioWorklet을 통해 넣어야 한다.
+  - 발언 종료 감지는 녹음기의 미터링(dB) 값으로 판정한다(`useConversationSession`). 웹에서 이 값이 나오지 않으면 WebAudio `AnalyserNode`로 레벨을 구해 같은 판정에 넣어야 한다. (PCM 기반 감지기 `src/lib/voiceActivity.ts`는 도로에서 더 나빠 삭제했다. 필요하면 git 기록에 있다.)
   - 브라우저 자동재생 정책 때문에, 음성 응답은 사용자가 한 번 조작(제스처)한 뒤에만 재생된다.
 - **지연:** 같은 서버 파이프라인(Whisper → GPT → TTS)을 쓰므로 웹이라고 응답 지연이 줄지는 않는다. 지연 측정 구간(`perfLog`)은 모바일과 비교할 수 있게 유지한다.
 - **연속 녹음:** 탭 종료, 브라우저 정지, 화면 잠금, 절전 상태에서는 모바일 같은 연속 녹음을 보장하지 않는다. 장시간 녹음과 오프라인 복구는 별도로 설계해야 한다.

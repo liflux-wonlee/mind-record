@@ -24,8 +24,15 @@
 //    Bounded: stops claiming after ~20s.
 //
 // 2. TEST ("send a test notification" in Settings): `Authorization: Bearer
-//    <user JWT>` and body {"mode":"test"} -- one push to the caller's own
-//    enabled installs, right now.
+//    <user JWT>` and body {"mode":"test", "installationId"?: "<the asking
+//    phone's id>"} -- one push to the caller's own enabled installs, right
+//    now. The answer says what really happened: why the asking phone (or,
+//    without an id, the account) got nothing -- `reason`, see
+//    testNoDeviceReason -- and, for what Expo accepted, the push receipt
+//    checked for ~6s ('delivered' = handed to FCM/APNs; 'failed' with the
+//    code, e.g. InvalidCredentials = the FCM V1 key on Expo is missing or
+//    invalid). Receipts found here are recorded like the cron's receipt
+//    pass does, so that pass never looks at them again.
 //
 // Deploy WITHOUT gateway JWT verification (the cron request carries only
 // the shared secret; test mode verifies the user's JWT itself):
@@ -46,14 +53,20 @@ import {
   EXPO_RECEIPT_CHUNK,
   EXPO_SEND_CHUNK,
   GIVE_UP_AFTER_MS,
+  isUsableInstallation,
   outcomesForSend,
   parseSendBody,
   retryDecision,
   targetKey,
+  TEST_RECEIPT_POLL_MS,
+  testNoDeviceReason,
+  testResultItem,
   timingSafeEqual,
   truncateToSecond,
   type ExpoMessage,
+  type InstallationState,
   type MessageOutcome,
+  type ReceiptOutcome,
   type SendResult,
 } from '../_shared/reminderPush.ts';
 import { localDateOf } from '../_shared/reminderRules.ts';
@@ -151,12 +164,16 @@ Deno.serve(async (req) => {
   }
 
   let mode: unknown;
+  let installationId: unknown;
   try {
-    ({ mode } = await req.json());
+    ({ mode, installationId } = await req.json());
   } catch {
     // handled below
   }
   if (mode !== 'test') return json({ error: 'Unknown request.' }, 400);
+  // Optional (older apps don't send it); same bounds as push_installations.installation_id.
+  const askingInstall =
+    typeof installationId === 'string' && installationId.length >= 8 && installationId.length <= 100 ? installationId : null;
 
   const callerClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
@@ -168,7 +185,7 @@ Deno.serve(async (req) => {
   if (authError || !user) return json({ error: 'Not authenticated.' }, 401);
 
   try {
-    return json(await runTest(user.id));
+    return json(await runTest(user.id, askingInstall));
   } catch (e) {
     logError('reminders-dispatch test failed:', e);
     return json({ error: 'Could not send a test notification. Please try again.' }, 500);
@@ -245,9 +262,12 @@ type Outgoing = {
   message: ExpoMessage;
 };
 
+/** A delivery's recorded send outcome (`ticketId` when Expo accepted it). */
+type Recorded = { status: string; error?: string; ticketId?: string };
+
 /** Pushes the rows and records each outcome. Returns the final status per delivery id. */
-async function sendAndRecord(db: SupabaseClient, outgoing: Outgoing[], summary: Summary | null): Promise<Map<string, { status: string; error?: string }>> {
-  const final = new Map<string, { status: string; error?: string }>();
+async function sendAndRecord(db: SupabaseClient, outgoing: Outgoing[], summary: Summary | null): Promise<Map<string, Recorded>> {
+  const final = new Map<string, Recorded>();
   for (const part of chunk(outgoing, EXPO_SEND_CHUNK)) {
     const result = await expoSend(part.map((o) => o.message));
     const outcomes = outcomesForSend(result, part.length);
@@ -262,14 +282,16 @@ async function recordOutcome(
   o: Outgoing,
   outcome: MessageOutcome,
   summary: Summary | null
-): Promise<{ status: string; error?: string }> {
+): Promise<Recorded> {
   const now = new Date();
   let update: Record<string, unknown>;
   let status: string;
   let error: string | undefined;
+  let ticketId: string | undefined;
   switch (outcome.status) {
     case 'accepted':
       status = 'accepted';
+      ticketId = outcome.ticketId;
       update = { status, expo_ticket_id: outcome.ticketId, error: null, next_attempt_at: null };
       if (summary) summary.accepted++;
       break;
@@ -305,6 +327,7 @@ async function recordOutcome(
     .update({ ...update, attempts: o.attempts })
     .eq('id', o.deliveryId);
   if (dbError) logError('reminders-dispatch could not record a delivery:', dbError);
+  if (ticketId) return { status, ticketId };
   return error ? { status, error } : { status };
 }
 
@@ -673,48 +696,16 @@ async function receiptPass(db: SupabaseClient, summary: Summary): Promise<void> 
     .limit(RECEIPT_BATCH);
   if (error) throw error;
   const rows = ((data ?? []) as { id: string; expo_ticket_id: string | null; installation_id: string; created_at: string }[]).filter(
-    (r) => !!r.expo_ticket_id
+    (r): r is ReceiptRow => !!r.expo_ticket_id
   );
   const checkedAt = new Date().toISOString();
   for (const part of chunk(rows, EXPO_RECEIPT_CHUNK)) {
-    const receipts = await expoReceipts(part.map((r) => r.expo_ticket_id!));
+    const receipts = await expoReceipts(part.map((r) => r.expo_ticket_id));
     if (!receipts) continue; // try again next run
-    const delivered: string[] = [];
-    const expired: string[] = [];
-    for (const row of part) {
-      const outcome = classifyReceipt(receipts[row.expo_ticket_id!]);
-      summary.receiptsChecked++;
-      if (outcome.status === 'delivered') {
-        // Handed to FCM/APNs -- NOT proof the phone showed it or the user saw it.
-        delivered.push(row.id);
-      } else if (outcome.status === 'failed') {
-        summary.receiptFailed++;
-        const { error: e } = await db
-          .from('reminder_deliveries')
-          .update({ status: 'failed', error: outcome.error, receipt_checked_at: checkedAt })
-          .eq('id', row.id);
-        if (e) logError('reminders-dispatch could not record a receipt:', e);
-        if (outcome.disableInstallation) {
-          // Only if the install hasn't re-registered since this push went out.
-          const { error: d } = await db
-            .from('push_installations')
-            .update({ enabled: false, last_error: outcome.error })
-            .eq('installation_id', row.installation_id)
-            .lt('updated_at', row.created_at);
-          if (d) logError('reminders-dispatch could not disable an installation:', d);
-        }
-      } else if (now - Date.parse(row.created_at) > RECEIPT_GIVE_UP_MS) {
-        expired.push(row.id);
-      }
-    }
-    if (delivered.length > 0) {
-      summary.delivered += delivered.length;
-      const { error: e } = await db
-        .from('reminder_deliveries')
-        .update({ status: 'delivered', receipt_checked_at: checkedAt })
-        .in('id', delivered);
-      if (e) logError('reminders-dispatch could not record receipts:', e);
-    }
+    const outcomes = await recordReceipts(db, part, receipts, checkedAt, summary);
+    const expired = part
+      .filter((r) => outcomes.get(r.id)?.status === 'pending' && now - Date.parse(r.created_at) > RECEIPT_GIVE_UP_MS)
+      .map((r) => r.id);
     if (expired.length > 0) {
       // No receipt any more: stays 'accepted' (Expo took it; the rest is unknown).
       const { error: e } = await db.from('reminder_deliveries').update({ receipt_checked_at: checkedAt }).in('id', expired);
@@ -723,21 +714,85 @@ async function receiptPass(db: SupabaseClient, summary: Summary): Promise<void> 
   }
 }
 
+/** An accepted delivery whose push receipt is to be checked. */
+type ReceiptRow = { id: string; expo_ticket_id: string; installation_id: string; created_at: string };
+
+/**
+ * Records one batch of Expo receipts on their delivery rows: 'delivered' or
+ * 'failed' (and disables an install Expo reports as DeviceNotRegistered).
+ * Rows with no receipt yet are left as they are. Shared by the cron's
+ * receipt pass and the test push; returns each row's outcome by delivery id.
+ */
+async function recordReceipts(
+  db: SupabaseClient,
+  rows: ReceiptRow[],
+  receipts: Record<string, unknown>,
+  checkedAt: string,
+  summary: Summary | null
+): Promise<Map<string, ReceiptOutcome>> {
+  const outcomes = new Map<string, ReceiptOutcome>();
+  const delivered: string[] = [];
+  for (const row of rows) {
+    const outcome = classifyReceipt(receipts[row.expo_ticket_id]);
+    outcomes.set(row.id, outcome);
+    if (summary) summary.receiptsChecked++;
+    if (outcome.status === 'delivered') {
+      // Handed to FCM/APNs -- NOT proof the phone showed it or the user saw it.
+      delivered.push(row.id);
+    } else if (outcome.status === 'failed') {
+      if (summary) summary.receiptFailed++;
+      const { error: e } = await db
+        .from('reminder_deliveries')
+        .update({ status: 'failed', error: outcome.error, receipt_checked_at: checkedAt })
+        .eq('id', row.id);
+      if (e) logError('reminders-dispatch could not record a receipt:', e);
+      if (outcome.disableInstallation) {
+        // Only if the install hasn't re-registered since this push went out.
+        const { error: d } = await db
+          .from('push_installations')
+          .update({ enabled: false, last_error: outcome.error })
+          .eq('installation_id', row.installation_id)
+          .lt('updated_at', row.created_at);
+        if (d) logError('reminders-dispatch could not disable an installation:', d);
+      }
+    }
+  }
+  if (delivered.length > 0) {
+    if (summary) summary.delivered += delivered.length;
+    const { error: e } = await db
+      .from('reminder_deliveries')
+      .update({ status: 'delivered', receipt_checked_at: checkedAt })
+      .in('id', delivered);
+    if (e) logError('reminders-dispatch could not record receipts:', e);
+  }
+  return outcomes;
+}
+
 // ── test push ──────────────────────────────────────────────────────────
 
 const TEST_TEXT = { title: 'Test notification', body: 'Reminders will show up like this.' };
 
-async function runTest(userId: string) {
+/**
+ * Pushes to the caller's usable installs and reports what really happened.
+ * `askingInstall` is the phone that pressed the button (optional): `reason`
+ * then says why THAT phone got nothing, even when another device got it;
+ * without it, `reason` only comes with "no device at all".
+ */
+async function runTest(userId: string, askingInstall: string | null) {
   const db = serviceClient();
   const { data, error } = await db
     .from('push_installations')
-    .select('installation_id, user_id, expo_push_token')
-    .eq('user_id', userId)
-    .eq('enabled', true)
-    .not('expo_push_token', 'is', null);
+    .select('installation_id, expo_push_token, permission, enabled, last_error, last_seen_at')
+    .eq('user_id', userId);
   if (error) throw error;
-  const devices = (data ?? []) as Install[];
-  if (devices.length === 0) return { installations: 0, sent: 0, results: [] };
+  const all = (data ?? []) as InstallationState[];
+  const devices = all.filter(isUsableInstallation) as (InstallationState & { expo_push_token: string })[];
+  const why = devices.length === 0 || askingInstall ? testNoDeviceReason(all, askingInstall) : null;
+  const explain = why ? (why.lastError ? { reason: why.reason, lastError: why.lastError } : { reason: why.reason }) : {};
+  if (devices.length === 0) {
+    console.log('[reminders-dispatch] test', JSON.stringify({ installs: all.length, usable: 0, reason: why?.reason }));
+    return { installations: 0, sent: 0, results: [], ...explain };
+  }
 
   const slot = truncateToSecond(new Date());
   const key = `test:${userId}`;
@@ -755,9 +810,9 @@ async function runTest(userId: string) {
       })),
       { onConflict: 'installation_id,target_key,slot_at', ignoreDuplicates: true }
     )
-    .select('id, installation_id');
+    .select('id, installation_id, created_at');
   if (insertError) throw insertError;
-  const rows = (inserted ?? []) as { id: string; installation_id: string }[];
+  const rows = (inserted ?? []) as { id: string; installation_id: string; created_at: string }[];
   const outgoing: Outgoing[] = [];
   for (const row of rows) {
     const d = devices.find((x) => x.installation_id === row.installation_id);
@@ -771,18 +826,60 @@ async function runTest(userId: string) {
       message: buildExpoMessage(d.expo_push_token, TEST_TEXT, { type: 'reminder_test' }),
     });
   }
-  const final = outgoing.length > 0 ? await sendAndRecord(db, outgoing, null) : new Map();
-  return {
-    installations: devices.length,
-    sent: outgoing.length,
-    results: outgoing.map((o) => {
-      const r = final.get(o.deliveryId) ?? { status: 'pending' };
-      return r.error ? { installationId: o.installationId, status: r.status, error: r.error } : { installationId: o.installationId, status: r.status };
-    }),
-  };
+  const final = outgoing.length > 0 ? await sendAndRecord(db, outgoing, null) : new Map<string, Recorded>();
+
+  // What FCM/APNs said about the accepted ones, if they answer within a few seconds.
+  const receiptRows: ReceiptRow[] = [];
+  for (const row of rows) {
+    const ticketId = final.get(row.id)?.ticketId;
+    if (ticketId) receiptRows.push({ id: row.id, expo_ticket_id: ticketId, installation_id: row.installation_id, created_at: row.created_at });
+  }
+  const receipts = receiptRows.length > 0 ? await awaitTestReceipts(db, receiptRows) : new Map<string, ReceiptOutcome>();
+
+  const results = outgoing.map((o) =>
+    testResultItem(o.installationId, final.get(o.deliveryId) ?? { status: 'pending' }, receipts.get(o.deliveryId))
+  );
+  console.log(
+    '[reminders-dispatch] test',
+    JSON.stringify({
+      installs: all.length,
+      usable: devices.length,
+      reason: why?.reason,
+      results: results.map((r) => [r.status, logSafe(r.error), r.receipt ?? null]),
+    })
+  );
+  return { installations: devices.length, sent: outgoing.length, results, ...explain };
+}
+
+/**
+ * Polls the receipts of a just-sent test push a few times (TEST_RECEIPT_POLL_MS)
+ * and records each one that arrives, exactly as the cron's receipt pass would
+ * -- so that pass never processes it again. Rows still without a receipt
+ * stay 'accepted' for the cron to check later.
+ */
+async function awaitTestReceipts(db: SupabaseClient, rows: ReceiptRow[]): Promise<Map<string, ReceiptOutcome>> {
+  const settled = new Map<string, ReceiptOutcome>();
+  let waiting = rows;
+  for (const delay of TEST_RECEIPT_POLL_MS) {
+    if (waiting.length === 0) break;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    for (const part of chunk(waiting, EXPO_RECEIPT_CHUNK)) {
+      const receipts = await expoReceipts(part.map((r) => r.expo_ticket_id));
+      if (!receipts) continue; // try again on the next round
+      const outcomes = await recordReceipts(db, part, receipts, new Date().toISOString(), null);
+      for (const [id, outcome] of outcomes) if (outcome.status !== 'pending') settled.set(id, outcome);
+    }
+    waiting = waiting.filter((r) => !settled.has(r.id));
+  }
+  return settled;
 }
 
 // ── misc ───────────────────────────────────────────────────────────────
+
+/** An Expo error code for the logs; a message that quotes a token ("ExponentPushToken[...]") gets it masked. */
+function logSafe(error: string | undefined): string | null {
+  return error ? error.replace(/\S*\[[^\]]*\]\S*/g, '[token]').slice(0, 120) : null;
+}
 
 /** Code and message only -- never tokens or reminder content. */
 function logError(what: string, e: unknown): void {

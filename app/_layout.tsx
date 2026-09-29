@@ -13,6 +13,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { LockGate } from '@/components/LockGate';
 import { usePushBootstrap } from '@/hooks/usePushBootstrap';
+import { purgeLegacyTurnDiagnostics } from '@/lib/legacyCleanup';
 import { useOnboardingDone } from '@/lib/onboarding';
 import { AuthProvider, useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
@@ -58,6 +59,13 @@ function NativeRootNavigator() {
   useEffect(() => {
     if (loading) return;
     SplashScreen.hideAsync();
+  }, [loading]);
+
+  // Deletes the Conversation turns an earlier build kept on the phone for
+  // tuning (see src/lib/legacyCleanup.ts) -- once the first screen is up,
+  // not on the way to it.
+  useEffect(() => {
+    if (!loading) purgeLegacyTurnDiagnostics();
   }, [loading]);
 
   // Splash screen is still showing at this point (preventAutoHideAsync above).

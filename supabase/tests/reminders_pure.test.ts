@@ -23,12 +23,17 @@ import {
   classifyReceipt,
   classifyTicket,
   GIVE_UP_AFTER_MS,
+  isUsableInstallation,
   MAX_ATTEMPTS,
   outcomesForSend,
   parseSendBody,
   retryDecision,
+  TEST_RECEIPT_POLL_MS,
+  testNoDeviceReason,
+  testResultItem,
   timingSafeEqual,
   truncateToSecond,
+  type InstallationState,
 } from '../functions/_shared/reminderPush.ts';
 import {
   addDays,
@@ -141,6 +146,81 @@ describe('tickets, receipts and sends', () => {
       2
     );
     assert.deepEqual(mixed.map((o) => o.status), ['accepted', 'failed']);
+  });
+});
+
+describe('test push', () => {
+  const install = (over: Partial<InstallationState> = {}): InstallationState => ({
+    installation_id: 'install-this-phone',
+    expo_push_token: 'ExponentPushToken[abc]',
+    permission: 'granted',
+    enabled: true,
+    last_error: null,
+    last_seen_at: '2026-10-01T10:00:00Z',
+    ...over,
+  });
+  test('usable = enabled with a token', () => {
+    assert.equal(isUsableInstallation(install()), true);
+    assert.equal(isUsableInstallation(install({ enabled: false })), false);
+    assert.equal(isUsableInstallation(install({ expo_push_token: null })), false);
+  });
+  test('why a phone gets nothing', () => {
+    assert.deepEqual(testNoDeviceReason([]), { reason: 'not_registered' });
+    assert.equal(testNoDeviceReason([install()]), null);
+    // Permission granted but no token: the phone couldn't get one (no Firebase in the build).
+    assert.deepEqual(testNoDeviceReason([install({ expo_push_token: null, enabled: false })]), { reason: 'no_token' });
+    assert.deepEqual(testNoDeviceReason([install({ expo_push_token: null, enabled: false, permission: 'denied' })]), {
+      reason: 'permission_off',
+    });
+    assert.deepEqual(testNoDeviceReason([install({ expo_push_token: null, enabled: false, permission: 'undetermined' })]), {
+      reason: 'permission_off',
+    });
+    assert.deepEqual(testNoDeviceReason([install({ enabled: false, last_error: 'DeviceNotRegistered' })]), {
+      reason: 'disabled',
+      lastError: 'DeviceNotRegistered',
+    });
+    assert.deepEqual(testNoDeviceReason([install({ enabled: false })]), { reason: 'disabled' });
+  });
+  test('the asking phone decides; without one, the most recently seen install', () => {
+    const other = install({ installation_id: 'install-old-phone', last_seen_at: '2026-09-01T10:00:00Z' });
+    const mine = install({ expo_push_token: null, enabled: false });
+    // Another device can get it, but this phone can't -- and says why.
+    assert.deepEqual(testNoDeviceReason([other, mine], 'install-this-phone'), { reason: 'no_token' });
+    assert.equal(testNoDeviceReason([other, install()], 'install-this-phone'), null);
+    // This phone has no row (never registered for this account), even though others do.
+    assert.deepEqual(testNoDeviceReason([other], 'install-this-phone'), { reason: 'not_registered' });
+    const oldDisabled = install({ installation_id: 'install-old-phone', enabled: false, last_seen_at: '2026-09-01T10:00:00Z' });
+    assert.deepEqual(testNoDeviceReason([oldDisabled, mine]), { reason: 'no_token' });
+    assert.deepEqual(testNoDeviceReason([{ ...oldDisabled, last_seen_at: '2026-10-02T10:00:00Z' }, mine]), { reason: 'disabled' });
+  });
+  test('result per device: send outcome + receipt', () => {
+    const ok = { status: 'accepted' };
+    assert.deepEqual(testResultItem('i', ok, { status: 'delivered' }), { installationId: 'i', status: 'delivered', receipt: 'delivered' });
+    assert.deepEqual(testResultItem('i', ok, undefined), { installationId: 'i', status: 'accepted', receipt: 'pending' });
+    assert.deepEqual(testResultItem('i', ok, { status: 'pending' }), { installationId: 'i', status: 'accepted', receipt: 'pending' });
+    // FCM V1 key on Expo missing or invalid: Expo takes it, FCM refuses it.
+    assert.deepEqual(testResultItem('i', ok, { status: 'failed', error: 'InvalidCredentials', disableInstallation: false }), {
+      installationId: 'i',
+      status: 'failed',
+      error: 'InvalidCredentials',
+      receipt: 'failed',
+      receiptError: 'InvalidCredentials',
+    });
+    // Not accepted: no receipt to speak of.
+    assert.deepEqual(testResultItem('i', { status: 'failed', error: 'DeviceNotRegistered' }), {
+      installationId: 'i',
+      status: 'failed',
+      error: 'DeviceNotRegistered',
+    });
+    assert.deepEqual(testResultItem('i', { status: 'uncertain', error: 'timeout' }, { status: 'delivered' }), {
+      installationId: 'i',
+      status: 'uncertain',
+      error: 'timeout',
+    });
+  });
+  test('receipts are awaited for a few seconds at most', () => {
+    const total = TEST_RECEIPT_POLL_MS.reduce((a, b) => a + b, 0);
+    assert.ok(total >= 4000 && total <= 8000);
   });
 });
 

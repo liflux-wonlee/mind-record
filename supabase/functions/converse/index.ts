@@ -746,11 +746,12 @@ async function saveReply(
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number };
 
 /**
- * Which format a directly-sent turn is in: Android now captures turns as raw
- * PCM and sends WAV ("segment.wav", audio/wav -- see the app's
- * src/lib/wav.ts); everything else (older app builds included) is
- * MediaRecorder's m4a. Whisper goes by the file name's extension, so it has
- * to be right. Storage-path turns carry the extension in the path itself.
+ * Which format a directly-sent turn is in: current app builds send
+ * MediaRecorder's m4a ("segment.m4a"). WAV ("segment.wav", audio/wav) only
+ * comes from older Android builds with the since-removed raw-PCM turn
+ * detector -- kept until those builds are gone. Whisper goes by the file
+ * name's extension, so it has to be right. Storage-path turns carry the
+ * extension in the path itself.
  */
 function audioFormatOf(file: File): 'wav' | 'm4a' {
   const ext = file.name.split('.').pop()?.toLowerCase();

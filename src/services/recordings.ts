@@ -81,21 +81,17 @@ export async function appendFilePart(
 export async function uploadRecording(
   userId: string,
   sessionId: string,
-  fileUri: string,
-  // Conversation turns on Android are WAV (see src/lib/wav.ts); everything
-  // else is MediaRecorder's m4a. The extension is also how converse tells
-  // Whisper the format when it reads the file back from Storage.
-  format: { extension: 'm4a' | 'wav'; mimeType: string } = { extension: 'm4a', mimeType: 'audio/m4a' }
+  fileUri: string
 ): Promise<Attachment> {
   const response = await fetch(fileUri);
   const arrayBuffer = await response.arrayBuffer();
 
-  const fileName = `${Date.now()}.${format.extension}`;
+  const fileName = `${Date.now()}.m4a`;
   const storagePath = `${userId}/${sessionId}/${fileName}`;
 
   const { error: uploadError } = await supabase.storage
     .from('recordings')
-    .upload(storagePath, arrayBuffer, { contentType: format.mimeType });
+    .upload(storagePath, arrayBuffer, { contentType: 'audio/m4a' });
   if (uploadError) throw uploadError;
 
   const { data, error } = await supabase
@@ -106,7 +102,7 @@ export async function uploadRecording(
       type: 'audio',
       file_name: fileName,
       storage_path: storagePath,
-      mime_type: format.mimeType,
+      mime_type: 'audio/m4a',
       file_size: arrayBuffer.byteLength,
     })
     .select()

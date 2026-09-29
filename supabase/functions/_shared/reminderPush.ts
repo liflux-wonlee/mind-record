@@ -219,3 +219,78 @@ export function parseSendBody(status: number, body: unknown): SendResult {
   if (data && typeof data === 'object') return { kind: 'tickets', tickets: [data] };
   return { kind: 'no_response', error: 'unreadable response body' };
 }
+
+// ── test push ("Send test notification" in Settings) ────────────────────
+
+/**
+ * Waits before each receipt check of a test push (~6s in all). FCM/APNs
+ * usually answer within a second or two -- long enough to catch a missing
+ * FCM key (InvalidCredentials) while the user is still looking.
+ */
+export const TEST_RECEIPT_POLL_MS = [2000, 2000, 2000];
+
+/**
+ * Why a phone gets no test push:
+ *   not_registered -- no push_installations row: the app never registered it for this account
+ *   permission_off -- registered, but the OS notification permission isn't granted
+ *   no_token       -- permission granted but no push token: the phone couldn't get one
+ *                     (on Android almost always a build without Firebase / google-services.json)
+ *   disabled       -- had a token, switched off after the push service rejected it
+ */
+export type TestNoDeviceReason = 'not_registered' | 'no_token' | 'permission_off' | 'disabled';
+
+export type InstallationState = {
+  installation_id: string;
+  expo_push_token: string | null;
+  permission: string;
+  enabled: boolean;
+  last_error: string | null;
+  last_seen_at: string;
+};
+
+export function isUsableInstallation(row: InstallationState): boolean {
+  return row.enabled && !!row.expo_push_token;
+}
+
+/**
+ * Why the asking phone -- or, when the app doesn't say which it is, the
+ * account's most recently seen one -- gets no test push. Null when that
+ * install is usable. `lastError` only for 'disabled'.
+ */
+export function testNoDeviceReason(
+  rows: InstallationState[],
+  installationId?: string | null
+): { reason: TestNoDeviceReason; lastError?: string } | null {
+  const row = installationId
+    ? rows.find((r) => r.installation_id === installationId)
+    : rows.slice().sort((a, b) => Date.parse(b.last_seen_at) - Date.parse(a.last_seen_at))[0];
+  if (!row) return { reason: 'not_registered' };
+  if (isUsableInstallation(row)) return null;
+  if (row.permission !== 'granted') return { reason: 'permission_off' };
+  if (!row.expo_push_token) return { reason: 'no_token' };
+  return row.last_error ? { reason: 'disabled', lastError: clip(row.last_error, 300) } : { reason: 'disabled' };
+}
+
+/** One device's line in the test-mode answer. `error`/`receiptError` carry Expo's code (or message). */
+export type TestPushItem = {
+  installationId: string;
+  /** The delivery row's final status (accepted / delivered / failed / error / uncertain). */
+  status: string;
+  error?: string;
+  /** Only for a push Expo accepted: what FCM/APNs said within ~6s ('pending' = no answer yet). */
+  receipt?: 'delivered' | 'failed' | 'pending';
+  receiptError?: string;
+};
+
+/**
+ * A device's result from its send outcome and, when Expo accepted it, the
+ * receipt (undefined = none arrived in time). A failed receipt also sets
+ * `error`, so an app that only reads `error` still sees why.
+ */
+export function testResultItem(installationId: string, sent: { status: string; error?: string }, receipt?: ReceiptOutcome): TestPushItem {
+  const item: TestPushItem = sent.error ? { installationId, status: sent.status, error: sent.error } : { installationId, status: sent.status };
+  if (sent.status !== 'accepted') return item;
+  if (!receipt || receipt.status === 'pending') return { ...item, receipt: 'pending' };
+  if (receipt.status === 'delivered') return { ...item, status: 'delivered', receipt: 'delivered' };
+  return { installationId, status: 'failed', error: receipt.error, receipt: 'failed', receiptError: receipt.error };
+}

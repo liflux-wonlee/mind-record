@@ -8,6 +8,8 @@
  * reminder_act, and edits a task's rules. Nothing is scheduled on the
  * device, so a reminder is never sent twice by two delivery paths.
  */
+import { FunctionsHttpError } from '@supabase/supabase-js';
+
 import { deviceLanguage, deviceTimeZone } from '@/lib/device';
 import { describeFunctionError } from '@/lib/functionsError';
 import { supabase } from '@/lib/supabase';
@@ -372,17 +374,62 @@ export async function syncDeviceTimeZone(userId: string): Promise<void> {
 
 // ── server functions ────────────────────────────────────────────────────
 
-export type TestPushResult = {
-  installations: number;
-  sent: number;
-  results: { installationId: string; status: string; error?: string }[];
+/**
+ * Why a phone got no test push (see testNoDeviceReason in
+ * supabase/functions/_shared/reminderPush.ts):
+ *   not_registered -- the server has no registration for it under this account
+ *   permission_off -- registered with notifications not allowed
+ *   no_token       -- allowed, but it couldn't get a push address (Android: no Firebase in the build)
+ *   disabled       -- its push address was rejected by Google/Apple and switched off
+ */
+export type TestPushReason = 'not_registered' | 'no_token' | 'permission_off' | 'disabled';
+
+export type TestPushDelivery = {
+  installationId: string;
+  /** The delivery's status: accepted / delivered / failed / error (retried) / uncertain. */
+  status: string;
+  /** Expo's error code (or message) when it went wrong. */
+  error?: string;
+  /** Only when Expo accepted it: what FCM/APNs said within a few seconds ('pending' = nothing yet). */
+  receipt?: 'delivered' | 'failed' | 'pending';
+  receiptError?: string;
 };
 
-/** Sends a test push to every enabled device of this account (reminders-dispatch, test mode). */
-export async function sendTestPush(): Promise<TestPushResult> {
-  const { data, error } = await supabase.functions.invoke('reminders-dispatch', { body: { mode: 'test' } });
-  if (error) throw await describeFunctionError(error, 'Could not send a test notification.');
-  return data as TestPushResult;
+export type TestPushResult = {
+  /** Devices it was sent to. */
+  installations: number;
+  sent: number;
+  results: TestPushDelivery[];
+  /** Why this phone (or, sent without an installationId, the account) got nothing. Absent when it was sent. */
+  reason?: TestPushReason;
+  /** With 'disabled': the push service's error that switched it off. */
+  lastError?: string;
+};
+
+/**
+ * Sends a test push to every enabled device of this account
+ * (reminders-dispatch, test mode). `installationId` = this phone, so the
+ * answer can say why THIS phone got nothing. Takes a few seconds: the server
+ * waits for Google/Apple's answer. A failure carries `status` (HTTP) --
+ * 404 means the function isn't deployed.
+ */
+export async function sendTestPush(installationId?: string | null): Promise<TestPushResult> {
+  const { data, error } = await supabase.functions.invoke('reminders-dispatch', {
+    body: installationId ? { mode: 'test', installationId } : { mode: 'test' },
+  });
+  if (error) {
+    const status = error instanceof FunctionsHttpError ? error.context.status : undefined;
+    const e: Error & { status?: number } = await describeFunctionError(error, 'Could not send a test notification.');
+    if (status) e.status = status;
+    throw e;
+  }
+  const result = (data ?? {}) as Partial<TestPushResult>;
+  return {
+    ...result,
+    installations: typeof result.installations === 'number' ? result.installations : 0,
+    sent: typeof result.sent === 'number' ? result.sent : 0,
+    results: Array.isArray(result.results) ? result.results : [],
+  };
 }
 
 export type BriefingItem = {

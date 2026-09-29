@@ -10,18 +10,16 @@
  * "저장하고 끝내" (converse's GPT call recognizes this and sets
  * `shouldEnd`) or taps Cancel/End on screen.
  *
- * How a turn auto-ends depends on how it's captured. On Android a turn is
- * recorded as raw PCM (expo-audio's useAudioStream) and ended by
- * src/lib/voiceActivity.ts's TurnEndDetector, which looks at the speech band
- * and at voicing rather than overall loudness -- so a small voice in a loud
- * car still counts as speech and its end is still heard. The turn is then
- * uploaded as WAV. Elsewhere (and if the stream can't start) it's the older
- * path: MediaRecorder plus a silence timer over its metering (dB) level,
- * a heuristic tuned for "a normal pause after finishing a sentence". How
- * long the pause has to last is the caller-supplied `silenceGapMs` (see
- * below) -- user-configurable in Settings -> AI, since "a normal pause"
- * varies by person/language. Tapping the button always still ends the turn
- * immediately as a manual override either way. The check itself runs on
+ * A turn is recorded with MediaRecorder and auto-ends on a silence timer
+ * over its metering (dB) level -- not real voice-activity detection, a
+ * heuristic tuned for "a normal pause after finishing a sentence" (see the
+ * constants below). It ends turns fine in a moving car too; a raw-PCM
+ * detector tried on Android instead (src/lib/voiceActivity.ts, now only in
+ * git history) did worse on the road and was removed. How long the pause
+ * has to last is the caller-supplied `silenceGapMs` (see below) --
+ * user-configurable in Settings -> AI, since "a normal pause" varies by
+ * person/language. Tapping the button always still ends the turn
+ * immediately as a manual override. The check itself runs on
  * its own setInterval rather than off a useEffect keyed on the metering
  * value -- during a real silence the metering level tends to settle on
  * one repeated dB reading, and a value-keyed effect simply never re-fires
@@ -35,36 +33,23 @@
  * @react-native-google-signin/google-signin (see src/services/auth.ts).
  */
 import {
-  AudioModule,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioPlayer,
   useAudioRecorder,
   useAudioRecorderState,
-  type AudioStream,
-  type AudioStreamBuffer,
 } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert, AppState, Platform } from 'react-native';
+import { Alert, AppState } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
-
-/**
- * Why the loop stopped on its own: the app lost the mic / went to the
- * background, or ('no-speech') nothing was said for a whole turn's maximum
- * length -- see MAX_TURN_RECORDING_MS.
- */
-export type ConversationPause = InterruptionReason | 'no-speech';
 import { SPEECH_RECORDING_OPTIONS, waitForRecorderUri } from '@/hooks/useCaptureSession';
-import { DIRECT_AUDIO_MAX_BYTES, DIRECT_AUDIO_UPLOAD_ENABLED, PCM_TURN_CAPTURE_ENABLED } from '@/lib/featureFlags';
+import { DIRECT_AUDIO_MAX_BYTES, DIRECT_AUDIO_UPLOAD_ENABLED } from '@/lib/featureFlags';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { functionErrorCode, isNetworkError } from '@/lib/functionsError';
 import { newTurnId, startPerfTurn, type PerfTurn } from '@/lib/perfLog';
-import { TurnEndDetector, type TurnEndMemory } from '@/lib/voiceActivity';
-import { getTurnDetectorChoice, saveTurnDiagnostics } from '@/lib/turnDiagnostics';
-import { encodeWav } from '@/lib/wav';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn, type ConverseAction, type ConverseResult } from '@/services/conversation';
@@ -106,8 +91,9 @@ const MAX_TURN_RECORDING_MS = 180_000;
 // never ended), and a whole 15s window has to get louder before it moves up
 // (so a long answer doesn't slowly become "the noise" and get cut off).
 //
-// Tuned on synthetic car/room traces, not yet on a real drive -- the
-// detector's numbers go into the perf log line for that (see detectorSnapshot).
+// Tuned on synthetic car/room traces; on real drives it ends turns as it
+// should. The detector's numbers still go into the perf log line (see
+// detectorSnapshot).
 const NOISE_WINDOW_READINGS = 75;
 const NOISE_PERCENTILE = 0.1;
 // Until the window has this many readings, loud ones stay out of it: at the
@@ -144,14 +130,11 @@ const CONFIRM_SOUND_FALLBACK_MS = 3000;
 // it can throw and/or leave a corrupt, zero-duration file behind (a known
 // Android MediaRecorder quirk) -- always pad a stop out to at least this long.
 const MIN_RECORDING_MS = 800;
-// The MediaRecorder fallback (iOS/web, or when the PCM stream can't start --
-// see USE_PCM_CAPTURE). On Android it records through the phone's voice-call
-// input path, which applies the device's own noise suppression. The PCM path
-// can't: expo-audio's stream always opens the plain mic (AudioSource.MIC), so
-// the detector and Whisper get the unprocessed sound there. The detector
-// does its own band-limiting; how Whisper does on unprocessed car audio is
-// still to be confirmed on the road (the manual-stop transcripts that came
-// out right were recorded through this suppressed path).
+// Android: record through the phone's voice-call input path, which applies
+// the device's own noise suppression before the level is metered -- road and
+// engine noise are exactly what it's built to take out, so both the pause
+// detector and the transcription hear more voice and less car. (Capture keeps
+// the plain mic: it records whatever is going on, not just one voice.)
 const CONVERSATION_RECORDING_OPTIONS = {
   ...SPEECH_RECORDING_OPTIONS,
   android: { ...SPEECH_RECORDING_OPTIONS.android, audioSource: 'voice_communication' as const },
@@ -165,26 +148,6 @@ const KEEP_AWAKE_TAG = 'mind-record-conversation';
 // state is briefly 'idle' -- releasing the screen then would let a screen
 // whose timeout already ran out go dark right in the middle of the loop.
 const KEEP_AWAKE_RELEASE_DELAY_MS = 3000;
-// See PCM_TURN_CAPTURE_ENABLED. 16 kHz is what Whisper works at internally,
-// and plenty for the detector's speech band.
-const USE_PCM_CAPTURE = PCM_TURN_CAPTURE_ENABLED && Platform.OS === 'android';
-const PCM_SAMPLE_RATE = 16000;
-// A stream start can fail when something else briefly holds the mic
-// (Android 7-9 can't share it); the next turn tries again. Only after this
-// many failures in a row -- or a device that can't do the format at all --
-// does the rest of the conversation use the recorder instead.
-const PCM_MAX_START_FAILURES = 3;
-// Buffers come every ~100 ms. None for this long while listening means the
-// stream died without saying so (expo-audio's stream reports no read errors)
-// -- a JS-thread hiccup can hold events back, hence the generous margin.
-const PCM_STALL_MS = 3000;
-// stream.stop() cuts the native read mid-buffer and whatever it held is
-// dropped, so a tap on "Done talking" keeps listening this much longer
-// first -- the last word before the tap is then fully in hand.
-const PCM_MANUAL_TAIL_MS = 150;
-// logcat truncates an entry at ~4 KB, so the per-turn trace goes out in
-// numbered pieces of this many characters.
-const VAD_TRACE_CHUNK_CHARS = 3000;
 
 /** The p-quantile (0..1) of `values`; `values` must not be empty. */
 function percentile(values: number[], p: number): number {
@@ -267,7 +230,7 @@ export function useConversationSession(
   const [turnBusy, setTurnBusy] = useState(false);
   // Why the loop stopped when it wasn't the user who stopped it -- cleared
   // the next time a turn starts.
-  const [interruption, setInterruption] = useState<ConversationPause | null>(null);
+  const [interruption, setInterruption] = useState<InterruptionReason | null>(null);
   const stateRef = useRef<ConversationState>('idle');
   stateRef.current = state;
   const sessionIdRef = useRef<string | null>(null);
@@ -283,40 +246,15 @@ export function useConversationSession(
   // Diagnostics for the perf log line: how this turn's readings were judged,
   // so a real drive's log shows why a pause was (or wasn't) detected.
   const detectorStatsRef = useRef({ speech: 0, quiet: 0, unsure: 0 });
-  // This turn's raw metering readings (classic detector), for saveTurnDiagnostics.
-  const meteringTraceRef = useRef<number[]>([]);
-  const detectorSnapshot = (): Record<string, number | string | null> => {
-    if (captureModeRef.current === 'pcm') return pcmDiagnosticsRef.current ?? {};
+  const detectorSnapshot = (): Record<string, number | null> => {
     const noise = noiseLevelRef.current;
     return { ...detectorStatsRef.current, noiseDb: noise === null ? null : Math.round(noise) };
   };
-  // How the current turn is being captured: 'pcm' (Android, see
-  // USE_PCM_CAPTURE) or 'recorder' (MediaRecorder + metering -- iOS/web, and
-  // the fallback if the PCM stream can't start).
-  const captureModeRef = useRef<'pcm' | 'recorder'>('recorder');
-  // Consecutive stream start failures -- see PCM_MAX_START_FAILURES.
-  const pcmStartFailuresRef = useRef(0);
-  // When the current PCM turn last received a buffer -- see PCM_STALL_MS.
-  const lastPcmBufferAtRef = useRef(0);
   // True while startTurn is between the permission check and 'recording', so
   // a trip to the background in that window (the interruption handler
   // otherwise ignores anything while idle) can still cancel the start.
   const startingRef = useRef(false);
   const startInterruptedRef = useRef<InterruptionReason | null>(null);
-  // True between starting the stream for a turn and stopping it; buffers
-  // arriving outside that window (the native side can still deliver one
-  // after stop) are dropped.
-  const pcmActiveRef = useRef(false);
-  const pcmChunksRef = useRef<Int16Array[]>([]);
-  const pcmRateRef = useRef(PCM_SAMPLE_RATE);
-  const turnDetectorRef = useRef<TurnEndDetector | null>(null);
-  // The detector's noise estimates, handed from one turn to the next (the
-  // car doesn't change between one reply and the next).
-  const turnEndMemoryRef = useRef<TurnEndMemory | null>(null);
-  const pcmDiagnosticsRef = useRef<Record<string, number | string | null> | null>(null);
-  // silenceGapMs as of the start of the current turn.
-  const silenceGapRef = useRef(silenceGapMs);
-  silenceGapRef.current = silenceGapMs;
   const recordingStartedAtRef = useRef<number | null>(null);
   // Guards stopTurn against overlapping calls -- the silence interval below
   // ticks every 200ms independent of how far a previous stopTurn() call has
@@ -356,7 +294,7 @@ export function useConversationSession(
     trigger: string;
     audioPath: 'direct' | 'storage';
     noVoice?: boolean;
-    detector?: Record<string, number | string | null>;
+    detector?: Record<string, number | null>;
   } | null>(null);
   // Bumped whenever a reply's life ends (it finished, or the conversation
   // was ended/cancelled/interrupted/left), so a pending confirm-sound
@@ -384,120 +322,6 @@ export function useConversationSession(
   meteringRef.current = recorderState.metering;
   const player = useAudioPlayer(null);
 
-  // The latest stopTurn, for the PCM buffer callback below (which outlives renders).
-  const stopTurnRef = useRef<(trigger: 'manual' | 'silence' | 'maxDuration') => void>(() => {});
-  // The latest interruption handler (defined further down), for the same reason.
-  const onInterruptRef = useRef<(reason: InterruptionReason) => void>(() => {});
-  const onPcmBuffer = (buffer: AudioStreamBuffer) => {
-    if (!pcmActiveRef.current || captureModeRef.current !== 'pcm') return;
-    lastPcmBufferAtRef.current = Date.now();
-    // A copy: the buffer is native memory handed over for this event only.
-    const samples = new Int16Array(buffer.data.slice(0));
-    if (samples.length === 0) return;
-    pcmChunksRef.current.push(samples);
-    pcmRateRef.current = buffer.sampleRate;
-    let detector = turnDetectorRef.current;
-    if (!detector) {
-      detector = new TurnEndDetector({
-        sampleRate: buffer.sampleRate,
-        pauseMs: silenceGapRef.current,
-        memory: turnEndMemoryRef.current,
-      });
-      turnDetectorRef.current = detector;
-    }
-    // push() stays true once the turn is over, so this repeats on every
-    // buffer until the stop actually takes (stopTurn ignores repeats, and a
-    // stale stopTurn from before the 'recording' render would ignore it too).
-    if (detector.push(samples)) stopTurnRef.current('silence');
-  };
-  const onPcmBufferRef = useRef(onPcmBuffer);
-  onPcmBufferRef.current = onPcmBuffer;
-
-  // The PCM stream (Android only -- see USE_PCM_CAPTURE). Owned here rather
-  // than through expo-audio's useAudioStream: that hook releases the native
-  // stream synchronously on unmount, and a stop/release that lands while
-  // start() is still opening the mic is a no-op natively -- the mic would
-  // then keep capturing until the app was killed. Here the release waits
-  // for a start in flight to settle first.
-  const streamRef = useRef<AudioStream | null>(null);
-  const streamStartRef = useRef<Promise<void> | null>(null);
-  useEffect(() => {
-    if (!USE_PCM_CAPTURE) return;
-    let created: AudioStream;
-    try {
-      created = new AudioModule.AudioStream({ sampleRate: PCM_SAMPLE_RATE, channels: 1, encoding: 'int16' });
-    } catch (e) {
-      console.warn('PCM capture unavailable:', e instanceof Error ? e.message : String(e));
-      return;
-    }
-    streamRef.current = created;
-    const subscription = created.addListener('audioStreamBuffer', (buffer) => onPcmBufferRef.current(buffer));
-    return () => {
-      subscription.remove();
-      pcmActiveRef.current = false;
-      if (streamRef.current === created) streamRef.current = null;
-      const finish = () => {
-        try {
-          created.stop();
-        } catch {
-          // Already stopped.
-        }
-        try {
-          created.release();
-        } catch {
-          // Already released.
-        }
-      };
-      const pending = streamStartRef.current;
-      if (pending) pending.then(finish, finish);
-      else finish();
-    };
-  }, []);
-
-  /** Stops the PCM stream (if this turn used it) and keeps the detector's
-   *  noise memory and diagnostics. Returns the captured audio, or null. */
-  const stopPcmCapture = (reason: string): Int16Array[] | null => {
-    if (!pcmActiveRef.current) return null;
-    pcmActiveRef.current = false;
-    try {
-      streamRef.current?.stop();
-    } catch {
-      // Already stopped/released -- the buffers we have are all there is.
-    }
-    const detector = turnDetectorRef.current;
-    turnDetectorRef.current = null;
-    if (detector) {
-      turnEndMemoryRef.current = detector.memory();
-      pcmDiagnosticsRef.current = detector.diagnostics();
-      // So a real drive can be replayed into the detector's test harness:
-      // adb logcat | Select-String "vad-trace". Pieces share an id and are
-      // numbered i/n (see VAD_TRACE_CHUNK_CHARS).
-      const trace = detector.trace();
-      const id = Date.now().toString(36);
-      const pieces = Math.max(1, Math.ceil(trace.length / VAD_TRACE_CHUNK_CHARS));
-      for (let i = 0; i < pieces; i++) {
-        // eslint-disable-next-line no-console
-        console.log(
-          `[vad-trace] ${id} ${i + 1}/${pieces} ${trace.slice(i * VAD_TRACE_CHUNK_CHARS, (i + 1) * VAD_TRACE_CHUNK_CHARS)}`
-        );
-      }
-    }
-    const chunks = pcmChunksRef.current;
-    pcmChunksRef.current = [];
-    saveTurnDiagnostics(
-      { chunks, sampleRate: pcmRateRef.current },
-      {
-        captureMode: 'pcm',
-        reason,
-        pauseMs: silenceGapRef.current,
-        recordedMs: Date.now() - (recordingStartedAtRef.current ?? Date.now()),
-        detector: detector ? detector.diagnostics() : null,
-        trace: detector ? detector.trace() : null,
-      }
-    );
-    return chunks;
-  };
-
   const ensureSession = useCallback(async (): Promise<string | null> => {
     if (sessionIdRef.current || !user) return sessionIdRef.current;
     const session = await createSession(user.id, 'conversation');
@@ -522,7 +346,6 @@ export function useConversationSession(
     if (recorderState.isRecording) {
       await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
     }
-    stopPcmCapture('conversation-ended'); // a turn still being listened to is dropped, as with the recorder
     player.pause();
 
     const sessionId = sessionIdRef.current;
@@ -562,7 +385,6 @@ export function useConversationSession(
     if (recorderState.isRecording) {
       await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
     }
-    stopPcmCapture('conversation-cancelled'); // a turn still being listened to is dropped, as with the recorder
     player.pause();
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
@@ -599,58 +421,13 @@ export function useConversationSession(
       // continue in the background (the reply has to be heard), so it
       // stops on backgrounding instead -- see useAudioInterruption below.
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
-      const stream = streamRef.current;
-      const choice = stream ? await getTurnDetectorChoice() : 'classic';
-      let mode: 'pcm' | 'recorder' =
-        stream && choice === 'pcm' && pcmStartFailuresRef.current < PCM_MAX_START_FAILURES ? 'pcm' : 'recorder';
-      if (mode === 'pcm' && stream) {
-        pcmChunksRef.current = [];
-        turnDetectorRef.current = null;
-        pcmDiagnosticsRef.current = null;
-        captureModeRef.current = 'pcm';
-        pcmActiveRef.current = true;
-        const starting = stream.start();
-        streamStartRef.current = starting;
-        try {
-          await starting;
-          pcmStartFailuresRef.current = 0;
-          lastPcmBufferAtRef.current = Date.now();
-        } catch (e) {
-          // Mic held elsewhere / unsupported config: record this turn the old
-          // way instead of failing (see PCM_MAX_START_FAILURES).
-          const message = e instanceof Error ? e.message : String(e);
-          console.warn('PCM capture unavailable for this turn, using the recorder:', message);
-          pcmActiveRef.current = false;
-          pcmStartFailuresRef.current = message.includes('No supported audio configuration')
-            ? PCM_MAX_START_FAILURES
-            : pcmStartFailuresRef.current + 1;
-          mode = 'recorder';
-        } finally {
-          if (streamStartRef.current === starting) streamStartRef.current = null;
-        }
-        // Ended, cancelled or left while the mic was opening: those already
-        // ran stopPcmCapture (a no-op natively until start finished), so
-        // stop the now-running stream here and don't start the turn.
-        if (mode === 'pcm' && !pcmActiveRef.current) {
-          try {
-            stream.stop();
-          } catch {
-            // Already released along with the screen.
-          }
-          return;
-        }
-      }
-      captureModeRef.current = mode;
-      if (mode === 'recorder') {
-        await recorder.prepareToRecordAsync();
-        recorder.record();
-      }
+      await recorder.prepareToRecordAsync();
+      recorder.record();
       // The app went to the background while this was starting (the
       // interruption handler ignores that while idle): don't listen from the
       // background -- stop again and wait for a tap, like any interruption.
       const cut = startInterruptedRef.current ?? (AppState.currentState === 'background' ? 'background' : null);
       if (cut) {
-        stopPcmCapture('start-interrupted');
         if (recorder.isRecording) {
           recorder.stop().catch(() => {
             // Best-effort -- the recorder may already be gone.
@@ -666,7 +443,6 @@ export function useConversationSession(
       loudHistoryRef.current = [];
       loudRunRef.current = 0;
       detectorStatsRef.current = { speech: 0, quiet: 0, unsure: 0 };
-      meteringTraceRef.current = [];
       activeRef.current = true;
       abortedRef.current = false;
       hasContentRef.current = true;
@@ -726,8 +502,6 @@ export function useConversationSession(
       const run = async () => {
         let audioPath: 'direct' | 'storage' = 'storage';
         let audioBytes: number | undefined;
-        // The WAV this turn wrote (PCM capture) -- deleted once it's been sent.
-        let turnFile: File | null = null;
         // Once the server has answered, the turn happened -- including any
         // change the AI made -- whatever goes wrong locally afterwards.
         let answered = false;
@@ -738,75 +512,24 @@ export function useConversationSession(
             await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
           }
 
-          let uri: string | null;
-          if (captureModeRef.current === 'pcm') {
-            if (trigger === 'manual') {
-              await new Promise((resolve) => setTimeout(resolve, PCM_MANUAL_TAIL_MS));
-            }
-            const spoke = turnDetectorRef.current?.hasSpoken ?? false;
-            const chunks = stopPcmCapture(spoke || trigger !== 'maxDuration' ? trigger : 'maxDuration-no-speech');
-            throwIfAborted();
-            if (trigger === 'maxDuration' && !spoke) {
-              // A whole turn's maximum length without a voice in it (the
-              // driver left the conversation open): there's nothing to send,
-              // and several MB of road noise would only make Whisper invent
-              // words. Pause the loop instead; one tap picks it back up.
-              perf?.finish({ trigger, audioPath, noVoice: true, dropped: true });
-              currentTurnRef.current = null;
-              activeRef.current = false;
-              autoRestartRef.current = false;
-              setInterruption('no-speech');
-              setState('idle');
-              return;
-            }
-            setState('thinking');
-            perf?.mark('recorder_stopped');
-            uri = null;
-            if (chunks && chunks.length > 0) {
-              const wav = encodeWav(chunks, pcmRateRef.current);
-              const file = new File(Paths.cache, `mind-record-turn-${Date.now()}.wav`);
-              file.write(wav.bytes);
-              uri = file.uri;
-              turnFile = file;
-            }
-          } else {
-            // withTimeout also covers the native recorder throwing on stop
-            // (e.g. it was already winding down on its own) -- either way,
-            // press on and try to use whatever got captured rather than
-            // leaving the turn stuck on "Listening…" forever.
-            await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
-            throwIfAborted();
-            setState('thinking');
-            perf?.mark('recorder_stopped');
+          // withTimeout also covers the native recorder throwing on stop
+          // (e.g. it was already winding down on its own) -- either way,
+          // press on and try to use whatever got captured rather than
+          // leaving the turn stuck on "Listening…" forever.
+          await withTimeout(recorder.stop(), RECORDER_STOP_TIMEOUT_MS);
+          throwIfAborted();
+          setState('thinking');
+          perf?.mark('recorder_stopped');
 
-            // recorder.uri is a native SharedObject property, not plain JS state
-            // -- reading it the instant stop() resolves occasionally still saw
-            // a stale/null value rather than the file that had just been
-            // written, throwing "No audio was captured" for a turn that really
-            // did record something. See waitForRecorderUri's own comment.
-            uri = await waitForRecorderUri(recorder);
-            if (uri) {
-              saveTurnDiagnostics(
-                { uri, extension: 'm4a' },
-                {
-                  captureMode: 'classic',
-                  reason: trigger,
-                  pauseMs: silenceGapMs,
-                  recordedMs: Date.now() - (recordingStartedAtRef.current ?? Date.now()),
-                  detector: detectorSnapshot(),
-                  // The metering readings the classic detector judged, one per 200 ms tick.
-                  metering: meteringTraceRef.current,
-                }
-              );
-            }
-          }
+          // recorder.uri is a native SharedObject property, not plain JS state
+          // -- reading it the instant stop() resolves occasionally still saw
+          // a stale/null value rather than the file that had just been
+          // written, throwing "No audio was captured" for a turn that really
+          // did record something. See waitForRecorderUri's own comment.
+          const uri = await waitForRecorderUri(recorder);
           if (!uri) throw new Error('No audio was captured for that turn.');
           throwIfAborted();
           perf?.mark('file_ready');
-          const format =
-            captureModeRef.current === 'pcm'
-              ? ({ extension: 'wav', mimeType: 'audio/wav' } as const)
-              : ({ extension: 'm4a', mimeType: 'audio/m4a' } as const);
 
           // Send the segment directly in the request when it's small enough
           // (the common case -- these are single back-and-forth turns, not
@@ -824,18 +547,13 @@ export function useConversationSession(
               throwIfAborted();
               perf?.mark('audio_read');
               audioPath = 'direct';
-              const localUri = uri;
               result = await withOneRetry(() =>
-                converseTurn(
-                  sessionId,
-                  { uri: localUri, mimeType: format.mimeType, fileName: `segment.${format.extension}` },
-                  turnId
-                )
+                converseTurn(sessionId, { uri, mimeType: 'audio/m4a' }, turnId)
               );
             }
           }
           if (!result) {
-            const attachment = await uploadRecording(user.id, sessionId, uri, format);
+            const attachment = await uploadRecording(user.id, sessionId, uri);
             throwIfAborted();
             perf?.mark('uploaded');
             audioPath = 'storage';
@@ -930,13 +648,6 @@ export function useConversationSession(
         } finally {
           stoppingRef.current = false;
           setTurnBusy(false);
-          if (turnFile) {
-            try {
-              turnFile.delete();
-            } catch {
-              // Best-effort -- it's only a cache file.
-            }
-          }
         }
       };
       const promise = run();
@@ -948,7 +659,6 @@ export function useConversationSession(
     },
     [state, user, recorder, player, invalidateReply]
   );
-  stopTurnRef.current = stopTurn;
 
   // Auto-ends the turn after a pause in speech, so the user doesn't have
   // to tap the button every time -- see the file header for the caveats,
@@ -977,22 +687,8 @@ export function useConversationSession(
         return;
       }
 
-      // PCM turns are ended from the stream's own buffers (onPcmBuffer) --
-      // unless those stopped coming (see PCM_STALL_MS): then send what the
-      // user said so far, or treat a turn with nothing said as a lost mic.
-      if (captureModeRef.current === 'pcm') {
-        if (pcmActiveRef.current && Date.now() - lastPcmBufferAtRef.current > PCM_STALL_MS) {
-          if (turnDetectorRef.current?.hasSpoken) stopTurn('silence');
-          else onInterruptRef.current('recorder-error');
-        }
-        return;
-      }
-
       const raw = meteringRef.current;
       if (raw === undefined) return;
-      if (meteringTraceRef.current.length < MAX_TURN_RECORDING_MS / 200) {
-        meteringTraceRef.current.push(Math.round(raw * 10) / 10);
-      }
 
       let loud = false;
       let quiet = true;
@@ -1121,14 +817,11 @@ export function useConversationSession(
           // Best-effort -- the recorder may already be gone.
         });
       }
-      stopPcmCapture(`interrupted:${reason}`);
     }
     player.pause();
     if (current !== 'thinking') setState('idle');
   };
   useAudioInterruption(recorder, onInterrupt);
-  // For the silence interval's PCM stall check, declared above this.
-  onInterruptRef.current = onInterrupt;
 
   // See KEEP_AWAKE_TAG. Held from the first turn until the loop has really
   // stopped (ended, cancelled, interrupted, or an error left it idle).
@@ -1167,7 +860,6 @@ export function useConversationSession(
     () => () => {
       invalidateReply();
       abortedRef.current = true;
-      // (The PCM stream is stopped and released by its own effect above.)
       const orphan = sessionIdRef.current;
       sessionIdRef.current = null;
       if (!orphan) return;

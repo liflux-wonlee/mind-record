@@ -110,13 +110,30 @@ reminders-dispatch:
 | 항목 | 방법 | 결과 |
 | --- | --- | --- |
 | 날짜·DST·월말·윤년·시간대 변경·상태 전이·중복·RLS·undo 복원 | `scripts/test-reminders-sql.sh` (로컬 Postgres 16, 모든 마이그레이션 적용 후) | 통과 |
-| 서버 순수 로직 (푸시 문구·미리보기 끔·청크·영수증 분류·재시도·선행 마감·DST·브리핑 템플릿) | `node --test supabase/tests/reminders_pure.test.ts` | 32/32 통과 |
+| 서버 순수 로직 (푸시 문구·미리보기 끔·청크·영수증 분류·재시도·선행 마감·DST·브리핑 템플릿·테스트 알림 원인) | `node --test supabase/tests/reminders_pure.test.ts` | 37/37 통과 |
 | 서버 함수 타입 검사 (14개 전부) | `npx -y deno@2 check supabase/functions/*/index.ts` | 통과 |
 | 앱 타입 검사 / Android·Web 번들 | `npx tsc --noEmit`, `npx expo export` | 통과 (웹 번들에 알림 모듈 없음) |
 | 실제 Expo 발송·OpenAI 대본·TTS | 운영 키 필요 | **미검증** |
 | 실제 푸시 수신·알림 탭·종료 상태 진입·오디오 | 실기기 필요 | **미검증** |
 
 실기기 시험 절차: 설정 → 리마인드 → 알림 켜기 → "테스트 알림 보내기" → 수신 확인 → 알림 탭 → 목록 이동. 내일 마감 Task를 만들고 기본 시각을 몇 분 뒤로 바꿔 실제 발송 확인 (운영 데이터 대신 테스트 계정 권장).
+
+### "테스트 알림 보내기"가 안 될 때
+테스트는 이 폰의 설치 id를 함께 보내고, 서버는 발송 후 약 6초 동안 영수증(FCM/APNs 응답)을 기다려 결과를 돌려줍니다. 화면 문구 아래 작은 글씨("Details:")가 원래 오류 코드입니다.
+
+| 화면 안내 | 서버 `reason` / 영수증 | 원인 · 조치 |
+| --- | --- | --- |
+| "couldn't get a push address from Google … Firebase" | `no_token` | 빌드에 `google-services.json`이 없음 → 4번(FCM) 설정 후 **재빌드** |
+| "The server doesn't have this phone's current push address" | `no_token` (이 폰은 토큰을 받음) | 서버 행이 예전 상태 — 재등록이 서버에 안 닿음 → 연결 확인 후 다시 시도 |
+| "isn't registered for notifications yet" | `not_registered` | 앱이 이 계정으로 등록 못 함 (앱이 한 번 재등록·재시도한 뒤에도) → 연결 확인, 앱 재실행 |
+| "Notifications are off for this phone" | `permission_off` | OS 알림 권한 꺼짐 → 화면의 켜기 버튼 / 시스템 설정 |
+| "Google rejected this phone's push address" | `disabled` 또는 `DeviceNotRegistered` | 토큰 무효 → 앱 재실행(재등록), 계속되면 재설치. "…and updating it didn't work"면 재등록 실패 → 연결 확인 |
+| "the FCM key on Expo is missing or invalid" | 영수증 `InvalidCredentials` | FCM V1 서비스 계정 키가 없거나 무효(폐기됨, FCM 권한 없는 서비스 계정 등) → `npx eas-cli credentials` → Android → FCM V1 키 확인·재등록 (iOS는 APNs 키) |
+| "google-services.json … doesn't match the FCM key" | 영수증 `MismatchSenderId` | `google-services.json`과 EAS의 FCM 키가 다른 Firebase 프로젝트 |
+| "Sent — it should appear in a few seconds" | 영수증 `delivered` | FCM/APNs까지 전달됨. 안 보이면 앱 알림 설정·배터리 절약 확인 |
+| "notification function isn't reachable" | HTTP 404 | `reminders-dispatch` 미배포 → 3번 |
+
+테스트에서 받은 영수증은 크론의 영수증 확인과 같은 방식으로 기록되므로(`delivered`/`failed` + `receipt_checked_at`) 크론이 다시 처리하지 않습니다.
 
 ## 6. 보류한 확장 (후속)
 - **자동 위치 감지**: 지금은 `context_tag`(home/office 등)로 저장하고 "집에 왔어/집에서 할 일" 요청이나 목록에서 보여줌. 지오펜싱을 붙일 때는 기기에서 장소 진입 이벤트 → `reminder_agenda(... ) where context_tag = ?` 조회 → 로컬 알림 또는 서버 호출로 확장.
