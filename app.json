@@ -65,6 +65,14 @@
         {
           "faceIDPermission": "Mind Record uses Face ID to unlock your records after you turn this on in Settings."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/notification-icon.png",
+          "color": "#ef8a80",
+          "defaultChannel": "reminders"
+        }
       ]
     ],
     "experiments": {

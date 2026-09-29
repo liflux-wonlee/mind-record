@@ -6,6 +6,7 @@
 import * as Linking from 'expo-linking';
 
 import { clearBiometricLockState } from '@/lib/biometricLock';
+import { unregisterPushInstallation } from '@/lib/push';
 import { supabase } from '@/lib/supabase';
 
 export type EmailAuthResult =
@@ -59,6 +60,16 @@ export async function signOut(): Promise<void> {
   // never inherit this one's biometric-lock state (see clearBiometricLockState).
   const { data } = await supabase.auth.getUser();
   const userId = data.user?.id;
+  // While the session still exists: detach this phone from the account so
+  // its reminder pushes stop here (and can never reach whoever signs in
+  // next). Best-effort and time-boxed -- offline, sign-out still happens,
+  // and the next account to sign in on this phone takes the install over.
+  if (userId) {
+    await Promise.race([
+      unregisterPushInstallation().catch(() => {}),
+      new Promise((resolve) => setTimeout(resolve, 4000)),
+    ]);
+  }
   const { error } = await supabase.auth.signOut();
   if (error) throw error;
   if (userId) await clearBiometricLockState(userId).catch(() => {});

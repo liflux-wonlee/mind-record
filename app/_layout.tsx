@@ -7,11 +7,12 @@ import {
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Platform } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { LockGate } from '@/components/LockGate';
+import { usePushBootstrap } from '@/hooks/usePushBootstrap';
 import { useOnboardingDone } from '@/lib/onboarding';
 import { AuthProvider, useAuth } from '@/providers/AuthProvider';
 import { colors } from '@/theme';
@@ -49,6 +50,10 @@ function NativeRootNavigator() {
   const { session, loading: authLoading } = useAuth();
   const onboardingDone = useOnboardingDone();
   const loading = authLoading || onboardingDone === null;
+  // App content actually on screen (past the biometric lock) -- reported by
+  // LockGate; a tapped reminder notification waits for it.
+  const [contentOpen, setContentOpen] = useState(false);
+  usePushBootstrap({ contentOpen });
 
   useEffect(() => {
     if (loading) return;
@@ -120,6 +125,9 @@ function NativeRootNavigator() {
           <Stack.Screen name="settings/privacy" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/google-tasks" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/legal" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="settings/reminders" options={{ animation: 'slide_from_right' }} />
+          {/* Home's "Today: N to keep in mind" -> See all, and a tapped reminder notification. */}
+          <Stack.Screen name="reminders" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="legal/privacy-policy" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="legal/terms-of-service" options={{ animation: 'slide_from_right' }} />
         </Stack.Protected>
@@ -133,7 +141,7 @@ function NativeRootNavigator() {
           would unmount whatever screen is underneath (an in-progress
           Capture recording, in particular), which the lock appearing must
           never do. See src/components/LockGate.tsx. */}
-      <LockGate active={appActive} />
+      <LockGate active={appActive} onOpenChange={setContentOpen} />
     </>
   );
 }
@@ -190,6 +198,8 @@ function WebRootNavigator() {
         <Stack.Screen name="settings/privacy" />
         <Stack.Screen name="settings/google-tasks" />
         <Stack.Screen name="settings/legal" />
+        <Stack.Screen name="settings/reminders" />
+        <Stack.Screen name="reminders" />
       </Stack.Protected>
     </Stack>
   );

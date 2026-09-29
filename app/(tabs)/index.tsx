@@ -3,14 +3,18 @@ import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
+import { BriefingPanel } from '@/components/BriefingPanel';
 import { KeyboardIcon, MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { StarToggle } from '@/components/StarToggle';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
+import { useBriefing } from '@/hooks/useBriefing';
 import { useRecentSessions } from '@/hooks/useRecentSessions';
+import { useAgenda, usePushPermission } from '@/hooks/useReminders';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { useAuth } from '@/providers/AuthProvider';
 import { getProfile } from '@/services/profiles';
+import { agendaReasonLabel } from '@/services/reminders';
 import {
   deleteSession,
   deleteSessionMessage,
@@ -144,6 +148,8 @@ export default function HomeScreen() {
         </Pressable>
       ) : null}
 
+      <RemindersCard />
+
       <View style={styles.recentSection}>
         <Text style={styles.sectionHeading}>Recent conversations</Text>
         <Pressable onPress={() => router.push('/calendar')} style={{ marginTop: 4 }}>
@@ -228,7 +234,135 @@ export default function HomeScreen() {
   );
 }
 
+const PREVIEW_LIMIT = 3;
+
+/**
+ * "Today: N to keep in mind" -- N is the number of distinct things (a task's
+ * day-before, day-of and every-day rules are one item) the agenda puts in
+ * "now", the same count the list and the spoken briefing use.
+ */
+function RemindersCard() {
+  const router = useRouter();
+  const agenda = useAgenda();
+  const permission = usePushPermission();
+  const briefing = useBriefing(agenda.refresh);
+
+  // Tabs stay mounted: leaving Home must still stop the voice.
+  const stopBriefing = briefing.stop;
+  useFocusEffect(
+    useCallback(() => {
+      return () => stopBriefing();
+    }, [stopBriefing])
+  );
+
+  if (agenda.state.status === 'loading') return null;
+  const count = agenda.now.length;
+  const listening = briefing.state !== 'idle';
+
+  return (
+    <View style={styles.remindCard}>
+      <Text style={styles.remindTitle}>
+        {agenda.state.status === 'error'
+          ? 'Today'
+          : count === 0
+            ? 'Today: nothing to keep in mind'
+            : `Today: ${count} to keep in mind`}
+      </Text>
+      {agenda.state.status === 'error' ? (
+        <Text style={styles.remindEmpty}>Couldn&apos;t load your reminders. Pull down in See all to retry.</Text>
+      ) : count === 0 ? (
+        <Text style={styles.remindEmpty}>
+          {agenda.later.length > 0
+            ? `You're clear for now. ${agenda.later.length} coming up later.`
+            : 'Ask for a reminder while you talk, or set one on a task.'}
+        </Text>
+      ) : (
+        agenda.now.slice(0, PREVIEW_LIMIT).map((item) => (
+          <Text key={`${item.target_type}:${item.target_id}`} style={styles.remindLine} numberOfLines={1}>
+            {item.title}
+            <Text style={styles.remindMeta}> · {agendaReasonLabel(item)}</Text>
+          </Text>
+        ))
+      )}
+      {count > PREVIEW_LIMIT ? <Text style={styles.remindMeta}>+{count - PREVIEW_LIMIT} more</Text> : null}
+
+      <View style={styles.remindActions}>
+        <Button
+          label="See all"
+          variant="secondary"
+          onPress={() => router.push('/reminders')}
+          style={styles.remindButton}
+        />
+        {count > 0 && !listening ? (
+          <Button label="Listen" variant="save" onPress={briefing.start} style={styles.remindButton} />
+        ) : null}
+      </View>
+
+      <BriefingPanel briefing={briefing} />
+
+      {permission.supported && permission.push && !permission.granted ? (
+        <Pressable
+          accessibilityRole="button"
+          onPress={permission.turnOn}
+          style={({ pressed }) => [styles.notifLink, pressed && { opacity: 0.6 }]}
+        >
+          <Text style={styles.notifLinkText}>Turn on notifications to get these on time →</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
+  remindCard: {
+    marginTop: 20,
+    padding: 16,
+    borderRadius: radius.pastel,
+    backgroundColor: colors.pastelLavender,
+  },
+  remindTitle: {
+    fontFamily: font.extrabold,
+    fontSize: 17,
+    lineHeight: 22,
+    color: colors.text,
+    marginBottom: 6,
+  },
+  remindLine: {
+    fontFamily: font.semibold,
+    fontSize: 14,
+    lineHeight: 22,
+    color: colors.text,
+  },
+  remindMeta: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    color: colors.neutral700,
+  },
+  remindEmpty: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.neutral700,
+  },
+  remindActions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
+  remindButton: {
+    borderRadius: radius.pastel,
+    paddingHorizontal: 16,
+  },
+  notifLink: {
+    minHeight: 44,
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+  notifLinkText: {
+    fontFamily: font.semibold,
+    fontSize: 12,
+    color: colors.accent800,
+  },
   topRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',

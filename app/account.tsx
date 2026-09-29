@@ -8,12 +8,14 @@ import { ChevronLeftIcon } from '@/components/Icon';
 import { Button, Kicker } from '@/components/ui';
 import { getBiometricSupport, isBiometricLockEnabled } from '@/lib/biometricLock';
 import { friendlyMessage } from '@/lib/friendlyError';
+import { getPushState, PUSH_SUPPORTED } from '@/lib/push';
 import { resetOnboarding } from '@/lib/onboarding';
 import { useAuth } from '@/providers/AuthProvider';
 import { deleteAccount } from '@/services/account';
 import { signOut } from '@/services/auth';
 import { getGoogleTasksStatus } from '@/services/googleTasks';
 import { getProfile, type Profile } from '@/services/profiles';
+import { formatClock } from '@/services/reminders';
 import { getAccountStats, type AccountStats } from '@/services/stats';
 import { colors, font, radius } from '@/theme';
 import { WithBottomNav } from '@/components/WithBottomNav';
@@ -53,6 +55,7 @@ function AccountScreen() {
 
   const [biometricLine, setBiometricLine] = useState('Loading…');
   const [googleTasksLine, setGoogleTasksLine] = useState('Loading…');
+  const [notificationsLine, setNotificationsLine] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -83,6 +86,14 @@ function AccountScreen() {
           if (!cancelled) setBiometricLine('');
         });
 
+      if (PUSH_SUPPORTED) {
+        getPushState()
+          .then((state) => {
+            if (!cancelled) setNotificationsLine(state.permission === 'granted' ? 'Notifications on' : 'Notifications off');
+          })
+          .catch(() => {});
+      }
+
       getGoogleTasksStatus()
         .then((status) => {
           if (cancelled) return;
@@ -112,6 +123,14 @@ function AccountScreen() {
 
   const menuItems = [
     { key: 'ai', title: 'AI', subtitle: aiLine, route: '/settings/ai' as const },
+    {
+      key: 'reminders',
+      title: 'Reminders',
+      subtitle: profile
+        ? [formatClock(profile.reminder_time), notificationsLine].filter(Boolean).join(' · ')
+        : 'Loading…',
+      route: '/settings/reminders' as const,
+    },
     { key: 'privacy', title: 'Privacy', subtitle: biometricLine, route: '/settings/privacy' as const },
     { key: 'google-tasks', title: 'Google Tasks', subtitle: googleTasksLine, route: '/settings/google-tasks' as const },
     { key: 'legal', title: 'Legal', subtitle: 'Privacy Policy & Terms of Service', route: '/settings/legal' as const },

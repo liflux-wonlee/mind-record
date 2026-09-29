@@ -36,6 +36,26 @@ export type TaskPriority = 'low' | 'normal' | 'high';
 export type AttachmentType = 'audio' | 'image' | 'document';
 /** The OpenAI TTS voices the app offers a preview for -- see preview-voice/converse Edge Functions. */
 export type AiVoice = 'alloy' | 'echo' | 'onyx' | 'nova' | 'shimmer' | 'marin';
+/** Repeating tasks (see supabase/migrations/20260929000001_reminders.sql). */
+export type TaskRecurFreq = 'day' | 'week' | 'month';
+export type ReminderKind = 'due' | 'daily' | 'once' | 'context';
+export type ReminderPurpose = 'remind' | 'waiting';
+export type ReminderOrigin = 'default' | 'user';
+export type ReminderStatus = 'active' | 'stopped' | 'done';
+export type ReminderTargetType = 'task' | 'session' | 'memory';
+export type ReminderBucket = 'now' | 'later' | 'context';
+export type ReminderReason =
+  | 'overdue'
+  | 'due_today'
+  | 'daily'
+  | 'scheduled_today'
+  | 'pending'
+  | 'snoozed'
+  | 'not_today'
+  | 'upcoming'
+  | 'context';
+export type ReminderAction = 'snooze' | 'not_today' | 'stop' | 'acknowledge' | 'resume';
+export type PushPermissionStatus = 'granted' | 'denied' | 'undetermined';
 
 export type Database = {
   public: {
@@ -54,6 +74,15 @@ export type Database = {
           ai_voice: AiVoice;
           /** How long a pause (ms) before Conversation mode treats the user's turn as over -- see useConversationSession.ts. */
           silence_gap_ms: number;
+          /** Default local time ('HH:MM:SS') for automatic and every-day reminders. */
+          reminder_time: string;
+          remind_day_before: boolean;
+          remind_day_of: boolean;
+          /** Quiet hours ('HH:MM:SS'); both null = no quiet hours. */
+          quiet_start: string | null;
+          quiet_end: string | null;
+          /** false: lock-screen pushes hide the title. */
+          reminder_preview: boolean;
           created_at: string;
           updated_at: string;
         };
@@ -67,6 +96,12 @@ export type Database = {
           user_honorific?: string | null;
           ai_voice?: AiVoice;
           silence_gap_ms?: number;
+          reminder_time?: string;
+          remind_day_before?: boolean;
+          remind_day_of?: boolean;
+          quiet_start?: string | null;
+          quiet_end?: string | null;
+          reminder_preview?: boolean;
           created_at?: string;
           updated_at?: string;
         };
@@ -200,6 +235,10 @@ export type Database = {
           list_id: string | null;
           list_suggestion: string | null;
           starred: boolean;
+          /** Repeating task: completing it moves due_date to the next occurrence (the row stays open). */
+          recur_freq: TaskRecurFreq | null;
+          recur_interval: number | null;
+          recur_anchor: string | null;
           created_at: string;
           updated_at: string;
         };
@@ -218,6 +257,9 @@ export type Database = {
           list_id?: string | null;
           list_suggestion?: string | null;
           starred?: boolean;
+          recur_freq?: TaskRecurFreq | null;
+          recur_interval?: number | null;
+          recur_anchor?: string | null;
           created_at?: string;
           updated_at?: string;
         };
@@ -327,6 +369,101 @@ export type Database = {
         Update: Partial<Database['public']['Tables']['google_tasks_sends']['Insert']>;
         Relationships: [];
       };
+      reminders: {
+        Row: {
+          id: string;
+          user_id: string;
+          task_id: string | null;
+          session_id: string | null;
+          memory_id: string | null;
+          kind: ReminderKind;
+          purpose: ReminderPurpose;
+          origin: ReminderOrigin;
+          title: string;
+          note: string | null;
+          source_session_id: string | null;
+          source_quote: string | null;
+          timezone: string;
+          /** 'HH:MM:SS'; null = the profile's reminder_time. */
+          local_time: string | null;
+          /** Days relative to the due date (-1 = day before); null = the profile's day-before/day-of settings. */
+          day_offsets: number[] | null;
+          fire_at: string | null;
+          start_date: string | null;
+          ends_on: string | null;
+          context_tag: string | null;
+          status: ReminderStatus;
+          status_reason: string | null;
+          snoozed_until: string | null;
+          suppressed_until: string | null;
+          last_fired_at: string | null;
+          /** Kept by a DB trigger -- never written by the app. */
+          next_fire_at: string | null;
+          lease_until: string | null;
+          version: number;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          user_id: string;
+          task_id?: string | null;
+          session_id?: string | null;
+          memory_id?: string | null;
+          kind: ReminderKind;
+          purpose?: ReminderPurpose;
+          origin?: ReminderOrigin;
+          title: string;
+          note?: string | null;
+          source_session_id?: string | null;
+          source_quote?: string | null;
+          timezone?: string;
+          local_time?: string | null;
+          day_offsets?: number[] | null;
+          fire_at?: string | null;
+          start_date?: string | null;
+          ends_on?: string | null;
+          context_tag?: string | null;
+          status?: ReminderStatus;
+          status_reason?: string | null;
+          snoozed_until?: string | null;
+          suppressed_until?: string | null;
+        };
+        Update: Partial<Database['public']['Tables']['reminders']['Insert']>;
+        Relationships: [];
+      };
+      push_installations: {
+        Row: {
+          id: string;
+          installation_id: string;
+          user_id: string;
+          expo_push_token: string | null;
+          platform: 'ios' | 'android' | null;
+          permission: PushPermissionStatus;
+          enabled: boolean;
+          last_error: string | null;
+          last_seen_at: string;
+          created_at: string;
+          updated_at: string;
+        };
+        // Written only through register/unregister_push_installation (no insert/update policy).
+        Insert: Partial<Database['public']['Tables']['push_installations']['Row']>;
+        Update: Partial<Database['public']['Tables']['push_installations']['Row']>;
+        Relationships: [];
+      };
+      task_completions: {
+        Row: {
+          id: string;
+          user_id: string;
+          task_id: string;
+          occurrence_date: string | null;
+          completed_at: string;
+        };
+        // Written only by the repeating-task trigger (no insert/update policy).
+        Insert: Partial<Database['public']['Tables']['task_completions']['Row']>;
+        Update: Partial<Database['public']['Tables']['task_completions']['Row']>;
+        Relationships: [];
+      };
     };
     Views: Record<string, never>;
     Functions: {
@@ -349,6 +486,49 @@ export type Database = {
           session_id: string | null;
           topic_id: string | null;
         }[];
+      };
+      reminder_agenda: {
+        Args: { p_user: string; p_now?: string | null };
+        Returns: {
+          target_type: ReminderTargetType;
+          target_id: string;
+          title: string;
+          note: string | null;
+          due_date: string | null;
+          bucket: ReminderBucket;
+          reason: ReminderReason;
+          next_fire_at: string | null;
+          snoozed_until: string | null;
+          suppressed_until: string | null;
+          context_tag: string | null;
+          purpose: ReminderPurpose;
+          source_session_id: string | null;
+          is_recurring: boolean;
+          reminder_ids: string[];
+        }[];
+      };
+      reminder_act: {
+        Args: {
+          p_user: string;
+          p_target_type: ReminderTargetType;
+          p_target_id: string;
+          p_action: ReminderAction;
+          p_until?: string | null;
+        };
+        Returns: { next_fire_at: string | null; effective_until: string | null; affected: number }[];
+      };
+      register_push_installation: {
+        Args: {
+          p_installation_id: string;
+          p_token: string | null;
+          p_platform: 'ios' | 'android';
+          p_permission: PushPermissionStatus;
+        };
+        Returns: void;
+      };
+      unregister_push_installation: {
+        Args: { p_installation_id: string };
+        Returns: void;
       };
     };
   };

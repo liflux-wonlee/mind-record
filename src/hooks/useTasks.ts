@@ -27,6 +27,7 @@ import {
   setTaskStatus,
   updateTask,
   type Task,
+  type TaskUpdateInput,
 } from '@/services/tasks';
 
 type State =
@@ -77,14 +78,17 @@ export function useTasks() {
     setState((prev) =>
       prev.status === 'ready' ? { ...prev, tasks: prev.tasks.map((t) => (t.id === updated.id ? updated : t)) } : prev
     );
+    // A repeating task comes back open with its next due date.
+    return updated;
   }, []);
 
   const update = useCallback(
-    async (task: Task, input: { title?: string; description?: string | null; dueDate?: string | null }) => {
+    async (task: Task, input: TaskUpdateInput) => {
       const updated = await updateTask(task.id, input);
       setState((prev) =>
         prev.status === 'ready' ? { ...prev, tasks: prev.tasks.map((t) => (t.id === updated.id ? updated : t)) } : prev
       );
+      return updated;
     },
     []
   );

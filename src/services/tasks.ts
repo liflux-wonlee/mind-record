@@ -1,5 +1,5 @@
 import { supabase } from '@/lib/supabase';
-import type { Database, TaskStatus } from '@/types/database';
+import type { Database, TaskRecurFreq, TaskStatus } from '@/types/database';
 
 export type Task = Database['public']['Tables']['tasks']['Row'];
 
@@ -148,15 +148,33 @@ export async function setTaskStarred(taskId: string, starred: boolean): Promise<
   return data;
 }
 
-/** Edits a task's own fields -- title/description text, or its due date (pass `dueDate: null` to clear it). */
-export async function updateTask(
-  taskId: string,
-  input: { title?: string; description?: string | null; dueDate?: string | null }
-): Promise<Task> {
+export type TaskUpdateInput = {
+  title?: string;
+  description?: string | null;
+  dueDate?: string | null;
+  /** Repeats: null = not repeating. */
+  recurFreq?: TaskRecurFreq | null;
+  /** Every N days/weeks/months (1 = every). */
+  recurInterval?: number | null;
+  /** The date the repeat counts from (a 31st stays the 31st); null lets the DB take the due date / today. */
+  recurAnchor?: string | null;
+};
+
+/** Edits a task's own fields -- title/description text, its due date (pass `dueDate: null` to clear it), or how it repeats. */
+export async function updateTask(taskId: string, input: TaskUpdateInput): Promise<Task> {
   const patch: Database['public']['Tables']['tasks']['Update'] = {};
   if (input.title !== undefined) patch.title = input.title;
   if (input.description !== undefined) patch.description = input.description;
   if (input.dueDate !== undefined) patch.due_date = input.dueDate;
+  if (input.recurFreq !== undefined) {
+    patch.recur_freq = input.recurFreq;
+    if (!input.recurFreq) {
+      patch.recur_interval = null;
+      patch.recur_anchor = null;
+    }
+  }
+  if (input.recurInterval !== undefined && input.recurFreq !== null) patch.recur_interval = input.recurInterval;
+  if (input.recurAnchor !== undefined && input.recurFreq !== null) patch.recur_anchor = input.recurAnchor;
   const { data, error } = await supabase.from('tasks').update(patch).eq('id', taskId).select().single();
   if (error) throw error;
   return data;
@@ -167,6 +185,10 @@ export async function deleteTask(taskId: string): Promise<void> {
   if (error) throw error;
 }
 
+/**
+ * Completing a repeating task doesn't close it: the DB logs the occurrence
+ * and returns the row still open with its next due date.
+ */
 export async function setTaskStatus(taskId: string, status: TaskStatus): Promise<Task> {
   const { data, error } = await supabase
     .from('tasks')

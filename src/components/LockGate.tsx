@@ -17,10 +17,24 @@ import { isBiometricLockEnabled } from '@/lib/biometricLock';
 import { isSystemDialogOpen } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 
-export function LockGate({ active }: { active: boolean }) {
+export function LockGate({
+  active,
+  onOpenChange,
+}: {
+  active: boolean;
+  /**
+   * True once the app content is actually visible: signed in, the lock
+   * setting for this user has been read, and (if the lock is on) it has
+   * been unlocked. Notification taps wait for this (see usePushBootstrap)
+   * so they never open content behind -- or before -- the lock.
+   */
+  onOpenChange?: (open: boolean) => void;
+}) {
   const { user } = useAuth();
   const [lockEnabled, setLockEnabled] = useState(false);
   const [locked, setLocked] = useState(false);
+  // Which user's lock setting has been read -- until then it's unknown.
+  const [checkedUser, setCheckedUser] = useState<string | null>(null);
   const appStateRef = useRef(AppState.currentState);
   const checkedForUserRef = useRef<string | null>(null);
 
@@ -32,23 +46,36 @@ export function LockGate({ active }: { active: boolean }) {
     if (!active || !user) {
       setLockEnabled(false);
       setLocked(false);
+      setCheckedUser(null);
       checkedForUserRef.current = null;
       return;
     }
     if (checkedForUserRef.current === user.id) return;
     checkedForUserRef.current = user.id;
     let cancelled = false;
-    isBiometricLockEnabled(user.id).then((enabled) => {
-      if (cancelled) return;
-      setLockEnabled(enabled);
-      // Locked by default the moment this is known to be on -- covers both
-      // a fresh cold start and switching to a different lock-enabled user.
-      setLocked(enabled);
-    });
+    const userId = user.id;
+    isBiometricLockEnabled(userId)
+      .then((enabled) => {
+        if (cancelled) return;
+        setLockEnabled(enabled);
+        // Locked by default the moment this is known to be on -- covers both
+        // a fresh cold start and switching to a different lock-enabled user.
+        setLocked(enabled);
+        setCheckedUser(userId);
+      })
+      .catch(() => {
+        // Same outcome as before this was tracked (no lock shown), but
+        // now known -- so notification taps aren't held forever.
+        if (!cancelled) setCheckedUser(userId);
+      });
     return () => {
       cancelled = true;
     };
-  }, [active, user]);
+    // By id, not the user object: a token refresh hands out a new object
+    // for the same user, which cancelled the in-flight read above while the
+    // ref kept it from being re-run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, user?.id]);
 
   // Re-lock on every return from the background, not just once at cold
   // start -- 'background' specifically (matching useAudioInterruption's
@@ -68,6 +95,13 @@ export function LockGate({ active }: { active: boolean }) {
     });
     return () => subscription.remove();
   }, [active, lockEnabled]);
+
+  const open = active && !!user && checkedUser === user.id && !(lockEnabled && locked);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  useEffect(() => {
+    onOpenChangeRef.current?.(open);
+  }, [open]);
 
   if (!active || !lockEnabled || !locked) return null;
   return <LockScreen onUnlocked={() => setLocked(false)} />;

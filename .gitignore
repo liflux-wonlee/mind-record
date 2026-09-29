@@ -42,3 +42,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Push credentials (FCM / APNs) -- per-environment, never committed.
+google-services.json
+GoogleService-Info.plist

@@ -28,9 +28,27 @@ import {
   type GoogleTasksSendRecord,
 } from '@/services/googleTasks';
 import { friendlyMessage } from '@/lib/friendlyError';
+import { getPushState, PUSH_SUPPORTED, turnOnNotifications } from '@/lib/push';
 import { useAuth } from '@/providers/AuthProvider';
+import {
+  currentTaskReminderMode,
+  describeTaskReminders,
+  formatClock,
+  formatDate,
+  formatWhen,
+  getReminderSettings,
+  isInQuietHours,
+  listTaskReminders,
+  RECUR_LABEL,
+  recurLabel,
+  setTaskReminderMode,
+  type Reminder,
+  type ReminderSettings,
+  type TaskReminderMode,
+} from '@/services/reminders';
 import { confirmListSuggestion, type TaskList } from '@/services/taskLists';
-import type { Task } from '@/services/tasks';
+import type { Task, TaskUpdateInput } from '@/services/tasks';
+import type { TaskRecurFreq } from '@/types/database';
 import { colors, font, GUTTER, h2, radius } from '@/theme';
 
 /** Page keys for the two tabs that aren't lists; every other page's key is its list id. */
@@ -175,7 +193,13 @@ export default function TasksScreen() {
     setSelectedKey(ALL_KEY);
     if (target.status === 'completed') setExpandedCompleted((prev) => new Set(prev).add(ALL_KEY));
     setEditing(target);
-  }, [edit, consumedEdit, tasksState]);
+    // Cleared once used, so opening the same task again later (e.g. from
+    // Reminders) works -- a tab screen keeps its old params otherwise.
+    router.setParams({ edit: undefined });
+  }, [edit, consumedEdit, tasksState, router]);
+  useEffect(() => {
+    if (!edit) setConsumedEdit(null);
+  }, [edit]);
 
   const lists = tasksState.status === 'ready' ? tasksState.lists : [];
   const tasks = tasksState.status === 'ready' ? tasksState.tasks : [];
@@ -381,7 +405,15 @@ export default function TasksScreen() {
         list={showListTag ? listById(task.list_id) : undefined}
         accent={page.tone.deep}
         onToggle={() =>
-          tasksState.toggle(task).catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
+          tasksState
+            .toggle(task)
+            .then((updated) => {
+              // A repeating task stays open, moved to its next occurrence.
+              if (task.status === 'open' && updated.status === 'open' && updated.recur_freq && updated.due_date) {
+                Alert.alert('Done for this time', `Next: ${formatDate(updated.due_date)}`);
+              }
+            })
+            .catch((e) => Alert.alert('Could not update', friendlyMessage(e, 'Please try again.')))
         }
         onOpen={() => setEditing(task)}
         onToggleStar={() => toggleStar(task)}
@@ -870,9 +902,12 @@ function TaskRow({
             {task.description}
           </Text>
         ) : null}
-        {(due && !done) || list ? (
+        {(due && !done) || list || (task.recur_freq && !done) ? (
           <View style={styles.metaRow}>
             {due && !done ? <Text style={[styles.dueBadge, { color: accent, borderColor: accent }]}>{due}</Text> : null}
+            {task.recur_freq && !done ? (
+              <Tag variant="neutral">{`Repeats ${recurLabel(task.recur_freq, task.recur_interval)}`}</Tag>
+            ) : null}
             {list ? <Tag variant="neutral">{list.name}</Tag> : null}
           </View>
         ) : null}
@@ -903,7 +938,7 @@ function TaskEditSheet({
   task: Task | null;
   list: TaskList | undefined;
   onClose: () => void;
-  onSave: (input: { title: string; description?: string | null; dueDate?: string | null }) => Promise<void>;
+  onSave: (input: TaskUpdateInput & { title: string }) => Promise<void>;
   onDelete: () => Promise<void>;
   onOpenSource: (sessionId: string) => void;
   onChangeList: () => void;
@@ -915,12 +950,14 @@ function TaskEditSheet({
   const [saving, setSaving] = useState(false);
   const [sendRecord, setSendRecord] = useState<GoogleTasksSendRecord | null>(null);
   const [sending, setSending] = useState(false);
+  const [recurFreq, setRecurFreq] = useState<TaskRecurFreq | null>(null);
 
   React.useEffect(() => {
     if (task) {
       setTitle(task.title);
       setDescription(task.description ?? '');
       setDueDate(task.due_date);
+      setRecurFreq(task.recur_freq);
       setSendRecord(null);
       getGoogleTasksSendRecord('task', task.id)
         .then(setSendRecord)
@@ -962,7 +999,21 @@ function TaskEditSheet({
     if (!checkDueDate(dueDate)) return;
     setSaving(true);
     try {
-      await onSave({ title: title.trim(), description: description.trim() || null, dueDate });
+      const input: TaskUpdateInput & { title: string } = {
+        title: title.trim(),
+        description: description.trim() || null,
+        dueDate,
+      };
+      const recurChanged = recurFreq !== (task?.recur_freq ?? null);
+      if (recurChanged) {
+        input.recurFreq = recurFreq;
+        input.recurInterval = recurFreq ? 1 : null;
+      }
+      // The repeat counts from the due date -- re-anchor only when the
+      // repeat or the date was changed here, never on a plain title edit
+      // (a monthly task on the 31st must stay on the 31st).
+      if (recurFreq && (recurChanged || dueDate !== task?.due_date)) input.recurAnchor = dueDate;
+      await onSave(input);
     } catch (e) {
       Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
     } finally {
@@ -1008,6 +1059,10 @@ function TaskEditSheet({
           </View>
 
           <DueDateField value={dueDate} onChange={setDueDate} />
+
+          <RepeatField value={recurFreq} onChange={setRecurFreq} dueDate={dueDate} savedTask={task} />
+
+          {task ? <ReminderField task={task} dueDateEdited={dueDate !== task.due_date} /> : null}
 
           <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
             {task?.source_session_id ? (
@@ -1230,12 +1285,267 @@ function NewTaskSheet({
   );
 }
 
-function DateChip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
+const REPEAT_OPTIONS: { label: string; value: TaskRecurFreq | null }[] = [
+  { label: 'None', value: null },
+  { label: 'Daily', value: 'day' },
+  { label: 'Weekly', value: 'week' },
+  { label: 'Monthly', value: 'month' },
+];
+
+/** "Repeats" -- a repeating task: completing it moves it to its next date (saved with the task). */
+function RepeatField({
+  value,
+  onChange,
+  dueDate,
+  savedTask,
+}: {
+  value: TaskRecurFreq | null;
+  onChange: (v: TaskRecurFreq | null) => void;
+  dueDate: string | null;
+  savedTask: Task | null;
+}) {
+  const unchanged = savedTask && value === savedTask.recur_freq && dueDate === savedTask.due_date;
+  return (
+    <>
+      <Text style={styles.fieldLabel}>Repeats</Text>
+      <View style={styles.dateRow}>
+        {REPEAT_OPTIONS.map((o) => (
+          <DateChip key={o.label} label={o.label} selected={value === o.value} onPress={() => onChange(o.value)} />
+        ))}
+      </View>
+      {value ? (
+        <Text style={[styles.sendHint, { marginTop: -4, marginBottom: 10 }]}>
+          {unchanged && savedTask?.due_date
+            ? `Next: ${formatDate(savedTask.due_date)} (repeats ${recurLabel(value, savedTask.recur_interval)}). `
+            : dueDate
+              ? `Starts ${formatDate(dueDate)}, then ${RECUR_LABEL[value]}. `
+              : `Starts today, then ${RECUR_LABEL[value]}. `}
+          Checking it off moves it to the next date.
+        </Text>
+      ) : null}
+    </>
+  );
+}
+
+const ONCE_TIMES = ['09:00:00', '12:00:00', '15:00:00', '18:00:00', '20:00:00'];
+
+/**
+ * "Reminder" -- a summary of the task's live reminders and a small editor.
+ * Changes here are applied right away (they're separate from the task's
+ * Save), and the summary is re-read from the server afterwards.
+ */
+function ReminderField({ task, dueDateEdited }: { task: Task; dueDateEdited: boolean }) {
+  const { user } = useAuth();
+  const [reminders, setReminders] = useState<Reminder[] | null>(null);
+  const [settings, setSettings] = useState<ReminderSettings | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [onceDay, setOnceDay] = useState<0 | 1>(0);
+  const [onceTime, setOnceTime] = useState<string | null>(null);
+  const [pushHint, setPushHint] = useState<string | null>(null);
+
+  const load = React.useCallback(() => {
+    listTaskReminders(task.id)
+      .then(setReminders)
+      .catch(() => setReminders([]));
+  }, [task.id]);
+
+  React.useEffect(() => {
+    setReminders(null);
+    setEditing(false);
+    setOnceTime(null);
+    setPushHint(null);
+    load();
+    if (user) getReminderSettings(user.id).then(setSettings).catch(() => {});
+  }, [task.id, load, user]);
+
+  const defaultTime = settings?.reminder_time ?? '09:00:00';
+  const onceTimes = Array.from(new Set([defaultTime, ...ONCE_TIMES])).sort();
+  const onceDate = (time: string, day: 0 | 1) => {
+    const [h, m] = time.split(':').map(Number);
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate() + day, h, m);
+  };
+  const onceAt = onceTime ? onceDate(onceTime, onceDay) : null;
+  const onceInQuiet = onceTime ? isInQuietHours(onceTime, settings?.quiet_start ?? null, settings?.quiet_end ?? null) : false;
+
+  const apply = async (mode: TaskReminderMode) => {
+    if (!user || applying) return;
+    setApplying(true);
+    try {
+      await setTaskReminderMode(user.id, task, mode);
+      setEditing(false);
+      setOnceTime(null);
+      load();
+      if (mode !== 'off' && PUSH_SUPPORTED) {
+        // The prompt only appears the first time (the OS won't show it again);
+        // after a "no" this just explains where to turn it on.
+        const state = await getPushState().catch(() => null);
+        if (state && state.permission === 'undetermined' && state.canAskAgain) {
+          const next = await turnOnNotifications().catch(() => null);
+          if (next && next.permission !== 'granted') setPushHint('Saved. Phone notifications are off, so it will only show in the app.');
+          else setPushHint(null);
+        } else if (state && state.permission !== 'granted') {
+          setPushHint('Saved. Phone notifications are off — turn them on in Account → Reminders to get it on your phone.');
+        } else {
+          setPushHint(null);
+        }
+      } else {
+        setPushHint(null);
+      }
+    } catch (e) {
+      Alert.alert('Could not change the reminder', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setApplying(false);
+    }
+  };
+
+  const summary = reminders === null ? 'Loading…' : describeTaskReminders(task, reminders, settings);
+  const mode = reminders ? currentTaskReminderMode(reminders) : null;
+  const canAutomatic = !!task.due_date && !dueDateEdited;
+
+  return (
+    <>
+      <Text style={styles.fieldLabel}>Reminder</Text>
+      <View style={styles.listFieldRow}>
+        <Text style={[styles.listFieldText, { flex: 1, paddingVertical: 10 }]}>{summary}</Text>
+        {task.status === 'open' ? (
+          <Button
+            variant="ghost"
+            label={editing ? 'Close' : 'Change'}
+            onPress={() => setEditing((v) => !v)}
+            style={{ minHeight: 44, paddingHorizontal: 6 }}
+            textStyle={{ fontSize: 12 }}
+          />
+        ) : null}
+      </View>
+      {task.recur_freq && task.due_date ? (
+        <Text style={[styles.sendHint, { marginTop: -4, marginBottom: 8 }]}>
+          Next: {formatDate(task.due_date)} (repeats {recurLabel(task.recur_freq, task.recur_interval)})
+        </Text>
+      ) : null}
+      {pushHint ? <Text style={[styles.sendHint, { marginTop: -4, marginBottom: 8 }]}>{pushHint}</Text> : null}
+
+      {editing ? (
+        <View style={styles.reminderEditor}>
+          <View style={styles.dateRow}>
+            <DateChip
+              label="Automatic"
+              selected={mode === 'automatic'}
+              disabled={!canAutomatic || applying}
+              onPress={() => apply('automatic')}
+            />
+            <DateChip
+              label="Every day until done"
+              selected={mode === 'daily'}
+              disabled={applying}
+              onPress={() => apply('daily')}
+            />
+            <DateChip label="Off" selected={mode === 'off'} disabled={applying} onPress={() => apply('off')} />
+          </View>
+          <Text style={[styles.sendHint, { marginTop: -4, marginBottom: 10 }]}>
+            {!task.due_date
+              ? 'Automatic needs a due date.'
+              : dueDateEdited
+                ? 'Save the new due date first to use Automatic.'
+                : `Automatic: ${describeTaskReminders(
+                    task,
+                    [{ ...AUTOMATIC_PREVIEW, task_id: task.id }],
+                    settings
+                  )}.`}
+            {' '}Every day: {formatClock(defaultTime)}, until you check it off.
+          </Text>
+
+          <Text style={styles.fieldLabel}>Once at…</Text>
+          <View style={styles.dateRow}>
+            <DateChip label="Today" selected={onceDay === 0} onPress={() => setOnceDay(0)} />
+            <DateChip label="Tomorrow" selected={onceDay === 1} onPress={() => setOnceDay(1)} />
+          </View>
+          <View style={styles.dateRow}>
+            {onceTimes.map((t) => (
+              <DateChip
+                key={t}
+                label={formatClock(t)}
+                selected={onceTime === t}
+                disabled={onceDate(t, onceDay).getTime() <= Date.now()}
+                onPress={() => setOnceTime(t)}
+              />
+            ))}
+          </View>
+          {onceInQuiet ? (
+            <Text style={[styles.sendHint, { marginTop: -4, marginBottom: 8 }]}>
+              That’s during your quiet hours — it will still be sent at that time.
+            </Text>
+          ) : null}
+          <Button
+            label={applying ? 'Saving…' : onceAt ? `Remind me ${formatWhen(onceAt.toISOString())}` : 'Pick a time'}
+            variant="save"
+            align="flex-start"
+            disabled={!onceAt || applying || onceAt.getTime() <= Date.now()}
+            onPress={() => onceAt && apply({ once: onceAt })}
+            style={{ alignSelf: 'flex-start', paddingHorizontal: 16 }}
+          />
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+/** The automatic reminder as a rule, to word the "Automatic" option before it's chosen. */
+const AUTOMATIC_PREVIEW: Reminder = {
+  id: 'preview',
+  user_id: '',
+  task_id: null,
+  session_id: null,
+  memory_id: null,
+  kind: 'due',
+  purpose: 'remind',
+  origin: 'default',
+  title: '',
+  note: null,
+  source_session_id: null,
+  source_quote: null,
+  timezone: 'UTC',
+  local_time: null,
+  day_offsets: null,
+  fire_at: null,
+  start_date: null,
+  ends_on: null,
+  context_tag: null,
+  status: 'active',
+  status_reason: null,
+  snoozed_until: null,
+  suppressed_until: null,
+  last_fired_at: null,
+  next_fire_at: null,
+  lease_until: null,
+  version: 1,
+  created_at: '',
+  updated_at: '',
+};
+
+function DateChip({
+  label,
+  selected,
+  onPress,
+  disabled,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityState={{ selected, disabled: !!disabled }}
       onPress={onPress}
-      style={[styles.dateChip, selected && { backgroundColor: colors.accent, borderColor: colors.accent }]}
+      disabled={disabled}
+      style={[
+        styles.dateChip,
+        selected && { backgroundColor: colors.accent, borderColor: colors.accent },
+        disabled && { opacity: 0.4 },
+      ]}
     >
       <Text style={[styles.dateChipText, selected && { color: colors.bg }]}>{label}</Text>
     </Pressable>
@@ -1589,6 +1899,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 6,
+    marginBottom: 10,
+  },
+  reminderEditor: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.pastel,
+    padding: 12,
     marginBottom: 10,
   },
   dateChip: {
