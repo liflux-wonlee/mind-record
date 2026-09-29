@@ -7,7 +7,7 @@
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2.116.0';
 
 export type UsageEventType = 'transcribe' | 'gpt_completion' | 'tts_synthesize';
-export type UsageSource = 'process_session' | 'converse' | 'search_ask' | 'preview_voice';
+export type UsageSource = 'process_session' | 'converse' | 'search_ask' | 'preview_voice' | 'reminder_briefing';
 
 export type UsageEvent = {
   userId: string;

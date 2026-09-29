@@ -73,7 +73,7 @@ reminders-dispatch:
 
 ## 4. 배포 순서
 
-1. **DB**
+1. **DB** (마이그레이션 3개: `20260929000001_reminders`, `…02_reminders_cron`, `…03_usage_source_reminder_briefing`)
    ```powershell
    npx supabase db push --project-ref wngsbfoiqdonjobbunyi
    ```
@@ -109,9 +109,11 @@ reminders-dispatch:
 
 | 항목 | 방법 | 결과 |
 | --- | --- | --- |
-| 날짜·DST·월말·윤년·시간대 변경·상태 전이·중복·RLS | `scripts/test-reminders-sql.sh` (로컬 Postgres 16, 모든 마이그레이션 적용 후 74개 검사) | 통과 |
-| 앱 타입 검사 / Android·Web 번들 | `npx tsc --noEmit`, `npx expo export` | (통합 후 기록) |
-| 서버 함수 순수 로직 | Node 테스트 | (통합 후 기록) |
+| 날짜·DST·월말·윤년·시간대 변경·상태 전이·중복·RLS·undo 복원 | `scripts/test-reminders-sql.sh` (로컬 Postgres 16, 모든 마이그레이션 적용 후) | 통과 |
+| 서버 순수 로직 (푸시 문구·미리보기 끔·청크·영수증 분류·재시도·선행 마감·DST·브리핑 템플릿) | `node --test supabase/tests/reminders_pure.test.ts` | 32/32 통과 |
+| 서버 함수 타입 검사 (14개 전부) | `npx -y deno@2 check supabase/functions/*/index.ts` | 통과 |
+| 앱 타입 검사 / Android·Web 번들 | `npx tsc --noEmit`, `npx expo export` | 통과 (웹 번들에 알림 모듈 없음) |
+| 실제 Expo 발송·OpenAI 대본·TTS | 운영 키 필요 | **미검증** |
 | 실제 푸시 수신·알림 탭·종료 상태 진입·오디오 | 실기기 필요 | **미검증** |
 
 실기기 시험 절차: 설정 → 리마인드 → 알림 켜기 → "테스트 알림 보내기" → 수신 확인 → 알림 탭 → 목록 이동. 내일 마감 Task를 만들고 기본 시각을 몇 분 뒤로 바꿔 실제 발송 확인 (운영 데이터 대신 테스트 계정 권장).

@@ -403,4 +403,66 @@ select public.unregister_push_installation('install-abc-123');
 reset role;
 select pg_temp.eq((select count(*)::int from public.push_installations), 1, 'another account cannot unregister it');
 
+-- ---------------------------------------------------------------------------
+-- 13. What the server code (supabase/functions/_shared/reminders.ts,
+--     converse undo) relies on.
+-- ---------------------------------------------------------------------------
+select pg_temp.as_service();
+set reminders.now = '2026-10-05 12:00:00+00'; -- 08:00 NY
+insert into public.tasks (id, user_id, title, due_date)
+values ('11111111-0000-4000-8000-00000000000c', 'aaaaaaaa-0000-4000-8000-000000000001', 'Undo me', '2026-10-09');
+insert into public.reminders (id, user_id, task_id, kind, fire_at, title, timezone)
+values ('33333333-0000-4000-8000-000000000001', 'aaaaaaaa-0000-4000-8000-000000000001', '11111111-0000-4000-8000-00000000000c',
+        'once', '2026-10-06 15:00:00 America/New_York', 'Undo me', 'America/New_York');
+select pg_temp.eq(
+  (select status_reason from public.reminders where task_id = '11111111-0000-4000-8000-00000000000c' and origin = 'default'),
+  'replaced', 'set_reminder: the user time replaces the automatic one');
+-- undo: delete the created reminder, then bring the automatic one back
+delete from public.reminders where id = '33333333-0000-4000-8000-000000000001';
+update public.reminders set status = 'active', status_reason = null
+ where task_id = '11111111-0000-4000-8000-00000000000c' and origin = 'default' and status = 'stopped' and status_reason = 'replaced';
+select pg_temp.eq(
+  (select next_fire_at from public.reminders where task_id = '11111111-0000-4000-8000-00000000000c' and origin = 'default'),
+  '2026-10-08 09:00:00 America/New_York'::timestamptz, 'undo: automatic reminder back, recomputed from now');
+-- undo of a snooze: restoring the earlier snapshot (no snooze) brings the old slot back
+select effective_until from public.reminder_act('aaaaaaaa-0000-4000-8000-000000000001', 'task', '11111111-0000-4000-8000-00000000000c', 'snooze', '2026-10-05 16:00:00+00');
+update public.reminders set snoozed_until = null, suppressed_until = null, status = 'active', status_reason = null
+ where task_id = '11111111-0000-4000-8000-00000000000c';
+select pg_temp.eq(
+  (select next_fire_at from public.reminders where task_id = '11111111-0000-4000-8000-00000000000c' and origin = 'default'),
+  '2026-10-08 09:00:00 America/New_York'::timestamptz, 'undo snooze: schedule as before');
+-- stop, then undo (status back to active): only future slots, nothing re-sent
+select affected from public.reminder_act('aaaaaaaa-0000-4000-8000-000000000001', 'task', '11111111-0000-4000-8000-00000000000c', 'stop');
+set reminders.now = '2026-10-08 20:00:00+00';
+update public.reminders set status = 'active', status_reason = null where task_id = '11111111-0000-4000-8000-00000000000c';
+select pg_temp.eq(
+  (select next_fire_at from public.reminders where task_id = '11111111-0000-4000-8000-00000000000c' and origin = 'default'),
+  '2026-10-09 09:00:00 America/New_York'::timestamptz, 'undo stop later: the day-before slot that passed is not re-sent');
+-- a daily rule with no time of its own follows the profile's default time
+insert into public.reminders (user_id, task_id, kind, title, timezone)
+values ('aaaaaaaa-0000-4000-8000-000000000001', '11111111-0000-4000-8000-00000000000c', 'daily', 'Undo me', 'America/New_York');
+select pg_temp.eq(
+  (select next_fire_at from public.reminders where task_id = '11111111-0000-4000-8000-00000000000c' and kind = 'daily'),
+  '2026-10-09 09:00:00 America/New_York'::timestamptz, 'daily without local_time uses the default time');
+-- a repeating task created without a date starts today
+insert into public.tasks (id, user_id, title, recur_freq, recur_interval)
+values ('11111111-0000-4000-8000-00000000000d', 'aaaaaaaa-0000-4000-8000-000000000001', 'Water plants', 'week', 1);
+select pg_temp.eq(
+  (select due_date::text || ' ' || recur_anchor::text from public.tasks where id = '11111111-0000-4000-8000-00000000000d'),
+  '2026-10-08 2026-10-08', 'repeating task without a date: anchored today');
+-- the briefing's usage is recorded under its own source
+insert into public.usage_events (user_id, event_type, source, tts_characters)
+values ('aaaaaaaa-0000-4000-8000-000000000001', 'tts_synthesize', 'reminder_briefing', 120);
+select pg_temp.eq(
+  (select count(*)::int from public.usage_events where source = 'reminder_briefing'), 1, 'usage source reminder_briefing accepted');
+do $$
+begin
+  begin
+    insert into public.usage_events (user_id, event_type, source) values ('aaaaaaaa-0000-4000-8000-000000000001', 'tts_synthesize', 'bogus');
+    raise exception 'FAIL unknown usage source accepted';
+  exception when check_violation then
+    raise notice 'ok  unknown usage source rejected';
+  end;
+end $$;
+
 \echo ALL REMINDER TESTS PASSED

@@ -37,9 +37,50 @@ export type GoogleSendLog = {
   created_list: boolean;
 };
 
+/** A reminder's user-changeable state before an action changed it -- what undo puts back. */
+export type ReminderSnapshot = {
+  id: string;
+  status: string;
+  status_reason: string | null;
+  snoozed_until: string | null;
+  suppressed_until: string | null;
+  local_time: string | null;
+  start_date: string | null;
+  ends_on: string | null;
+  fire_at: string | null;
+  note: string | null;
+};
+
+/** A task's fields before an action changed them -- what undo puts back. */
+export type TaskChange = {
+  id: string;
+  before: {
+    status?: string;
+    completed_at?: string | null;
+    due_date?: string | null;
+    title?: string;
+    description?: string | null;
+    recur_freq?: string | null;
+    recur_interval?: number | null;
+    recur_anchor?: string | null;
+  };
+  /** Completing a repeating task logged this occurrence (task_completions) -- undo removes that log row. */
+  completed_occurrence?: string | null;
+};
+
 export type ActionRecord = {
   v: 1;
-  type: 'task_created' | 'topic_filed' | 'topic_created' | 'google_sent';
+  type:
+    | 'task_created'
+    | 'topic_filed'
+    | 'topic_created'
+    | 'google_sent'
+    /** set_reminder: reminders created/changed (and maybe a task created, in task_ids). */
+    | 'reminder_set'
+    /** reminder_action: snooze / not today / stop / acknowledge / resume. */
+    | 'reminder_changed'
+    | 'task_completed'
+    | 'task_updated';
   label: string;
   turn_id: string;
   /** The task title / topic display name ("Business · Liflux") this was about. */
@@ -53,6 +94,14 @@ export type ActionRecord = {
   linked_topic_id: string | null;
   /** google_sent only: what was sent. (Undoing a task_created removes every Google copy of its tasks, however they were sent.) */
   google_sends?: GoogleSendLog[];
+  /** Reminder actions: reminders this created (deleted on undo) and changed (restored on undo). */
+  reminder_changes?: { created: string[]; changed: ReminderSnapshot[] };
+  /** Reminder actions: the task / record / idea it was about. */
+  target?: { type: 'task' | 'session' | 'memory'; id: string };
+  /** Existing tasks this changed (completed, re-dated, renamed...) -- restored on undo. */
+  task_changes?: TaskChange[];
+  /** What was said to confirm it, for replies built from the log. */
+  spoken?: { ko: string; en: string };
   undone: boolean;
 };
 

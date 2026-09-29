@@ -24,6 +24,22 @@ import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2.1
 import { errorMessage } from '../_shared/errorMessage.ts';
 import { parseActionRecord, type ActionRecord } from '../_shared/actionLog.ts';
 import { findSimilarName } from '../_shared/nameMatch.ts';
+import {
+  applyReminder,
+  findSameOpenTask,
+  loadReminderProfile,
+  loadTarget,
+  type ReminderWhen,
+  type TargetRow,
+} from '../_shared/reminders.ts';
+import {
+  leadDueDate,
+  leadNote,
+  localDateOf,
+  localStamp,
+  sanitizeReminderRequest,
+  type ReminderRequest,
+} from '../_shared/reminderRules.ts';
 import { localDay, resolveUserTimeZone } from '../_shared/timezone.ts';
 import { recordUsage } from '../_shared/usage.ts';
 
@@ -65,6 +81,8 @@ type ExtractedTask = {
    *  only tasks get lists, not ideas or outline sections. */
   list_name?: string | null;
   list_confidence?: number;
+  /** Only when the speaker explicitly asked to be reminded about this task. */
+  reminder?: ReminderRequest | null;
 };
 type ExtractedMemory = {
   content: string;
@@ -100,6 +118,8 @@ type Extraction = {
   memories: ExtractedMemory[];
   /** Topics the speaker explicitly asked to have created, even with nothing to file under them yet. */
   requested_topics: RequestedTopic[];
+  /** Explicit "remind me about this (recording/idea) ..." requests -- a reminder on the recording itself, no task. */
+  record_reminders: ReminderRequest[];
 };
 
 Deno.serve(async (req) => {
@@ -401,6 +421,23 @@ Deno.serve(async (req) => {
       const parts = r.subject.split('·').map((p) => normalizeTopicKey(p));
       if (parts.length > 1 && r.topic_ids.length > 1 && !liveTopicKeys.has(parts[0])) undoneCreatedTopics.add(parts[0]);
     }
+    // Reminders the voice assistant already set (or set and then undid) live:
+    // never set again from the transcript.
+    const liveReminderTaskTitles = new Set(
+      actionRecords
+        .filter((r) => r.type === 'reminder_set' && r.target?.type === 'task')
+        .map((r) => normalizeTaskTitle(r.subject))
+    );
+    const liveRecordReminder = actionRecords.some(
+      (r) => r.type === 'reminder_set' && (r.target?.type === 'session' || r.target?.type === 'memory')
+    );
+    // Tasks created by set_reminder and then undone: don't bring them back either.
+    for (const r of undone) {
+      if (r.type === 'reminder_set' && r.task_ids.length > 0) {
+        const key = normalizeTaskTitle(r.subject);
+        if (!liveTaskTitles.has(key)) undoneTaskTitles.add(key);
+      }
+    }
     // Topics the user filed this conversation under by voice, and that still exist.
     const liveFiledTopics: TopicRow[] = [];
     for (const r of live) {
@@ -514,10 +551,36 @@ Deno.serve(async (req) => {
     // Tasks also resolve a list the same way -- a separate, flat concept
     // from topics (see ListRow/resolveList).
     const alreadyExisting = new Set(existingTaskTitles.map(normalizeTaskTitle));
-    const newTasks = extraction.tasks.filter((t) => {
+    const candidateTasks = extraction.tasks.filter((t) => {
       const key = normalizeTaskTitle(t.title);
       return !alreadyExisting.has(key) && !undoneTaskTitles.has(key);
     });
+    // An explicit reminder request is only honoured once: not if the
+    // assistant already set it live in this conversation.
+    const wantsReminder = (t: ExtractedTask) => !!t.reminder && !liveReminderTaskTitles.has(normalizeTaskTitle(t.title));
+    // "Remind me to send the quote" when "Send the quote" is already an open
+    // task: remind about that one instead of filing the same to-do twice.
+    const reusedForReminder: { task: ExtractedTask; taskId: string }[] = [];
+    const newTasks: ExtractedTask[] = [];
+    for (const t of candidateTasks) {
+      if (wantsReminder(t)) {
+        const same = await findSameOpenTask(db, user.id, t.title);
+        if (same.exact.length > 0) {
+          reusedForReminder.push({ task: t, taskId: same.exact[0].id });
+          continue;
+        }
+      }
+      newTasks.push(t);
+    }
+    // Preparation lead time: the deadline is event date minus lead days
+    // (calendar days), explained in the task's description.
+    const leadBase = recordedOn?.date ?? localDateOf(new Date(), userTimeZone.timezone);
+    const leadFor = (t: ExtractedTask) => {
+      const r = t.reminder;
+      if (!r?.event_date || r.lead_days === null) return null;
+      const lead = leadDueDate(r.event_date, r.lead_days, leadBase);
+      return 'error' in lead ? null : lead;
+    };
     const resolvedTasks: {
       user_id: string;
       source_session_id: string;
@@ -528,16 +591,19 @@ Deno.serve(async (req) => {
       topic_suggestion: string | null;
       list_id: string | null;
       list_suggestion: string | null;
+      description: string | null;
     }[] = [];
     for (const t of newTasks) {
       const resolvedTopic = await resolveTopic(db, user.id, topics, withoutUndoneTopic(t));
       const resolvedList = await resolveList(db, user.id, lists, t);
+      const lead = wantsReminder(t) ? leadFor(t) : null;
       resolvedTasks.push({
         user_id: user.id,
         source_session_id: sessionId,
         title: t.title,
         priority: t.priority ?? 'normal',
-        due_date: t.due_date ?? null,
+        due_date: lead?.dueDate ?? t.due_date ?? null,
+        description: lead ? leadNote(lead, t.reminder?.note) : null,
         topic_id: resolvedTopic.topicId,
         topic_suggestion: resolvedTopic.suggestion,
         list_id: resolvedList.listId,
@@ -570,9 +636,15 @@ Deno.serve(async (req) => {
     // batch and the session was still marked done -- with no tasks/ideas
     // and no way to reprocess. Now a failure surfaces as processing_status
     // 'error' via the catch below.
+    let insertedTaskIds: string[] = [];
     if (resolvedTasks.length > 0) {
-      const { error } = await db.from('tasks').insert(resolvedTasks);
+      const { data: insertedTasks, error } = await db.from('tasks').insert(resolvedTasks).select('id, title');
       if (error) throw error;
+      // Rows come back in insert order; matched by title to be safe.
+      const rows = (insertedTasks ?? []) as { id: string; title: string }[];
+      insertedTaskIds = resolvedTasks.map((t, i) =>
+        rows[i]?.title === t.title ? rows[i].id : (rows.find((r) => r.title === t.title)?.id ?? '')
+      );
     }
     if (resolvedMemories.length > 0) {
       const { error } = await db.from('memories').insert(resolvedMemories);
@@ -685,6 +757,24 @@ Deno.serve(async (req) => {
       if (error) throw error;
     }
 
+    // Explicit reminder requests (the voice assistant couldn't set them in a
+    // plain recording). A time that has already passed by now (processing
+    // ran late) is reported as missed -- never pushed late, never hidden.
+    const reminderResults = await applyExtractedReminders(db, {
+      userId: user.id,
+      sessionId,
+      timezone: userTimeZone.timezone,
+      recordedAt: new Date(session.ended_at ?? session.started_at ?? session.created_at ?? Date.now()),
+      recordTitle: (session.title as string | null) ?? (extraction.summary.slice(0, 80) || 'Recording'),
+      taskRequests: [
+        ...newTasks
+          .map((t, i) => ({ task: t, taskId: insertedTaskIds[i] ?? '' }))
+          .filter((x) => x.taskId && wantsReminder(x.task)),
+        ...reusedForReminder,
+      ].map((x) => ({ taskId: x.taskId, request: x.task.reminder!, lead: leadFor(x.task), dueDate: x.task.due_date ?? null })),
+      recordRequests: liveRecordReminder ? [] : extraction.record_reminders,
+    });
+
     const { error: doneError } = await db
       .from('sessions')
       .update({
@@ -710,6 +800,7 @@ Deno.serve(async (req) => {
       summary: extraction.summary,
       taskCount: resolvedTasks.length,
       memoryCount: resolvedMemories.length,
+      reminders: reminderResults,
     });
   } catch (e) {
     console.error('process-session failed:', e);
@@ -721,6 +812,154 @@ Deno.serve(async (req) => {
     return json({ error: message }, 500);
   }
 });
+
+type ReminderOutcome = {
+  targetType: 'task' | 'session';
+  targetId: string;
+  title: string;
+  /** created | already_set | missed (its time passed before processing finished) | not_saved */
+  status: string;
+  nextReminder: string | null;
+  error?: string;
+};
+
+/**
+ * Creates the reminders the speaker explicitly asked for, through the same
+ * code converse's set_reminder uses (_shared/reminders.ts). One failure
+ * doesn't fail the recording: it comes back as not_saved.
+ */
+async function applyExtractedReminders(
+  db: SupabaseClient,
+  o: {
+    userId: string;
+    sessionId: string;
+    timezone: string;
+    recordedAt: Date;
+    recordTitle: string;
+    taskRequests: {
+      taskId: string;
+      request: ReminderRequest;
+      lead: { dueDate: string; eventDate: string; leadDays: number; late: boolean } | null;
+      /** The deadline the speaker gave, if any. */
+      dueDate: string | null;
+    }[];
+    recordRequests: ReminderRequest[];
+  }
+): Promise<ReminderOutcome[]> {
+  if (o.taskRequests.length === 0 && o.recordRequests.length === 0) return [];
+  const profile = await loadReminderProfile(db, o.userId);
+  const out: ReminderOutcome[] = [];
+
+  const apply = async (target: TargetRow, request: ReminderRequest, note: string | null) => {
+    const now = new Date();
+    let when: ReminderWhen;
+    switch (request.type) {
+      case 'default':
+        when = { type: 'default' };
+        break;
+      case 'at':
+        when = { type: 'at', date: request.date!, time: request.time };
+        break;
+      case 'in': {
+        // "In 30 minutes" counts from when it was said (the recording), not from now.
+        const at = o.recordedAt.getTime() + request.minutes! * 60_000;
+        if (at <= now.getTime()) {
+          out.push({ targetType: target.type as 'task' | 'session', targetId: target.id, title: target.title, status: 'missed', nextReminder: localStamp(new Date(at), o.timezone) });
+          return;
+        }
+        when = { type: 'in', minutes: Math.max(1, Math.ceil((at - now.getTime()) / 60_000)) };
+        break;
+      }
+      case 'daily_until_done':
+        when = { type: 'daily_until_done', time: request.time, start_date: request.start_date, ends_on: request.ends_on };
+        break;
+      case 'context':
+        when = { type: 'context', context_tag: request.context_tag! };
+        break;
+    }
+    try {
+      const result = await applyReminder(db, {
+        userId: o.userId,
+        timezone: o.timezone,
+        now,
+        target,
+        when,
+        purpose: request.purpose,
+        note,
+        sourceSessionId: o.sessionId,
+        sourceQuote: request.quote,
+        profile,
+      });
+      if (!result.ok) {
+        out.push({
+          targetType: target.type as 'task' | 'session',
+          targetId: target.id,
+          title: target.title,
+          status: result.code === 'time_passed' ? 'missed' : 'not_saved',
+          nextReminder: null,
+          ...(result.code === 'time_passed' ? {} : { error: result.error }),
+        });
+        return;
+      }
+      const { data } = await db
+        .from('reminders')
+        .select('next_fire_at')
+        .eq('user_id', o.userId)
+        .eq(target.type === 'task' ? 'task_id' : 'session_id', target.id)
+        .eq('status', 'active')
+        .not('next_fire_at', 'is', null)
+        .order('next_fire_at', { ascending: true })
+        .limit(1);
+      out.push({
+        targetType: target.type as 'task' | 'session',
+        targetId: target.id,
+        title: target.title,
+        status: result.status === 'already_set' ? 'already_set' : 'created',
+        nextReminder: localStamp((data?.[0]?.next_fire_at as string | undefined) ?? null, o.timezone),
+      });
+    } catch (e) {
+      console.error('process-session reminder failed:', (e as { code?: unknown })?.code ?? '', e instanceof Error ? e.message : '');
+      out.push({ targetType: target.type as 'task' | 'session', targetId: target.id, title: target.title, status: 'not_saved', nextReminder: null });
+    }
+  };
+
+  for (const req of o.taskRequests) {
+    let target = await loadTarget(db, o.userId, 'task', req.taskId);
+    if (!target || target.status !== 'open') continue;
+    // A reused task that has no deadline yet gets the one this request implies.
+    const due = req.lead?.dueDate ?? req.dueDate;
+    if (due && !target.dueDate) {
+      const { error } = await db.from('tasks').update({ due_date: due }).eq('id', target.id).eq('user_id', o.userId);
+      if (!error) target = (await loadTarget(db, o.userId, 'task', target.id)) ?? target;
+    }
+    const note = req.lead ? leadNote(req.lead, req.request.note) : req.request.note;
+    await apply(target, req.request, note);
+  }
+
+  if (o.recordRequests.length > 0) {
+    // A retried run doesn't add the same record reminder twice.
+    const { count } = await db
+      .from('reminders')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', o.userId)
+      .eq('session_id', o.sessionId)
+      .eq('source_session_id', o.sessionId);
+    if ((count ?? 0) === 0) {
+      const target: TargetRow = {
+        type: 'session',
+        id: o.sessionId,
+        title: o.recordTitle,
+        dueDate: null,
+        status: null,
+        recurFreq: null,
+        description: null,
+        sourceSessionId: o.sessionId,
+      };
+      for (const req of o.recordRequests.slice(0, 3)) await apply(target, req, req.note);
+    }
+  }
+  return out;
+}
 
 /**
  * Finds or creates the topic (and, if named, its parent) an extracted item
@@ -985,6 +1224,7 @@ async function analyzeTranscript(
         tasks: [],
         memories: [],
         requested_topics: [],
+        record_reminders: [],
       },
       inputTokens: 0,
       outputTokens: 0,
@@ -1081,7 +1321,13 @@ Respond with strict JSON matching this shape:
     "topic_confidence": number between 0 and 1,
     "list_name": string or null (which task list, as described above -- separate from topic_name),
     "list_confidence": number between 0 and 1,
-    "due_date": "YYYY-MM-DD" or null (ONLY if the speaker stated a deadline or day for it, e.g. "내일까지", "by Friday" -- resolved as described above; null otherwise)
+    "due_date": "YYYY-MM-DD" or null (ONLY if the speaker stated a deadline or day for it, e.g. "내일까지", "by Friday" -- resolved as described above; null otherwise),
+    "reminder": null, or -- ONLY when the speaker explicitly asked to be reminded about this task (see REMINDERS below) -- {
+      "type": "default" | "at" | "in" | "daily_until_done" | "context",
+      "date": "YYYY-MM-DD" or null, "time": "HH:MM" (24h) or null, "minutes": integer or null,
+      "context_tag": string or null, "event_date": "YYYY-MM-DD" or null, "lead_days": integer or null,
+      "purpose": "remind" | "waiting", "note": string or null, "quote": string (the speaker's exact words asking for it)
+    }
   }],
   "memories": [{
     "content": string,
@@ -1090,7 +1336,8 @@ Respond with strict JSON matching this shape:
     "topic_parent_name": string or null,
     "topic_confidence": number between 0 and 1
   }],
-  "requested_topics": [{ "name": string, "parent_name": string or null }]
+  "requested_topics": [{ "name": string, "parent_name": string or null }],
+  "record_reminders": [{ "type": "at" | "in" | "daily_until_done" | "context", "date": "YYYY-MM-DD" or null, "time": "HH:MM" or null, "minutes": integer or null, "context_tag": string or null, "note": string or null, "quote": string }]
 }
 
 Each outline section files under its OWN topic -- a recording can genuinely be about more than one thing (e.g. a work errand, then separately a personal note about a friend), so there is no single topic for the whole recording anymore, only one per section. For each section, ALWAYS fill in topic_name (unless the transcript is genuinely empty or pure test noise). Strongly prefer an existing topic from the list above when one fits that section's content. Otherwise propose a short, general, reusable name in the transcript's language (e.g. "신앙", "가족", "Business", "Health"), not a description of this one section. Match the user's existing naming style. Use topic_parent_name only when the section clearly belongs under an existing sub-topic's parent.
@@ -1098,6 +1345,13 @@ Each outline section files under its OWN topic -- a recording can genuinely be a
 For a task's list_name, only fill it in when a list is actually a good fit ("리스트" specifically -- distinct from "토픽"/"폴더"/"카테고리" above, which mean topic). Unlike topic_name, it's fine to leave list_name null for an ordinary task with no obvious list -- not every task needs one. The same explicit-instruction rule applies: if the speaker says something like "이건 쇼핑 리스트에 넣어줘" or "put this on my Work list", treat that as a highly confident list_confidence near 1.0 for that specific task.
 
 "requested_topics" is ONLY for explicit instructions to create a topic/folder/category -- e.g. "교단이라는 토픽을 만들어줘", "make a new topic called Family", "add a Health folder" -- including ones with nothing to file under them yet. Use the exact name the speaker gave. Do not put topics here just because they are mentioned or would be a sensible place to file things; that is what topic_name on outline sections/tasks/memories is for. Empty array when there is no such instruction. There is no equivalent for lists -- a bare "make a list called X" with nothing to put in it isn't worth creating; a list is only created once a real task actually needs it.
+
+REMINDERS -- only for an EXPLICIT request by the speaker to be reminded, nudged or shown something again ("내일 견적 보내라고 알려줘", "완료할 때까지 계속 챙겨줘", "이 아이디어 다음 달에 다시 보여줘", "remind me Thursday to check if David replied"). Never for opinions, plans or wishes without such a request, other people's words, hypotheticals, quotes, or negations ("알려주지 않아도 돼"). Otherwise "reminder" is null and "record_reminders" is empty -- the normal case.
+- On a task: "type" "default" = the usual day-before and day-of reminder (the task needs a due_date); "at" = once on "date" (at "time" only if they said a time); "in" = once after "minutes" from when they said it; "daily_until_done" = "계속 챙겨줘"/"until it's done": once a day ("time" only if they said one); "context" = no time, for a situation ("집에 가면" -> context_tag "home"; office, car).
+- Preparation lead time ("어머니 생신이 다음 주 수요일인데 선물은 최소 3일 전에 주문해야 해"): the task is the preparation ("어머니 생신 선물 주문"), "event_date" = the event day, "lead_days" = the number of CALENDAR days before (never business days unless they said so); the deadline is computed from them. The event itself is not a task.
+- "purpose" "waiting" = checking whether someone replied ("목요일까지 답 없으면 확인하자" -> a task like "David 답변 확인" with an "at" reminder on that Thursday).
+- "record_reminders" = a reminder on THIS recording itself, when they ask to be shown this recording/idea again ("이 아이디어 다음 달에 다시 보여줘" -> "at" on a date in that month) -- no task for it.
+- Resolve dates as described above; if relative dates can't be resolved, leave that reminder out. "note" = why it matters, in their words, if they said. A request with a matching "[App did: Reminder set ...]" line was already carried out -- don't output it again.
 
 If nothing qualifies for tasks/memories, return an empty array for it. If you can't confidently tell which topic a section, task, or memory belongs to, still give your best guess in topic_name but with topic_confidence below 0.6 -- the app asks the user to confirm anything under that threshold rather than filing it automatically. If a topic doesn't exist yet but clearly should (including one the speaker explicitly asked to create), propose it as topic_name anyway -- new topics get created automatically once confidence is high enough. Same threshold for list_confidence.
 
@@ -1152,6 +1406,12 @@ ${detectedLanguage ? `Reminder: write "title"/"content"/"summary"/"heading"/bull
               const { name, parent } = splitTopicName(optionalString(t.name), optionalString(t.parent_name));
               return { name: name ?? '', parent_name: parent };
             })
+        : [],
+      record_reminders: Array.isArray(parsed.record_reminders)
+        ? parsed.record_reminders
+            .map((r: unknown) => sanitizeReminderRequest(r, { recordLevel: true }))
+            .filter((r: ReminderRequest | null): r is ReminderRequest => !!r)
+            .slice(0, 3)
         : [],
     },
     inputTokens: typeof data.usage?.prompt_tokens === 'number' ? data.usage.prompt_tokens : 0,
@@ -1211,6 +1471,7 @@ function sanitizeTask(raw: unknown): ExtractedTask | null {
     list_name: optionalString(t.list_name),
     list_confidence: clampConfidence(t.list_confidence),
     due_date: validYmd(t.due_date),
+    reminder: sanitizeReminderRequest(t.reminder, { recordLevel: false }),
   };
 }
 function validYmd(v: unknown): string | null {

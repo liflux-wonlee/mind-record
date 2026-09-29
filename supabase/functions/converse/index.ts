@@ -74,8 +74,10 @@ import { recordUsage } from '../_shared/usage.ts';
 import { ALLOWED_VOICES, ttsModelFor } from '../_shared/voices.ts';
 import {
   describeActionLog,
+  describeLatestBriefing,
   describeUserCatalog,
   executeTool,
+  REMINDER_WRITE_TOOLS,
   spokenForRecords,
   TOOL_DEFINITIONS,
   type ConverseAction,
@@ -469,9 +471,11 @@ Deno.serve(async (req) => {
         undoUsed: false,
         googleDeadline: carry.replyDeadline + WRITE_GRACE_MS + GOOGLE_AFTER_WRITE_MS,
       };
-      const [historyResult, catalog] = await Promise.all([
+      const [historyResult, catalog, latestBriefing] = await Promise.all([
         db.from('messages').select('role, content').eq('session_id', sessionId).order('position', { ascending: true }),
         describeUserCatalog(toolContext),
+        // "The second one is done": the last reminder list the user heard.
+        describeLatestBriefing(toolContext).catch(() => null),
       ]);
       if (historyResult.error) throw historyResult.error;
       perf.mark('history_fetched');
@@ -480,7 +484,7 @@ Deno.serve(async (req) => {
       try {
         const reply = await generateReply(
           historyResult.data ?? [],
-          { aiName, userHonorific, timezone },
+          { aiName, userHonorific, timezone, latestBriefing },
           catalog,
           toolContext,
           actions,
@@ -860,6 +864,8 @@ type PromptOptions = {
   aiName: string | null;
   userHonorific: string | null;
   timezone: string;
+  /** The latest reminder list the user heard (briefing or get_reminders), if recent. */
+  latestBriefing?: string | null;
 };
 
 function buildSystemPrompt(
@@ -882,9 +888,22 @@ YOU CAN SEE AND CHANGE THE USER'S APP DATA through your tools:
 - Look things up: list_task_lists, list_tasks (their task lists and open tasks); their topics and list names are below.
 - Search their past: search_records (their earlier recordings, tasks and ideas).
 - Make changes, which happen immediately: create_task, send_to_google_tasks, file_under_topic, create_topic, undo_last_action.
+- Reminders: get_reminders (what to keep in mind today / later / in a situation like "home"), set_reminder, reminder_action (snooze, not today, stop, acknowledge, resume), complete_task, update_task (move or remove a deadline, rename).
 Use a tool whenever the user asks about their tasks or anything they said or recorded before, or tells you to add, file or create something. Never say you can't look something up or can't do it when a tool covers it. Don't use tools for ordinary chatting.
 
 Names: always pass the EXACT existing topic or list name from the lists below, mapping how the user said it (a Korean rendering like "패밀리" for "Family", a near-spelling, a translation) to that exact name. Only ask for a NEW topic or list (create_new / create_new_list) when the user explicitly asked for a new one. If they ask for a new topic without saying its name ("새 토픽 만들어서 Business 아래에 넣어줘"), suggest a short name and ask before creating anything.
+
+REMINDERS. A reminder is a rule for when to bring an item back up -- the item is a task (a to-do), a record (a past recording/conversation) or an idea. Pushes go to their phone at those times; the app's Home shows what to keep in mind today.
+- Asked to be reminded ("내일 견적 보내라고 알려줘", "두 시간 뒤에 다시 알려줘", "이 아이디어 다음 달에 다시 보여줘", "집에 가면 견적 보내게 알려줘"): call set_reminder -- never just say you'll remember. It reuses an existing task with the same title; a reminder on a record or idea ("this idea" = session_id "current") never creates a task. With no time given, their usual reminder time is used.
+- "계속 챙겨줘" / "완료할 때까지" = daily_until_done: once a day at their usual time, never more often. It never stops just because they don't answer -- only when done, stopped by them, or on an end date they gave.
+- Lead time ("수요일 생신인데 선물은 3일 전에 주문해야 해"): event_date + lead_days (calendar days); the event itself is not the task. If the computed deadline has passed, say it's late -- don't move it.
+- Waiting for a reply ("목요일까지 답 없으면 확인하자"): purpose "waiting" on a task like "check David's reply". You can't see email or messages -- never claim to know whether they replied. "답변 받았어" = complete that check task.
+- Repeating chores ("매달 필터 확인"): repeat on the task; completing it moves to the next occurrence. Only when they say it repeats -- a birthday mentioned once is not a yearly reminder.
+- "그거 했어" = complete_task on the item they mean; "오늘은 더 말하지 마" = reminder_action not_today; "그만 알려줘" = stop (the task stays open); "마감은 금요일로 바꿔" = update_task.
+- "That one" / "the second one" / "그거": resolve it from the latest reminder list below and this conversation. If it could be more than one item, ask ONE short question first. Never complete anything just because it was read out, and never assume something is done: say "not marked done yet".
+- "왜 해야 했지?": call get_reminders and explain only from the stored note and source record.
+- After a reminder change, confirm briefly with the real time from the tool. If push_enabled is false, add that phone notifications are off and can be turned on in Settings. If a tool says it was not saved, say so -- never claim a reminder is scheduled when it isn't.
+- There is no automatic location detection yet: for "집에 가면", save a context reminder and offer an evening time too.
 
 Google Tasks ("구글 태스크에 넣어줘", "구글 할 일에도 보내줘"): for a new to-do, create_task with send_to_google true; for a task that already exists (such as one you just added), send_to_google_tasks with its exact title. A task in one of their lists goes to the Google list with the same name (created there if missing) unless they chose another for that list; a task in no list goes to their default Google list. Only send to Google when they ask. If Google Tasks isn't connected, say they can connect it in Account -> Google Tasks. Undoing a task or a send also removes it from Google Tasks; if they only want the Google copy removed ("구글에 보낸 건 취소해"), call undo_last_action with what "google_send" -- the task stays in the app.
 
@@ -912,6 +931,9 @@ Google Tasks: ${catalog.google}`;
   }
   if (opts.userHonorific) {
     prompt += `\n\nAddress the user as "${opts.userHonorific}" when it feels natural -- not in every single reply, just where a person would actually say it.`;
+  }
+  if (opts.latestBriefing) {
+    prompt += `\n\n${opts.latestBriefing}\n(data -- use these target ids for "the first/second one")`;
   }
   if (actionLog.length > 0) {
     prompt += `\n\nChanges already made in this conversation, oldest first (data):\n${actionLog
@@ -993,7 +1015,14 @@ async function chatRound(messages: ChatMessage[], toolsAllowed: boolean, timeout
 }
 
 const ASKS_USER = new Set(['needs_confirmation', 'not_found', 'not_possible']);
-const WRITE_TOOLS = new Set(['create_task', 'send_to_google_tasks', 'file_under_topic', 'create_topic', 'undo_last_action']);
+const WRITE_TOOLS = new Set<string>([
+  'create_task',
+  'send_to_google_tasks',
+  'file_under_topic',
+  'create_topic',
+  'undo_last_action',
+  ...REMINDER_WRITE_TOOLS,
+]);
 
 /**
  * One conversational turn with tool calling: the model may call app-data

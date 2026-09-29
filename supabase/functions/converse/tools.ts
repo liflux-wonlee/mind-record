@@ -3,6 +3,8 @@
 // records, and -- immediately, confirmed back by voice -- add a task, send
 // a task to Google Tasks, file the conversation under a topic, create a
 // topic, or undo an earlier turn's changes (a Google copy included).
+// The reminder tools (get_reminders, set_reminder, reminder_action,
+// complete_task, update_task) live in reminderTools.ts.
 //
 // Every write goes through the service-role client with an explicit
 // user_id / session_id filter (the same pattern the rest of converse uses);
@@ -54,6 +56,18 @@ import {
 } from '../_shared/googleTasks.ts';
 import { closestNames, findSimilarName } from '../_shared/nameMatch.ts';
 import { formatHits, searchRecords, splitKeywords } from '../_shared/recordSearch.ts';
+import {
+  completeTask,
+  getReminders,
+  reminderAction,
+  REMINDER_TOOL_DEFINITIONS,
+  revertReminderRecord,
+  setReminder,
+  undoPhrase,
+  updateTask,
+} from './reminderTools.ts';
+
+export { describeLatestBriefing, REMINDER_WRITE_TOOLS } from './reminderTools.ts';
 
 export type ToolContext = {
   db: SupabaseClient;
@@ -226,7 +240,7 @@ export const TOOL_DEFINITIONS = [
     function: {
       name: 'undo_last_action',
       description:
-        'Undo a change you made earlier in this conversation (a task added, a task sent to Google Tasks, a topic filed or created) -- only when the user explicitly asks to cancel/undo it ("취소해", "방금 거 취소", "아까 Esther 토픽 취소해줘", "undo that"). With no target, it undoes the previous turn\'s changes. target: the task title or topic name they named, if they named one. what: "google_send" when they only want the Google Tasks copy taken back ("구글에 보낸 건 취소해", "구글에서만 빼줘") -- the task stays in the app; otherwise leave it out. confirm: true only after they confirmed undoing a change you asked them about.',
+        'Undo a change you made earlier in this conversation (a task added, a task sent to Google Tasks, a topic filed or created, a reminder set or changed, a task marked done or changed) -- only when the user explicitly asks to cancel/undo it ("취소해", "방금 거 취소", "아까 Esther 토픽 취소해줘", "undo that"). With no target, it undoes the previous turn\'s changes. target: the task title or topic name they named, if they named one. what: "google_send" when they only want the Google Tasks copy taken back ("구글에 보낸 건 취소해", "구글에서만 빼줘") -- the task stays in the app; otherwise leave it out. confirm: true only after they confirmed undoing a change you asked them about.',
       parameters: obj({
         target: { type: 'string' },
         what: { type: 'string', enum: ['google_send', 'change'] },
@@ -234,6 +248,7 @@ export const TOOL_DEFINITIONS = [
       }),
     },
   },
+  ...REMINDER_TOOL_DEFINITIONS,
   {
     type: 'function',
     function: {
@@ -278,6 +293,16 @@ export async function executeTool(
         return await createTopicTool(ctx, args, actions);
       case 'undo_last_action':
         return await undoLastAction(ctx, args, actions);
+      case 'get_reminders':
+        return { result: await getReminders(ctx, args) };
+      case 'set_reminder':
+        return await setReminder(ctx, args, actions);
+      case 'reminder_action':
+        return await reminderAction(ctx, args, actions);
+      case 'complete_task':
+        return await completeTask(ctx, args, actions);
+      case 'update_task':
+        return await updateTask(ctx, args, actions);
       default:
         return { result: { error: `Unknown tool "${name}".` } };
     }
@@ -994,6 +1019,10 @@ async function revertRecord(ctx: ToolContext, record: ActionRecord): Promise<Goo
     signal: AbortSignal.timeout(Math.max(5_000, ctx.googleDeadline - Date.now())),
   });
 
+  // Reminders and task changes (reminder_set / reminder_changed /
+  // task_completed / task_updated) -- before a task this record created is deleted.
+  if (record.reminder_changes || record.task_changes) await revertReminderRecord(ctx, record);
+
   if (record.task_ids.length > 0) {
     const { error } = await ctx.db
       .from('tasks')
@@ -1037,7 +1066,10 @@ export function spokenForRecords(records: ActionRecord[]): SpokenConfirmation {
   const ko: string[] = [];
   const en: string[] = [];
   for (const r of records) {
-    if (r.type === 'task_created') {
+    if (r.spoken) {
+      ko.push(r.spoken.ko);
+      en.push(r.spoken.en);
+    } else if (r.type === 'task_created') {
       ko.push(`'${r.subject}' 할 일로 추가했어요.`);
       en.push(`Added '${r.subject}'.`);
     } else if (r.type === 'topic_filed') {
@@ -1056,22 +1088,24 @@ export function spokenForRecords(records: ActionRecord[]): SpokenConfirmation {
 
 function undoPhrases(records: ActionRecord[], google: GoogleRevert): SpokenConfirmation {
   const ko = records.map((r) =>
-    r.type === 'task_created'
+    undoPhrase(r)?.ko ??
+    (r.type === 'task_created'
       ? `'${r.subject}' 할 일`
       : r.type === 'topic_filed'
         ? `'${r.subject}' 토픽에 넣은 것`
         : r.type === 'google_sent'
           ? `'${r.subject}' 구글 태스크로 보낸 것`
-          : `'${r.subject}' 토픽`
+          : `'${r.subject}' 토픽`)
   );
   const en = records.map((r) =>
-    r.type === 'task_created'
+    undoPhrase(r)?.en ??
+    (r.type === 'task_created'
       ? `the task '${r.subject}'`
       : r.type === 'topic_filed'
         ? `filing this under ${r.subject}`
         : r.type === 'google_sent'
           ? `sending '${r.subject}' to Google Tasks`
-          : `the topic ${r.subject}`
+          : `the topic ${r.subject}`)
   );
   const spoken = { ko: `${ko.join(', ')} 취소했어요.`, en: `Undid ${en.join(' and ')}.` };
   const sentByThis = records.some((r) => r.type === 'google_sent');
