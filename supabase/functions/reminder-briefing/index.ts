@@ -131,8 +131,12 @@ Deno.serve(async (req) => {
 
     const now = new Date();
     const today = localDateOf(now, timezone);
-    const allText = nowRows.map((r) => r.title).join(' ');
-    const lang = primaryLang(langHint) ?? (/[가-힣]/.test(allText) ? 'ko' : 'en');
+    // Speak the language the items are written in: a Korean list read out
+    // in English (because the phone's system language is English) is what
+    // the user heard before. The device language only decides when the
+    // items give no signal (no Hangul) -- e.g. an empty list.
+    const allText = rows.map((r) => `${r.title} ${r.note ?? ''}`).join(' ');
+    const lang = /[가-힣]/.test(allText) ? 'ko' : (primaryLang(langHint) ?? 'en');
     const tLang = templateLang(lang);
 
     const items: BriefingItem[] = nowRows.map((r, i) => ({

@@ -29,9 +29,9 @@ export function BriefingPanel({ briefing }: { briefing: BriefingControls }) {
       {state === 'loading' ? (
         <View style={styles.row}>
           <ActivityIndicator color={colors.accent700} />
-          <Text style={styles.status}>Getting today’s reminders ready…</Text>
-          <View style={{ flex: 1 }} />
-          <Button label="Cancel" variant="ghost" onPress={briefing.reset} />
+          {/* flex: 1 lets the text wrap instead of pushing Cancel off the card. */}
+          <Text style={[styles.status, { flex: 1 }]}>Getting today’s reminders ready…</Text>
+          <Button label="Cancel" variant="ghost" onPress={briefing.reset} style={{ flexShrink: 0 }} />
         </View>
       ) : state === 'error' ? (
         <>
