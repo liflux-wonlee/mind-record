@@ -11,7 +11,7 @@
  */
 export const COMPANY_NAME = 'JoaSuite LLC';
 export const APP_NAME = 'JoaAssistant';
-export const CONTACT_EMAIL = 'mindrecord@joasuite.com';
+export const CONTACT_EMAIL = 'support_joaassistant@joasuite.com';
 export const GOVERNING_LAW = 'the State of New Jersey, USA, without regard to its conflict-of-laws principles';
 export const EFFECTIVE_DATE = 'September 20, 2026';
 
