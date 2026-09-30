@@ -96,8 +96,8 @@ reminders-dispatch:
    npx supabase functions deploy process-session --project-ref wngsbfoiqdonjobbunyi
    ```
    `reminders-dispatch`는 크론이 JWT 없이 비밀 헤더로 부르므로 `--no-verify-jwt`로 배포하고, 함수 안에서 비밀값/사용자 JWT를 직접 검사합니다.
-4. **Android 푸시 (FCM)**: Firebase 프로젝트에 Android 앱(`com.liflux.mindrecord`) 추가 → `google-services.json`을 저장소 루트에 저장(커밋하지 않음). FCM V1 서비스 계정 키를 EAS에 등록: `npx eas-cli credentials` → Android → Push Notifications (FCM V1). `app.config.js`가 파일이 있을 때만 연결합니다.
-5. **iOS 푸시 (APNs)**: `npx eas-cli credentials` → iOS → Push Notifications 키 생성/등록 (기존 bundle id `com.liflux.mindrecord`).
+4. **Android 푸시 (FCM)**: Firebase 프로젝트에 Android 앱(`com.joasuite.joaassistant`) 추가 → `google-services.json`을 저장소 루트에 저장(커밋하지 않음). FCM V1 서비스 계정 키를 EAS에 등록: `npx eas-cli credentials` → Android → Push Notifications (FCM V1). `app.config.js`가 파일이 있을 때만 연결합니다.
+5. **iOS 푸시 (APNs)**: `npx eas-cli credentials` → iOS → Push Notifications 키 생성/등록 (기존 bundle id `com.joasuite.joaassistant`).
 6. **네이티브 재빌드** (새 모듈·권한·google-services 반영)
    ```powershell
    npx expo prebuild -p android
@@ -154,12 +154,12 @@ reminders-dispatch:
 - 스토어 문구, 공유 문구
 
 **바꾸지 않음 (식별자)**
-- Android `package` / iOS `bundleIdentifier` `com.liflux.mindrecord`, EAS `projectId`, Supabase project ref/URL·키, DB 테이블·버킷, 로컬 저장 키(`mindrecord.*`), FCM/APNs 자격 증명
+- Android `package` / iOS `bundleIdentifier` `com.joasuite.joaassistant`, EAS `projectId`, Supabase project ref/URL·키, DB 테이블·버킷, 로컬 저장 키(`mindrecord.*`), FCM/APNs 자격 증명
 
 **별도 검토 후에만 (호환성 영향)**
 - URL scheme `mindrecord://` (Supabase Auth Redirect URL, Google Tasks 콜백 `google-tasks-callback`), Expo `slug`, 저장소 이름·도메인 — 바꾸면 신·구 콜백을 한동안 같이 등록하는 전환 계획 필요
 - 표시 이름·권한 문구·알림 채널 이름은 **네이티브 재빌드**가 필요 (JS 업데이트만으로 안 바뀜)
 
 ### 적용됨 (2026-09-30): JoaAssistant
-- 표시 이름 `JoaAssistant`, 패키지/번들 ID `com.liflux.joaassistant`, URL scheme `joaassistant://` (스토어 출시 전이라 식별자까지 변경).
+- 표시 이름 `JoaAssistant`, 패키지/번들 ID `com.joasuite.joaassistant`, URL scheme `joaassistant://` (스토어 출시 전이라 식별자까지 변경).
 - 그대로 둔 것: Expo `slug`(`mind-record`, EAS projectId와 묶여 있음), Supabase 프로젝트·DB·키, 로컬 저장 키(`mindrecord.*`), 연락 이메일, 배포된 마이그레이션 주석.

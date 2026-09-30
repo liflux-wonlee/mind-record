@@ -11,10 +11,10 @@
     "backgroundColor": "#f7f4f2",
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "com.liflux.joaassistant"
+      "bundleIdentifier": "com.joasuite.joaassistant"
     },
     "android": {
-      "package": "com.liflux.joaassistant",
+      "package": "com.joasuite.joaassistant",
       "adaptiveIcon": {
         "backgroundColor": "#f7f4f2",
         "foregroundImage": "./assets/android-icon-foreground.png",
