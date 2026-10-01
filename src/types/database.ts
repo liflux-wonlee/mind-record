@@ -7,7 +7,7 @@
  *
  * This project's Supabase project isn't reachable from this environment, so
  * these couldn't be generated automatically. Once you have the Supabase CLI
- * logged into the `mind-record` project, replace this file with the real
+ * logged into the JoaAssistant project, replace this file with the real
  * generated output (and keep it in sync the same way afterwards):
  *
  *   npx supabase gen types typescript --project-id <ref> > src/types/database.ts

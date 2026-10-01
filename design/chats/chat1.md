@@ -22,7 +22,7 @@ Waiting on your answers about screens, language, fidelity, and variations before
 
 ## User
 
-Answered — screens: Home (mic + Today), Talk / Capture session, Post-capture summary, Inbox, Topic Memory (e.g. JoaSuite), Tasks, Ask My Memory (search), Daily Journal, Driving Mode, Idea Thread; language: Mixed (EN UI, KO content); fidelity: Both; variations: Home / mic layout, Capture session UI, Topic Memory structure, Bottom nav, None — one direction; platform: Both; content: Use doc examples; code: liflux-wonlee/Mindecho
+Answered — screens: Home (mic + Today), Talk / Capture session, Post-capture summary, Inbox, Topic Memory (e.g. JoaSuite), Tasks, Ask My Memory (search), Daily Journal, Driving Mode, Idea Thread; language: Mixed (EN UI, KO content); fidelity: Both; variations: Home / mic layout, Capture session UI, Topic Memory structure, Bottom nav, None — one direction; platform: Both; content: Use doc examples; code: liflux-wonlee/joaassistant
 
 ## Assistant
 
@@ -60,7 +60,7 @@ _[tool: ready_for_verification]_
 
 Out for review. Notes:
 
-- The Mindecho repo is empty, so everything is built from the doc; `github.md` records the link for later sync.
+- The JoaAssistant repo is empty, so everything is built from the doc; `github.md` records the link for later sync.
 - `1a` is the clickable iOS prototype (all 10 screens + Memory hub). Tap the mic to record, stop to reach the summary; Inbox reviews, task toggles, Ask-My-Memory sources and Driving Mode all work. A `startScreen` tweak jumps to any screen.
 - `1b` Android home; `1c–1e` Home layouts, `1f–1h` Capture sessions, `1i–1k` Topic Memory structures, `1l–1n` bottom navs.
 

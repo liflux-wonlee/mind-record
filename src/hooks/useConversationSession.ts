@@ -144,7 +144,7 @@ const CONVERSATION_RECORDING_OPTIONS = {
 // Keeps the screen on while a conversation is going: the conversation stops
 // when the app goes to the background (see useAudioInterruption below), and
 // the screen timing out mid-answer counted as exactly that.
-const KEEP_AWAKE_TAG = 'mind-record-conversation';
+const KEEP_AWAKE_TAG = 'joaassistant-conversation';
 // Between one reply finishing and the next turn's recording starting the
 // state is briefly 'idle' -- releasing the screen then would let a screen
 // whose timeout already ran out go dark right in the middle of the loop.
@@ -663,7 +663,7 @@ export function useConversationSession(
             return;
           }
 
-          const replyFile = new File(Paths.cache, `mind-record-reply-${Date.now()}.mp3`);
+          const replyFile = new File(Paths.cache, `joaassistant-reply-${Date.now()}.mp3`);
           replyFile.write(result.audioBase64, { encoding: 'base64' });
           perf?.mark('reply_file_written');
           player.replace(replyFile.uri);

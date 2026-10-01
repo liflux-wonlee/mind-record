@@ -1,12 +1,11 @@
-# JoaAssistant (formerly Mind Record)
+# JoaAssistant
 
 Voice memory & action assistant — *Don't organize your life. Just talk. AI organizes it for you.*
 
 An Expo (React Native + TypeScript) app for iOS and Android, built from the product plan in
 [`design/product-plan.md`](design/product-plan.md) via the Claude Design handoff in [`design/`](design/).
 
-> Formerly *Mindecho* — renamed because a **Mind Echo** already exists on the app stores. The
-> design files under `design/` keep the original name; the shipping app is **Mind Record**.
+> Built and published by JoaSuite LLC. Package / bundle id `com.joasuite.joaassistant`.
 
 ## Status
 
@@ -25,7 +24,7 @@ Other scripts: `npm run typecheck`, `npm run ios`, `npm run android`, `npm run w
 
 ## Screens
 
-Fourteen screens, matching prototype `1a` in `design/project/Mindecho.dc.html`:
+Fourteen screens, matching prototype `1a` in `design/project/JoaAssistant.dc.html`:
 
 | Route | Screen | Notes |
 | --- | --- | --- |

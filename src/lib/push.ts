@@ -29,7 +29,7 @@ import type { PushPermissionStatus } from '@/types/database';
 
 export const PUSH_SUPPORTED = true;
 export const REMINDER_CHANNEL_ID = 'reminders';
-const INSTALLATION_KEY = 'mindrecord.push.installationId.v1';
+const INSTALLATION_KEY = 'joaassistant.push.installationId.v1';
 
 export type PushState = {
   permission: PushPermissionStatus;

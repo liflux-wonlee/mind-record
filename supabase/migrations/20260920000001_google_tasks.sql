@@ -1,6 +1,6 @@
 -- "Send to Google Tasks" (§10 of the spec): connecting a Google account
 -- for Tasks access is entirely separate from whichever provider (Google/
--- Apple/email) the user actually signed into Mind Record with, and this
+-- Apple/email) the user actually signed into JoaAssistant with, and this
 -- connection's tokens must never be confused with the login session's own
 -- tokens. Every table here is readable ONLY by the service role -- no RLS
 -- select policy grants the client anything, including the connections
@@ -21,9 +21,9 @@ create table public.google_tasks_oauth_states (
 );
 alter table public.google_tasks_oauth_states enable row level security;
 
--- One Google Tasks connection per Mind Record user. Reconnecting (e.g. a
+-- One Google Tasks connection per JoaAssistant user. Reconnecting (e.g. a
 -- different Google account) just overwrites this row's tokens -- it never
--- touches auth.users or any content table, so the Mind Record account and
+-- touches auth.users or any content table, so the JoaAssistant account and
 -- its records are unaffected either way.
 create table public.google_tasks_connections (
   user_id uuid primary key references auth.users (id) on delete cascade,
@@ -48,7 +48,7 @@ create trigger set_google_tasks_connections_updated_at
 -- retry/double-tap") and what the app's "Sent" status reads. Exactly one
 -- of task_id/memory_id is set; the unique constraints are per-column so a
 -- task and a memory can never collide with each other, and deleting the
--- source task/memory here only removes MIND RECORD's own record of having
+-- source task/memory here only removes JOAASSISTANT's own record of having
 -- sent it -- it never touches the task that already exists in Google Tasks.
 create table public.google_tasks_sends (
   id uuid primary key default gen_random_uuid(),

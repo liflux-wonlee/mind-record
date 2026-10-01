@@ -1,7 +1,7 @@
-# Mind Record — 제품 기획서
+# JoaAssistant — 제품 기획서
 
 > 원본 기획 문서 (ChatGPT 작성). 이 문서를 기반으로 Claude Design 핸드오프가 만들어졌고,
-> 그 핸드오프를 다시 Expo 앱으로 구현했다. 앱 이름은 이후 Mindecho → **Mind Record** 로 변경.
+> 그 핸드오프를 다시 Expo 앱으로 구현했다. 앱 이름은 **JoaAssistant**.
 > 구현 현황 대조는 `design/gap-analysis.md` 참고.
 
 ---

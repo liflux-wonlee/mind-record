@@ -29,7 +29,7 @@ import { withSystemDialog } from '@/lib/systemDialogGuard';
 
 export type BiometricKind = 'face' | 'fingerprint' | 'iris' | 'generic';
 
-const ENABLED_KEY_PREFIX = 'mindrecord.biometric_lock.enabled.';
+const ENABLED_KEY_PREFIX = 'joaassistant.biometric_lock.enabled.';
 
 export async function getBiometricSupport(): Promise<{ available: boolean; kind: BiometricKind | null }> {
   const [hasHardware, isEnrolled, types] = await Promise.all([

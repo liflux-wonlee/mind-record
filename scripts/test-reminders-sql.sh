@@ -8,7 +8,7 @@
 #   PSQL="sudo -u postgres psql" scripts/test-reminders-sql.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DB="${REMINDERS_TEST_DB:-mind_record_reminders_test}"
+DB="${REMINDERS_TEST_DB:-joaassistant_reminders_test}"
 PSQL="${PSQL:-psql}"
 
 $PSQL -q -d postgres -c "drop database if exists $DB" >/dev/null

@@ -1,9 +1,8 @@
-# Mind Record 구현 갭 분석 (Gap Analysis)
+# JoaAssistant 구현 갭 분석 (Gap Analysis)
 
 > 대상: `/home/claude/repo` — Expo + TypeScript + Expo Router 앱
-> 기준 문서: `design/product-plan.md` (§1–§50), `design/project/Mindecho.dc.html` (prototype 1a + 미사용 variation 1b–1n), `design/chats/chat1.md`
+> 기준 문서: `design/product-plan.md` (§1–§50), `design/project/JoaAssistant.dc.html` (prototype 1a + 미사용 variation 1b–1n), `design/chats/chat1.md`
 > 검증 범위: 계획서에서 추출한 요구사항 520건을 `app/`·`src/`·`package.json`·`app.json` 코드와 1:1 대조
-> 앱은 감사 시점 이후 `Mindecho` → `Mind Record`로 이름이 바뀌었습니다. 아래 본문의 코드/파일 인용은 리네임 이전 상태 기준이지만, 구조적 내용은 그대로 유효합니다.
 
 ---
 
@@ -17,7 +16,7 @@
 
 ### 실제로 만들어진 것
 
-화면 14개(`app/login.tsx`, `app/talk.tsx`, `app/summary.tsx`, `app/driving.tsx` + `app/(tabs)/` 10개)가 전부 존재하고, 네비게이션이 실제로 동작하며, 디자인 프로토타입 1a(`design/project/Mindecho.dc.html:37-320`)를 거의 픽셀 단위로 충실히 옮겼습니다. 타이포그래피·색·컴포넌트 시스템(`src/theme.ts`, `src/components/ui.tsx`)도 일관됩니다. **디자인 핸드오프 결과물로서는 훌륭합니다.**
+화면 14개(`app/login.tsx`, `app/talk.tsx`, `app/summary.tsx`, `app/driving.tsx` + `app/(tabs)/` 10개)가 전부 존재하고, 네비게이션이 실제로 동작하며, 디자인 프로토타입 1a(`design/project/JoaAssistant.dc.html:37-320`)를 거의 픽셀 단위로 충실히 옮겼습니다. 타이포그래피·색·컴포넌트 시스템(`src/theme.ts`, `src/components/ui.tsx`)도 일관됩니다. **디자인 핸드오프 결과물로서는 훌륭합니다.**
 
 ### 그 뒤에 아무것도 없다는 사실
 
@@ -147,7 +146,7 @@ Talk 화면의 "transcript"는 `app/talk.tsx:13-29`의 고정 한국어 3줄이�
 ### Daily Journal — `app/(tabs)/journal.tsx`
 - store를 **import조차 하지 않음**(:1-8) → 캡처든 체크박스든 아무것도 여기 도달할 수 없음
 - `'Auto-generated · Thursday'`(:39)는 틀린 요일, `'Built from 4 conversations'`(:74)는 `src/data.ts:123-148`의 실제 3건과 불일치, `'View originals →'`(:75)는 죽음
-- §49가 요구한 5개 카운트 중 4개만 있고 `2 Faith Notes`는 누락 (프로토타입 1a `Mindecho.dc.html:199-204`에서 그대로 이어받은 누락)
+- §49가 요구한 5개 카운트 중 4개만 있고 `2 Faith Notes`는 누락 (프로토타입 1a `JoaAssistant.dc.html:199-204`에서 그대로 이어받은 누락)
 
 ### Calendar — `app/(tabs)/calendar.tsx`
 - 날짜 선택·점 개수·목록 갱신은 **진짜** (`:58`, `:21`, `:50`) — 앱에서 몇 안 되는 실제 파생 로직
@@ -194,9 +193,9 @@ Talk 화면의 "transcript"는 `app/talk.tsx:13-29`의 고정 한국어 3줄이�
 
 | 항목 | 계획 | 상태 | 비고 |
 |---|---|---|---|
-| **Weekly Review** | §23:713-719 | `missing` | 라우트·컴포넌트·데이터·디자인 아트보드 전무. `Mindecho.dc.html:514`의 "Try next" 산문에만 언급 |
+| **Weekly Review** | §23:713-719 | `missing` | 라우트·컴포넌트·데이터·디자인 아트보드 전무. `JoaAssistant.dc.html:514`의 "Try next" 산문에만 언급 |
 | **Monthly Review** | §23:721-727 | `missing` | 디자인 HTML에 단어조차 없음. `conversationsByDay`가 월/연도 없이 일(day) 정수로만 키잉되어 "한 달"을 주소로 지정할 수도 없음 |
-| **Open Loops 화면** | §24:735-753 | `design-only` | 실제 목록('Pricing 결정 / Alarm license 조사 / Marketing agency 재검토')은 **미사용 variation 1d**(`Mindecho.dc.html:380-382`)에만 존재. 앱에는 Home 카운터 `"3"`만 있고 그 링크는 목록 없는 `/memory`로 감 |
+| **Open Loops 화면** | §24:735-753 | `design-only` | 실제 목록('Pricing 결정 / Alarm license 조사 / Marketing agency 재검토')은 **미사용 variation 1d**(`JoaAssistant.dc.html:380-382`)에만 존재. 앱에는 Home 카운터 `"3"`만 있고 그 링크는 목록 없는 `/memory`로 감 |
 | **원본 대화 뷰어** | §8:271, §44.13 | `missing` | 앱의 모든 'Source →'가 가리켜야 할 목적지. 라우트·동적 세그먼트(`[id].tsx`)·컴포넌트·아트보드 전부 없음 |
 | **Entry 상세 화면** | §4, §13, §42 | `missing` | 계획의 중심 객체인 Entry를 **한 건 단위로 여는 화면이 없음**. Decision·Idea·Question은 하드코딩 목록의 한 줄로만 존재 |
 | **Entity(People/Company/Project) 화면** | §28:818-839, §42 | `missing` | 타입·화면·상태 전무. 'David'는 `topic` 문자열 슬롯에 들어가 있어(`src/data.ts:58,78`) 'Business · Liflux'와 **같은 종류의 값**. "David에 대해 최근에 뭐라고 했지?"는 물어볼 표면조차 없음 |
@@ -204,7 +203,7 @@ Talk 화면의 "transcript"는 `app/talk.tsx:13-29`의 고정 한국어 3줄이�
 
 ### 데이터 모델·타입이 없어서 표현 자체가 불가능한 것
 
-- **§4 Entry 타입 10종 중**: `Thought`, `Question`, `Insight`, `Reference`는 **레코드가 단 한 건도 화면에 렌더되지 않음**(숫자 옆의 단어만 존재), `Goal`은 미사용 variation 1j(`Mindecho.dc.html:461`)에만 있는 `design-only`. 타입 discriminator(`EntryType` union) 자체가 없음
+- **§4 Entry 타입 10종 중**: `Thought`, `Question`, `Insight`, `Reference`는 **레코드가 단 한 건도 화면에 렌더되지 않음**(숫자 옆의 단어만 존재), `Goal`은 미사용 variation 1j(`JoaAssistant.dc.html:461`)에만 있는 `design-only`. 타입 discriminator(`EntryType` union) 자체가 없음
 - **§26 Idea Status 7종 중**: `Considering`·`Paused`만 kicker 문자열 안에 섞여 있고(`app/(tabs)/topic.tsx:44,49`), `New`/`Researching`/`Planned`/`Implemented`/`Rejected`는 저장소 전체에 **0건**. status 필드가 없으므로 변경도 불가
 - **§11 Brainstorm 모드**: 앱·디자인 HTML 양쪽에 0건. `CaptureMode` union이 `'capture' | 'conv'`(`src/store.tsx:20`)라 **세 번째 모드를 상태로 표현할 수 없음**
 - **§11 Reflection 모드**: 진입 경로·상태·동작 없음. 존재하는 것은 Calendar 한 행의 표시용 라벨 하나뿐(`src/data.ts:142` → `app/(tabs)/calendar.tsx:99`) — 즉 "있는 것처럼 보이는 라벨"만 있고 모드는 없음
@@ -219,8 +218,8 @@ Talk 화면의 "transcript"는 `app/talk.tsx:13-29`의 고정 한국어 3줄이�
 | 1 Current Summary | `ui-mock` | JSX 안의 고정 문단 (`topic.tsx:73-78`) |
 | 2 Important Decisions | `ui-partial` | 패널 없음. 태그 `'2 decisions'`와 타임라인 행 1개 |
 | 3 Current Ideas | `ui-partial` | 패널 없음. 태그 `'4 ideas'`와 타임라인 행 2개 |
-| 4 Open Questions | `missing` | **질문 내용이 0건**. `'1 question'` 숫자 태그만(`topic.tsx:83`). 실제 질문 텍스트는 미사용 variation 1i(`Mindecho.dc.html:447`)에만 존재 |
-| 5 Goals | `design-only` | 미사용 variation 1j(`Mindecho.dc.html:461`)의 카운트 셀 하나 |
+| 4 Open Questions | `missing` | **질문 내용이 0건**. `'1 question'` 숫자 태그만(`topic.tsx:83`). 실제 질문 텍스트는 미사용 variation 1i(`JoaAssistant.dc.html:447`)에만 존재 |
+| 5 Goals | `design-only` | 미사용 variation 1j(`JoaAssistant.dc.html:461`)의 카운트 셀 하나 |
 | 6 Tasks | `ui-partial` | `'1 task'` 태그만. `topic.tsx`는 `@/data`를 import조차 안 함 → 실제 JoaSuite task가 여기 나타나지 않음 |
 | 7 Recent Conversations | `ui-mock` | 전용 섹션 없이 대화·아이디어·결정이 한 목록에 섞임 |
 
@@ -252,10 +251,10 @@ Talk 화면의 "transcript"는 `app/talk.tsx:13-29`의 고정 한국어 3줄이�
 |---|---|---|
 | **Bottom nav에서 Talk 탭 제거, Calendar 탭 추가** | `chat1.md:228`("calendar를 아래 네비게이션 메뉴에 추가. talk는 삭제해라. home 으로 가서 녹음시작한다고 생각하면 된다"), `chat1.md:236`에서 확정. 코드 주석에도 기록(`src/components/BottomNav.tsx:2-4`) | §30:899는 Home/Talk/Tasks/Memory/Search 5개를 권고. 현재는 Home/Calendar/Tasks/Memory/Search/Account 6개 |
 | **Account 탭 추가 (최우측)** | `chat1.md:182`("아래 네비게이션 메뉴에 account가 추가되야 한다. 제일 우측에"), `chat1.md:208`에서 반영 | §30 표에 없는 항목. 설정 화면이므로 콘텐츠 역할이 아님 |
-| **Calendar 화면 신설** | `chat1.md:157` — 날짜를 누르면 그날의 대화 목록. 구현된 디자인 variation 1l(`Mindecho.dc.html:485-494`, "used in 1a")과 일치 | §35의 외부 캘린더 연동과는 **다른 기능**입니다. 이 화면은 §35를 대신하지 않습니다 |
+| **Calendar 화면 신설** | `chat1.md:157` — 날짜를 누르면 그날의 대화 목록. 구현된 디자인 variation 1l(`JoaAssistant.dc.html:485-494`, "used in 1a")과 일치 | §35의 외부 캘린더 연동과는 **다른 기능**입니다. 이 화면은 §35를 대신하지 않습니다 |
 | **Login 화면 신설** | `chat1.md:181`, `chat1.md:207-209`(Account의 Sign out과 연결) | 계획서에 없던 화면. 다만 인증이 전혀 구현되지 않은 상태(§ 4장 Login 항목 참조)이므로 **"추가된 화면"은 의도된 변경이고, "인증이 없다"는 것은 갭**입니다 |
 
-참고로 §49가 요구한 "2 Faith Notes" 누락과 journal의 잘못된 요일은 **구현자의 실수가 아니라 프로토타입 1a에서 그대로 이어받은 결함**입니다(`Mindecho.dc.html:197-204`). 고쳐야 하지만, 책임 소재는 디자인 쪽입니다.
+참고로 §49가 요구한 "2 Faith Notes" 누락과 journal의 잘못된 요일은 **구현자의 실수가 아니라 프로토타입 1a에서 그대로 이어받은 결함**입니다(`JoaAssistant.dc.html:197-204`). 고쳐야 하지만, 책임 소재는 디자인 쪽입니다.
 
 ---
 

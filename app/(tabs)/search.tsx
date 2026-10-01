@@ -42,7 +42,7 @@ const INTERRUPTION_TEXT: Record<string, string> = {
   'recorder-error': 'The recording stopped unexpectedly.',
 };
 
-const MUTE_STORAGE_KEY = 'mindrecord.search.answer_muted';
+const MUTE_STORAGE_KEY = 'joaassistant.search.answer_muted';
 
 export default function SearchScreen() {
   const router = useRouter();

@@ -1,4 +1,4 @@
-# Mind Record — 웹 확장 준비 (모바일 우선)
+# JoaAssistant — 웹 확장 준비 (모바일 우선)
 
 작성: 2026-09-26 · 기준 커밋 `1ba9b5e` 이후 작업
 
@@ -94,7 +94,7 @@ npx expo export --platform web --output-dir dist  # production 빌드 → dist/
 3. **Supabase Dashboard → Authentication → URL Configuration → Redirect URLs**에 추가한다.
    - 개발: `http://localhost:8081/auth/callback`
    - 웹 배포 도메인: `https://<웹 도메인>/auth/callback`
-   - 기존 `mindrecord://auth/callback`은 그대로 둔다(모바일용).
+   - 모바일용 `joaassistant://auth/callback`도 그대로 둔다.
 
 **계정 동작**
 - 같은 Google 계정이면 모바일(네이티브)과 웹(OAuth)이 같은 Supabase 사용자로 로그인된다. Supabase가 Google의 사용자 식별자로 연결하며, 이메일이 같다는 이유로 계정을 합치는 코드는 없다.

@@ -3,13 +3,13 @@
  *
  * Base system: the Modernist `styles.css` under `design/project/_ds` — Archivo,
  * 2px rules, zero radius, flush-left labels.
- * Overrides: the `:root` block at the top of `design/project/Mindecho.dc.html`,
+ * Overrides: the `:root` block at the top of `design/project/JoaAssistant.dc.html`,
  * where the user swapped the stock red accent for a pastel coral and warmed the
  * ground colours.
  */
 
 export const colors = {
-  // — overridden in Mindecho.dc.html —
+  // — overridden in JoaAssistant.dc.html —
   accent: '#ef8a80',
   accent500: '#f29a91',
   accent600: '#e5776c',

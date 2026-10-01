@@ -2,7 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useState } from 'react';
 
 // Bump the suffix to show the intro again to everyone after a big change.
-const KEY = 'mindrecord.onboarding.done.v1';
+const KEY = 'joaassistant.onboarding.done.v1';
 
 // The flag gates routes in app/_layout.tsx, so a change has to reach that
 // hook immediately (not on next launch) -- tiny in-process pub/sub.

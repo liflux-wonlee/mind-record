@@ -3,7 +3,7 @@
 "말해 두면 기억하고, 필요할 때 알려주며, 눌러서 오늘 챙길 내용을 들을 수 있다."
 
 이 문서는 리마인드 기능의 구조, 정책, 배포 순서, 검증 범위를 정리합니다. 요구사항 원문은
-`Mind_Record_Reminders_Claude_Prompt.md`(2026-09-29)입니다.
+`Reminders_Claude_Prompt.md`(2026-09-29)입니다.
 
 ---
 
@@ -154,12 +154,12 @@ reminders-dispatch:
 - 스토어 문구, 공유 문구
 
 **바꾸지 않음 (식별자)**
-- Android `package` / iOS `bundleIdentifier` `com.joasuite.joaassistant`, EAS `projectId`, Supabase project ref/URL·키, DB 테이블·버킷, 로컬 저장 키(`mindrecord.*`), FCM/APNs 자격 증명
+- Android `package` / iOS `bundleIdentifier` `com.joasuite.joaassistant`, EAS `projectId`, Supabase project ref/URL·키, DB 테이블·버킷, 로컬 저장 키(`joaassistant.*`), FCM/APNs 자격 증명
 
 **별도 검토 후에만 (호환성 영향)**
-- URL scheme `mindrecord://` (Supabase Auth Redirect URL, Google Tasks 콜백 `google-tasks-callback`), Expo `slug`, 저장소 이름·도메인 — 바꾸면 신·구 콜백을 한동안 같이 등록하는 전환 계획 필요
+- URL scheme (Supabase Auth Redirect URL, Google Tasks 콜백 `google-tasks-callback`), Expo `slug`, 저장소 이름·도메인 — 출시 후 바꾸면 신·구 콜백을 한동안 같이 등록하는 전환 계획 필요
 - 표시 이름·권한 문구·알림 채널 이름은 **네이티브 재빌드**가 필요 (JS 업데이트만으로 안 바뀜)
 
 ### 적용됨 (2026-09-30): JoaAssistant
 - 표시 이름 `JoaAssistant`, 패키지/번들 ID `com.joasuite.joaassistant`, URL scheme `joaassistant://` (스토어 출시 전이라 식별자까지 변경).
-- 그대로 둔 것: Expo `slug`(`mind-record` — expo.dev에서 바꿀 수 없고 EAS 프로젝트와 같아야 함, 표시 이름만 JoaAssistant), Supabase 프로젝트·DB·키, 로컬 저장 키(`mindrecord.*`), 연락 이메일, 배포된 마이그레이션 주석.
+- 이어서 전부 정리: Expo 프로젝트·slug `joaassistant`(새 EAS 프로젝트), Google Cloud OAuth·Firebase 프로젝트 `joaassistant`, 로컬 저장 키 `joaassistant.*`, 저장소 이름. Supabase 프로젝트 ref/URL·키·DB는 이름과 무관해 그대로.
