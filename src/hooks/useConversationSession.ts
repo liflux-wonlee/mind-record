@@ -823,10 +823,13 @@ export function useConversationSession(
   };
   useAudioInterruption(recorder, onInterrupt);
 
-  // See KEEP_AWAKE_TAG. Held from the first turn until the loop has really
-  // stopped (ended, cancelled, interrupted, or an error left it idle).
+  // See KEEP_AWAKE_TAG. Held from the first turn until the conversation is
+  // over (Done/Cancel or leaving the screen) -- also while it sits idle
+  // between turns, after an interruption or an error, so the screen never
+  // goes dark in the middle of one.
+  const conversationOpen = state !== 'idle' || turns.length > 0;
   useEffect(() => {
-    if (state !== 'idle') {
+    if (conversationOpen) {
       activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {
         // Best-effort -- worst case the screen times out as before.
       });
@@ -838,7 +841,7 @@ export function useConversationSession(
       });
     }, KEEP_AWAKE_RELEASE_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [state]);
+  }, [conversationOpen]);
   useEffect(
     () => () => {
       deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {

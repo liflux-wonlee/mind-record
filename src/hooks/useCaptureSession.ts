@@ -15,6 +15,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from 'expo-audio';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 
@@ -66,6 +67,8 @@ export async function waitForRecorderUri(
   return recorder.uri;
 }
 
+const CAPTURE_KEEP_AWAKE_TAG = 'joaassistant-capture';
+
 export function useCaptureSession() {
   const { user } = useAuth();
   const [saveOnly, setSaveOnly] = useState(false);
@@ -102,6 +105,24 @@ export function useCaptureSession() {
   const recording = recorderState.isRecording;
   const seconds = Math.floor(recorderState.durationMillis / 1000);
   const timer = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+
+  // Keeps the screen on from the first recording until the user leaves the
+  // capture screen (Done, Cancel, back) -- paused included -- so the timer
+  // and controls stay visible, e.g. on a car mount. Recording itself doesn't
+  // depend on it: with the foreground service it carries on with the screen
+  // off too.
+  const keepAwake = recording || everRecorded;
+  useEffect(() => {
+    if (!keepAwake) return;
+    activateKeepAwakeAsync(CAPTURE_KEEP_AWAKE_TAG).catch(() => {
+      // Best-effort -- worst case the screen times out as before.
+    });
+    return () => {
+      deactivateKeepAwake(CAPTURE_KEEP_AWAKE_TAG).catch(() => {
+        // Not held -- nothing to release.
+      });
+    };
+  }, [keepAwake]);
 
   const ensureSession = useCallback(async (): Promise<string | null> => {
     if (sessionIdRef.current || !user) return sessionIdRef.current;
