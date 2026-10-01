@@ -14,6 +14,7 @@ import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Switch, Text
 
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
+import { TimePickerSheet } from '@/components/TimePickerSheet';
 import { Button, Kicker } from '@/components/ui';
 import { usePushPermission } from '@/hooks/useReminders';
 import { friendlyMessage } from '@/lib/friendlyError';
@@ -32,17 +33,22 @@ import {
   formatClock,
   getReminderSettings,
   isInQuietHours,
-  minutesToClock,
   sendTestPush,
   updateReminderSettings,
   type ReminderSettings,
 } from '@/services/reminders';
 import { colors, font, radius } from '@/theme';
 
-const QUICK_TIMES = ['07:00:00', '08:00:00', '09:00:00', '10:00:00', '12:00:00'];
 const DEFAULT_QUIET = { start: '22:00:00', end: '08:00:00' };
 
 type Editable = Omit<ReminderSettings, 'timezone'>;
+type TimeField = 'reminder_time' | 'quiet_start' | 'quiet_end';
+
+const PICKER_TITLES: Record<TimeField, string> = {
+  reminder_time: 'Default reminder time',
+  quiet_start: 'Quiet hours start',
+  quiet_end: 'Quiet hours end',
+};
 
 /** Sends this phone's current token + permission to the server (never prompts). */
 async function refreshRegistration(): Promise<{ state: PushState | null; error: string | null }> {
@@ -61,6 +67,8 @@ export default function ReminderSettingsScreen() {
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<PushNote | null>(null);
+  // Which time the picker sheet is editing.
+  const [picking, setPicking] = useState<TimeField | null>(null);
   // Quiet hours switched off and on again in one visit get their old times back.
   const lastQuiet = useRef<{ start: string; end: string } | null>(null);
   const pending = useRef<Partial<Editable>>({});
@@ -132,10 +140,8 @@ export default function ReminderSettingsScreen() {
     }, 600);
   };
 
-  const shift = (field: 'reminder_time' | 'quiet_start' | 'quiet_end', minutes: number) => {
-    const current = settings?.[field];
-    if (!current) return;
-    change({ [field]: minutesToClock(clockMinutes(current) + minutes) } as Partial<Editable>);
+  const setTime = (field: TimeField, hms: string) => {
+    change({ [field]: hms } as Partial<Editable>);
   };
 
   const setQuietEnabled = (on: boolean) => {
@@ -261,22 +267,13 @@ export default function ReminderSettingsScreen() {
           {/* ── default time ─────────────────────────────────────────── */}
           <View style={[styles.card, { backgroundColor: colors.pastelBlue }]}>
             <Kicker style={styles.kicker}>Default reminder time</Kicker>
-            <View style={styles.stepper}>
-              <StepButton label="−30 min" onPress={() => shift('reminder_time', -30)} />
-              <Text style={styles.bigTime}>{formatClock(settings.reminder_time)}</Text>
-              <StepButton label="+30 min" onPress={() => shift('reminder_time', 30)} />
-            </View>
-            <View style={styles.chips}>
-              {QUICK_TIMES.map((t) => (
-                <Chip
-                  key={t}
-                  label={formatClock(t)}
-                  selected={clockMinutes(settings.reminder_time) === clockMinutes(t)}
-                  onPress={() => change({ reminder_time: t })}
-                />
-              ))}
-            </View>
-            <Text style={styles.hint}>Used for due-date reminders and “every day until done”.</Text>
+            <TimeButton
+              value={settings.reminder_time}
+              large
+              label="Default reminder time"
+              onPress={() => setPicking('reminder_time')}
+            />
+            <Text style={styles.hint}>Used for due-date reminders and “every day until done”. Tap to change.</Text>
 
             <ToggleRow
               label="The day before"
@@ -296,15 +293,15 @@ export default function ReminderSettingsScreen() {
               <>
                 <View style={styles.quietRow}>
                   <Text style={styles.quietLabel}>From</Text>
-                  <StepButton label="−30" onPress={() => shift('quiet_start', -30)} />
-                  <Text style={styles.midTime}>{formatClock(settings.quiet_start)}</Text>
-                  <StepButton label="+30" onPress={() => shift('quiet_start', 30)} />
+                  <TimeButton
+                    value={settings.quiet_start}
+                    label="Quiet hours start"
+                    onPress={() => setPicking('quiet_start')}
+                  />
                 </View>
                 <View style={styles.quietRow}>
                   <Text style={styles.quietLabel}>Until</Text>
-                  <StepButton label="−30" onPress={() => shift('quiet_end', -30)} />
-                  <Text style={styles.midTime}>{formatClock(settings.quiet_end)}</Text>
-                  <StepButton label="+30" onPress={() => shift('quiet_end', 30)} />
+                  <TimeButton value={settings.quiet_end} label="Quiet hours end" onPress={() => setPicking('quiet_end')} />
                 </View>
                 {clockMinutes(settings.quiet_start ?? '') === clockMinutes(settings.quiet_end ?? '') ? (
                   <Text style={styles.warn}>Start and end are the same, so there are no quiet hours.</Text>
@@ -370,31 +367,44 @@ export default function ReminderSettingsScreen() {
           </Text>
         </>
       )}
+
+      <TimePickerSheet
+        visible={picking !== null}
+        title={picking ? PICKER_TITLES[picking] : ''}
+        value={(picking && settings?.[picking]) || '09:00:00'}
+        onCancel={() => setPicking(null)}
+        onSave={(hms) => {
+          if (picking) setTime(picking, hms);
+          setPicking(null);
+        }}
+      />
     </Screen>
   );
 }
 
-function StepButton({ label, onPress }: { label: string; onPress: () => void }) {
+/** A time you tap to change (opens the picker). */
+function TimeButton({
+  value,
+  label,
+  large,
+  onPress,
+}: {
+  value: string | null;
+  label: string;
+  large?: boolean;
+  onPress: () => void;
+}) {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={`${label}: ${formatClock(value)}. Change`}
       onPress={onPress}
-      style={({ pressed }) => [styles.step, pressed && { opacity: 0.7 }]}
+      style={({ pressed }) => [styles.timeButton, !large && { flex: 1 }, pressed && { opacity: 0.7 }]}
     >
-      <Text style={styles.stepText}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function Chip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ selected }}
-      onPress={onPress}
-      style={[styles.chip, selected && { backgroundColor: colors.save }]}
-    >
-      <Text style={[styles.chipText, selected && { color: colors.saveText, fontFamily: font.semibold }]}>{label}</Text>
+      <Text style={large ? styles.bigTime : styles.midTime} numberOfLines={1}>
+        {formatClock(value)}
+      </Text>
+      <Text style={styles.timeEdit}>Change</Text>
     </Pressable>
   );
 }
@@ -472,54 +482,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     alignSelf: 'flex-start',
   },
-  stepper: {
+  timeButton: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    gap: 8,
-  },
-  step: {
-    minWidth: 64,
-    minHeight: 44,
-    paddingHorizontal: 10,
+    minHeight: 48,
+    paddingHorizontal: 14,
     borderRadius: radius.pastel,
     backgroundColor: 'rgba(255,255,255,0.65)',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  stepText: {
+  timeEdit: {
     fontFamily: font.semibold,
-    fontSize: 13,
-    color: colors.text,
+    fontSize: 12,
+    color: colors.accent700,
+    marginLeft: 12,
   },
   bigTime: {
     fontFamily: font.extrabold,
-    fontSize: 24,
+    fontSize: 20,
     color: colors.text,
   },
   midTime: {
-    flex: 1,
-    textAlign: 'center',
+    flexShrink: 1,
     fontFamily: font.extrabold,
-    fontSize: 17,
-    color: colors.text,
-  },
-  chips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 10,
-  },
-  chip: {
-    minHeight: 44,
-    paddingHorizontal: 12,
-    justifyContent: 'center',
-    borderRadius: radius.pastel,
-    backgroundColor: 'rgba(255,255,255,0.65)',
-  },
-  chipText: {
-    fontFamily: font.regular,
-    fontSize: 13,
+    fontSize: 15,
     color: colors.text,
   },
   toggleRow: {

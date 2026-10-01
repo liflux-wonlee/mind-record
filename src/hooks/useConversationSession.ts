@@ -278,9 +278,10 @@ export function useConversationSession(
   const autoRestartRef = useRef(false);
   // Set when converse's GPT call says the user just asked to end and save.
   const pendingEndRef = useRef(false);
-  // True once this session actually has something worth keeping (recording
-  // has started at least once) -- lets the unmount cleanup below tell "the
-  // user left before saying anything" (safe to delete) from "the user left
+  // True once the user has actually said something (a turn came back with
+  // their words) -- lets Save & end and the unmount cleanup below tell "the
+  // user never said anything" (safe to delete: nothing to summarize, e.g. a
+  // reminder briefing listened to in silence) from "the user left
   // mid-conversation without tapping Save & end or Cancel" (must NOT be
   // silently discarded).
   const hasContentRef = useRef(false);
@@ -351,8 +352,8 @@ export function useConversationSession(
 
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
-    // Only the AI spoke (a reminder briefing nobody answered): nothing of
-    // the user's to keep as a record.
+    // The user never said anything (e.g. a reminder briefing listened to in
+    // silence): no record to keep and nothing to summarize.
     if (sessionId && !hasContentRef.current) {
       setTurns([]);
       setState('idle');
@@ -456,7 +457,6 @@ export function useConversationSession(
       detectorStatsRef.current = { speech: 0, quiet: 0, unsure: 0 };
       activeRef.current = true;
       abortedRef.current = false;
-      hasContentRef.current = true;
       setInterruption(null);
       setState('recording');
       currentTurnRef.current = startPerfTurn('conversation');
@@ -635,6 +635,7 @@ export function useConversationSession(
             );
           }
           answered = true;
+          if (result.userText?.trim()) hasContentRef.current = true;
           endRequested = result.shouldEnd;
           perf?.mark('function_call_done');
 
