@@ -162,4 +162,4 @@ reminders-dispatch:
 
 ### 적용됨 (2026-09-30): JoaAssistant
 - 표시 이름 `JoaAssistant`, 패키지/번들 ID `com.joasuite.joaassistant`, URL scheme `joaassistant://` (스토어 출시 전이라 식별자까지 변경).
-- Expo `slug`는 `joaassistant`로 변경(expo.dev 프로젝트 slug와 같아야 함, projectId는 그대로). 그대로 둔 것: Supabase 프로젝트·DB·키, 로컬 저장 키(`mindrecord.*`), 연락 이메일, 배포된 마이그레이션 주석.
+- 그대로 둔 것: Expo `slug`(`mind-record` — expo.dev에서 바꿀 수 없고 EAS 프로젝트와 같아야 함, 표시 이름만 JoaAssistant), Supabase 프로젝트·DB·키, 로컬 저장 키(`mindrecord.*`), 연락 이메일, 배포된 마이그레이션 주석.
