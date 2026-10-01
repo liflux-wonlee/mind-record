@@ -1,14 +1,15 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { ActivityIndicator, Alert, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
-import { CheckIcon, ShareIcon } from '@/components/Icon';
+import { CheckIcon, PauseIcon, PlayIcon, ShareIcon, SpeakerIcon, StopIcon } from '@/components/Icon';
 import { StarToggle } from '@/components/StarToggle';
 import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { ChevronLeftIcon } from '@/components/Icon';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
+import { useReadAloud } from '@/hooks/useReadAloud';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { dismissToTabs } from '@/nav';
 import { useAuth } from '@/providers/AuthProvider';
@@ -245,6 +246,75 @@ const PICKER_COLORS = [
   colors.pastelYellow,
   colors.pastelPink,
 ];
+
+/**
+ * Big, glanceable controls for hearing the summary instead of reading it
+ * (e.g. while driving) -- see useReadAloud.
+ */
+function ReadAloudBar({ reader }: { reader: ReturnType<typeof useReadAloud> }) {
+  const { state, progress, error } = reader;
+  if (state === 'idle') {
+    return (
+      <Button
+        label="Read aloud"
+        accessibilityLabel="Read the summary aloud"
+        icon={<SpeakerIcon size={22} color={colors.text} />}
+        variant="secondary"
+        onPress={reader.start}
+        style={[styles.readAloudButton, { backgroundColor: colors.pastelGreen }]}
+        textStyle={styles.readAloudText}
+      />
+    );
+  }
+  if (state === 'error') {
+    return (
+      <View style={[styles.readAloudBar, { backgroundColor: colors.pastelPink }]}>
+        <Text style={[styles.readAloudStatus, { flex: 1 }]}>{error ?? 'Could not read this record aloud.'}</Text>
+        <Button
+          label="Try again"
+          variant="secondary"
+          onPress={reader.retry}
+          style={[styles.readAloudControl, { backgroundColor: colors.pastelYellow }]}
+          textStyle={styles.pastelText}
+        />
+        <Button label="Close" variant="ghost" onPress={reader.stop} style={{ flexShrink: 0 }} />
+      </View>
+    );
+  }
+  const partLabel = progress && progress.count > 1 ? ` ${progress.part + 1}/${progress.count}` : '';
+  return (
+    <View style={[styles.readAloudBar, { backgroundColor: colors.pastelGreen }]}>
+      {state === 'loading' ? <ActivityIndicator color={colors.accent700} /> : null}
+      <Text style={[styles.readAloudStatus, { flex: 1 }]} numberOfLines={2}>
+        {state === 'loading' ? 'Getting the voice ready…' : state === 'paused' ? `Paused${partLabel}` : `Reading${partLabel}…`}
+      </Text>
+      {state === 'playing' ? (
+        <Button
+          accessibilityLabel="Pause"
+          icon={<PauseIcon size={24} color={colors.text} />}
+          variant="secondary"
+          onPress={reader.pause}
+          style={styles.readAloudControl}
+        />
+      ) : state === 'paused' ? (
+        <Button
+          accessibilityLabel="Resume"
+          icon={<PlayIcon size={22} color={colors.text} />}
+          variant="secondary"
+          onPress={reader.resume}
+          style={styles.readAloudControl}
+        />
+      ) : null}
+      <Button
+        accessibilityLabel="Stop reading"
+        icon={<StopIcon size={20} color={colors.text} />}
+        variant="secondary"
+        onPress={reader.stop}
+        style={styles.readAloudControl}
+      />
+    </View>
+  );
+}
 
 type StepState = 'done' | 'active' | 'pending';
 
@@ -529,6 +599,19 @@ export default function SummaryScreen() {
     })),
   ];
   const isNote = session?.mode === 'note';
+  // What Read aloud speaks -- an edit to any of it drops the fetched audio.
+  const readAloudKey = useMemo(
+    () =>
+      JSON.stringify([
+        session?.title,
+        session?.summary,
+        (session?.outline ?? []).map((s) => [s.heading, s.bullets]),
+        tasks.map((t) => t.title),
+        memories.map((m) => m.content),
+      ]),
+    [session?.title, session?.summary, session?.outline, tasks, memories]
+  );
+  const reader = useReadAloud(sessionId, readAloudKey);
   const processing =
     !!sessionId && session?.processing_status !== 'done' && session?.processing_status !== 'error';
   const done = !!sessionId && !loadError && session?.processing_status === 'done';
@@ -689,6 +772,10 @@ export default function SummaryScreen() {
           </View>
         </View>
       ) : null}
+
+      {/* Reads the Summary tab's content whichever tab is showing. Needs the
+          native audio player/file cache, so not on web. */}
+      {done && Platform.OS !== 'web' ? <ReadAloudBar reader={reader} /> : null}
 
       {!sessionId ? (
         <View style={styles.summaryCard}>
@@ -946,6 +1033,38 @@ export default function SummaryScreen() {
 }
 
 const styles = StyleSheet.create({
+  readAloudButton: {
+    marginTop: 12,
+    minHeight: 56,
+    borderRadius: radius.pastel,
+  },
+  readAloudText: {
+    color: colors.text,
+    fontSize: 17,
+  },
+  readAloudBar: {
+    marginTop: 12,
+    minHeight: 64,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: radius.pastel,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  readAloudStatus: {
+    fontFamily: font.semibold,
+    fontSize: 16,
+    color: colors.text,
+  },
+  readAloudControl: {
+    minHeight: 52,
+    minWidth: 52,
+    paddingHorizontal: 12,
+    borderRadius: radius.pastel,
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    flexShrink: 0,
+  },
   summaryCard: {
     borderRadius: radius.pastel,
     padding: 16,
