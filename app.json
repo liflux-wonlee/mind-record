@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "JoaAssistant",
-    "slug": "mind-record",
+    "slug": "joaassistant",
     "version": "1.0.0",
     "scheme": "joaassistant",
     "orientation": "portrait",
@@ -79,7 +79,7 @@
     },
     "extra": {
       "eas": {
-        "projectId": "e54df083-6c08-47d9-9b3f-cc8eaf2a5483"
+        "projectId": "96dc1cc0-5b5b-4cee-b9e1-c3b3a59a6880"
       }
     }
   }
