@@ -452,10 +452,15 @@ export type Briefing = {
   briefingId: string | null;
 };
 
-/** Today's spoken briefing -- the same agenda as Home and the list, in the user's AI voice. */
-export async function getBriefing(): Promise<Briefing> {
+/**
+ * The spoken briefing of every active reminder -- the same agenda as Home
+ * and the list, in the user's AI voice. With `sessionId` (a voice
+ * conversation) the script is also saved as that conversation's opening
+ * message, so the AI can carry on from it.
+ */
+export async function getBriefing(sessionId?: string): Promise<Briefing> {
   const { data, error } = await supabase.functions.invoke('reminder-briefing', {
-    body: { timezone: deviceTimeZone(), lang: deviceLanguage() },
+    body: { timezone: deviceTimeZone(), lang: deviceLanguage(), sessionId },
   });
   if (error) throw await describeFunctionError(error, 'Could not prepare the briefing.');
   return data as Briefing;

@@ -55,6 +55,7 @@ import { useAuth } from '@/providers/AuthProvider';
 import { converseTurn, type ConverseAction, type ConverseResult } from '@/services/conversation';
 import { processSession } from '@/services/processing';
 import { localRecordingSize, uploadRecording } from '@/services/recordings';
+import { getBriefing } from '@/services/reminders';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
 /** `actions` (assistant turns only): what the AI actually did in the app that turn, shown as confirmation chips. */
@@ -350,6 +351,16 @@ export function useConversationSession(
 
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
+    // Only the AI spoke (a reminder briefing nobody answered): nothing of
+    // the user's to keep as a record.
+    if (sessionId && !hasContentRef.current) {
+      setTurns([]);
+      setState('idle');
+      deleteSession(sessionId).catch(() => {
+        // Best-effort -- the user is leaving either way.
+      });
+      return null;
+    }
     if (sessionId) {
       try {
         await endSession(sessionId);
@@ -456,6 +467,65 @@ export function useConversationSession(
       startingRef.current = false;
     }
   }, [state, recorder, ensureSession]);
+
+  /**
+   * Opens the conversation with the spoken reminder briefing (Home's /
+   * the Reminders screen's Listen): the AI reads out every reminder as its
+   * first turn, then the mic opens like after any reply, so the user can
+   * answer ("the second one is done", "add a reminder for ...").
+   * The briefing alone isn't a record: leaving or tapping Done before the
+   * user says anything deletes the conversation (see endConversation).
+   */
+  const startWithBriefing = useCallback(async () => {
+    if (stateRef.current !== 'idle' || startingRef.current) return;
+    // Asked up front -- the mic opens on its own once the briefing ends.
+    const permission = await withSystemDialog(() => requestRecordingPermissionsAsync());
+    if (!permission.granted) {
+      Alert.alert(
+        'Microphone access needed',
+        'JoaAssistant needs microphone access to talk with you. You can enable it in Settings.'
+      );
+      return;
+    }
+    stateRef.current = 'thinking';
+    setState('thinking');
+    setInterruption(null);
+    abortedRef.current = false;
+    try {
+      const sessionId = await ensureSession();
+      if (!sessionId) throw new Error('Not signed in.');
+      const briefing = await getBriefing(sessionId);
+      // Cancelled, left or interrupted while it was being prepared.
+      if (sessionIdRef.current !== sessionId || abortedRef.current || stateRef.current !== 'thinking') {
+        if (stateRef.current === 'thinking') setState('idle');
+        return;
+      }
+      setTurns((prev) => [...prev, { role: 'assistant', content: briefing.script }]);
+      activeRef.current = true;
+      if (!briefing.audioBase64) {
+        // No voice: the text is on screen -- go straight to listening.
+        autoRestartRef.current = true;
+        setState('idle');
+        return;
+      }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true, allowsBackgroundRecording: false });
+      const file = new File(Paths.cache, `joaassistant-briefing-${Date.now()}.mp3`);
+      file.write(briefing.audioBase64, { encoding: 'base64' });
+      if (sessionIdRef.current !== sessionId || abortedRef.current) {
+        if (stateRef.current === 'thinking') setState('idle');
+        return;
+      }
+      pendingEndRef.current = false;
+      invalidateReply();
+      player.replace(file.uri);
+      player.play();
+      stateRef.current = 'speaking';
+      setState('speaking');
+    } catch (e) {
+      if (stateRef.current === 'thinking') setState('idle');
+      Alert.alert('Could not read your reminders', friendlyMessage(e, 'Please try again.'));
+    }
+  }, [ensureSession, player, invalidateReply]);
 
   const stopTurn = useCallback(
     async (trigger: 'manual' | 'silence' | 'maxDuration' = 'manual') => {
@@ -904,6 +974,7 @@ export function useConversationSession(
     turnBusy,
     interruption,
     startTurn,
+    startWithBriefing,
     stopTurn,
     endConversation,
     cancelConversation,

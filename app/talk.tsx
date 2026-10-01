@@ -23,7 +23,10 @@ type ScreenMode = 'capture' | 'conv';
 export default function TalkScreen() {
   const router = useRouter();
   const { user } = useAuth();
-  const { mode: initialMode } = useLocalSearchParams<{ mode?: string }>();
+  const { mode: initialMode, briefing } = useLocalSearchParams<{ mode?: string; briefing?: string }>();
+  // Listen on Home / Reminders: the conversation opens with the AI reading
+  // out every reminder, then listens for the answer.
+  const opensWithBriefing = initialMode === 'conv' && briefing === '1';
   // No mode in the params (the plain mic button on Home, or Summary's "New
   // recording" / Search's voice button) -> ask which one before touching
   // the mic at all.
@@ -55,7 +58,8 @@ export default function TalkScreen() {
 
   const capture = useCaptureSession();
   const conversation = useConversationSession((sessionId) => {
-    router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
+    if (sessionId) router.replace({ pathname: '/summary', params: { sessionId } });
+    else dismissToTabs();
   }, silenceGapMs);
 
   const captureStarted = capture.everRecorded;
@@ -79,6 +83,8 @@ export default function TalkScreen() {
     needsAutoStartRef.current = false;
     if (mode === 'capture') {
       capture.toggleRecording();
+    } else if (opensWithBriefing) {
+      conversation.startWithBriefing();
     } else {
       conversation.startTurn();
     }
@@ -159,7 +165,12 @@ export default function TalkScreen() {
 
   const onDoneConversation = async () => {
     const sessionId = await conversation.endConversation();
-    router.replace(sessionId ? { pathname: '/summary', params: { sessionId } } : '/summary');
+    // Nothing kept (e.g. a reminder briefing nobody answered): just go back.
+    if (!sessionId) {
+      dismissToTabs();
+      return;
+    }
+    router.replace({ pathname: '/summary', params: { sessionId } });
   };
 
   if (mode === null) {
@@ -203,6 +214,7 @@ export default function TalkScreen() {
           onCancel={onCancelConversation}
           onDone={onDoneConversation}
           aiName={aiName}
+          opensWithBriefing={opensWithBriefing}
         />
       )}
     </Screen>
@@ -390,11 +402,14 @@ function ConversationPanel({
   onCancel,
   onDone,
   aiName,
+  opensWithBriefing,
 }: {
   conversation: ReturnType<typeof useConversationSession>;
   onCancel: () => void;
   onDone: () => void;
   aiName: string | null;
+  /** Opened from Listen: the AI reads out the reminders first. */
+  opensWithBriefing: boolean;
 }) {
   const { state, turns, turnBusy, interruption, startTurn, stopTurn } = conversation;
   const scrollRef = useRef<ScrollView>(null);
@@ -423,7 +438,9 @@ function ConversationPanel({
             continue the conversation, or Save &amp; end to finish.
           </Text>
         ) : null}
-        {turns.length === 0 && !interruption ? (
+        {turns.length === 0 && state === 'thinking' && opensWithBriefing ? (
+          <Text style={styles.idle}>Getting your reminders ready… I&apos;ll read them out, then listen.</Text>
+        ) : turns.length === 0 && !interruption ? (
           <Text style={styles.idle}>
             Go ahead and talk. When you pause, the AI replies, and the conversation keeps going on its own. Say
             &quot;save and end&quot; or tap Save &amp; end to finish.

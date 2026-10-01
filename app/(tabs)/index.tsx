@@ -3,12 +3,10 @@ import React, { useCallback, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
-import { BriefingPanel } from '@/components/BriefingPanel';
 import { KeyboardIcon, MicIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { StarToggle } from '@/components/StarToggle';
 import { Button, Kicker, Row, RuleThick } from '@/components/ui';
-import { useBriefing } from '@/hooks/useBriefing';
 import { useRecentSessions } from '@/hooks/useRecentSessions';
 import { useAgenda, usePushPermission } from '@/hooks/useReminders';
 import { friendlyMessage } from '@/lib/friendlyError';
@@ -239,25 +237,17 @@ const PREVIEW_LIMIT = 3;
 /**
  * "Today: N to keep in mind" -- N is the number of distinct things (a task's
  * day-before, day-of and every-day rules are one item) the agenda puts in
- * "now", the same count the list and the spoken briefing use.
+ * "now". Listen reads out EVERY active reminder (today's, later ones and
+ * situation ones) as the start of a voice conversation about them.
  */
 function RemindersCard() {
   const router = useRouter();
   const agenda = useAgenda();
   const permission = usePushPermission();
-  const briefing = useBriefing(agenda.refresh);
-
-  // Tabs stay mounted: leaving Home must still stop the voice.
-  const stopBriefing = briefing.stop;
-  useFocusEffect(
-    useCallback(() => {
-      return () => stopBriefing();
-    }, [stopBriefing])
-  );
 
   if (agenda.state.status === 'loading') return null;
   const count = agenda.now.length;
-  const listening = briefing.state !== 'idle';
+  const total = agenda.items.length;
 
   return (
     <View style={styles.remindCard}>
@@ -293,12 +283,16 @@ function RemindersCard() {
           onPress={() => router.push('/reminders')}
           style={styles.remindButton}
         />
-        {count > 0 && !listening ? (
-          <Button label="Listen" variant="save" onPress={briefing.start} style={styles.remindButton} />
+        {total > 0 ? (
+          <Button
+            label="Listen & reply"
+            accessibilityLabel={`Listen to all ${total} reminders and reply by voice`}
+            variant="save"
+            onPress={() => router.push({ pathname: '/talk', params: { mode: 'conv', briefing: '1' } })}
+            style={styles.remindButton}
+          />
         ) : null}
       </View>
-
-      <BriefingPanel briefing={briefing} />
 
       {permission.supported && permission.push && !permission.granted ? (
         <Pressable

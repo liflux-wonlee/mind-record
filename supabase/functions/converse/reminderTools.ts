@@ -62,7 +62,7 @@ const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
   additionalProperties: false,
 });
 
-const MAX_LISTED = 10;
+const MAX_LISTED = 25;
 /** "The second one" refers to a list heard this recently. */
 export const BRIEFING_CONTEXT_MS = 2 * 3600_000;
 

@@ -12,6 +12,7 @@ import {
   briefingHashInput,
   emptyScript,
   itemLine,
+  MAX_SPOKEN_ITEMS,
   primaryLang,
   templateScript,
   type BriefingItem,
@@ -383,23 +384,37 @@ describe('briefing text', () => {
     nextFireAt: null,
     ...over,
   });
-  test('template: count, at most three items, never claims done, offers the rest', () => {
-    const items = [item(1, { reason: 'overdue', dueDate: '2026-10-09' }), item(2, { note: '배송 준비 때문에 오늘 주문' }), item(3), item(4)];
+  test('template: counts, every item by number with its reason, never claims done, invites a reply', () => {
+    const items = [
+      item(1, { reason: 'overdue', dueDate: '2026-10-09' }),
+      item(2, { note: '배송 준비 때문에 오늘 주문' }),
+      item(3),
+      item(4, { bucket: 'later', reason: 'upcoming', dueDate: null, whenAt: '2026-10-12T00:00:00Z' }),
+      item(5, { bucket: 'context', reason: 'context', dueDate: null, contextTag: '집' }),
+    ];
     const ko = templateScript(items, 'ko', null, today, tz);
-    assert.ok(ko.startsWith('오늘 챙길 것이 4개 있어요.'));
-    assert.ok(ko.includes('첫째, Item 1, 기한 지남'));
+    assert.ok(ko.startsWith('리마인더가 모두 5개 있어요. 오늘 챙길 것 3개, 나중에 알려드릴 것 1개, 상황에 맞춰 알려드릴 것 1개예요.'), ko);
+    assert.ok(ko.includes('1번, Item 1, 기한 지남'));
     assert.ok(ko.includes('배송 준비 때문에 오늘 주문'));
-    assert.ok(!ko.includes('Item 4'));
-    assert.ok(ko.includes('아직 완료 표시는 없어요.'));
-    assert.ok(ko.endsWith('나머지도 들으시겠어요?'));
+    assert.ok(ko.includes('4번, Item 4, 내일 오전 9시에 알림'));
+    assert.ok(ko.includes("5번, Item 5, '집' 상황일 때"));
+    assert.ok(!/완료했|끝났어요/.test(ko));
+    assert.ok(ko.endsWith('새로 추가할 리마인더가 있으면 말씀해 주세요.'));
     const en = templateScript(items.slice(0, 2), 'en', 'Won', today, tz);
-    assert.ok(en.startsWith('Won, you have 2 things'));
-    assert.ok(!/rest\?/.test(en));
-    assert.ok(/not marked done|isn't marked done|None of these is marked done/.test(en));
+    assert.ok(en.startsWith('Won, you have 2 reminders.'), en);
+    assert.ok(en.includes('Number 2, Item 2, due today.'));
+    assert.ok(en.endsWith('change or add a reminder.'));
   });
-  test('empty day', () => {
-    assert.equal(emptyScript('ko', null, 0), '오늘 챙길 건 없어요. 편안한 하루 보내세요.');
-    assert.ok(emptyScript('en', null, 2).includes('2 more are set for later'));
+  test('template: past the spoken limit only counts the rest', () => {
+    const many = Array.from({ length: MAX_SPOKEN_ITEMS + 3 }, (_, i) => item(i + 1));
+    const ko = templateScript(many, 'ko', null, today, tz);
+    assert.ok(ko.includes(`${MAX_SPOKEN_ITEMS}번, Item ${MAX_SPOKEN_ITEMS}`));
+    assert.ok(!ko.includes(`Item ${MAX_SPOKEN_ITEMS + 1},`));
+    assert.ok(ko.includes('그 밖에 3개가 더 있어요.'));
+  });
+  test('no reminders at all', () => {
+    assert.equal(emptyScript('ko', null), '지금 등록된 리마인더가 없어요. 새로 추가할 게 있으면 말씀해 주세요.');
+    assert.ok(emptyScript('en', null).startsWith("You don't have any reminders"));
   });
   test('item lines', () => {
     assert.equal(itemLine(item(1), 'en', today, tz), 'Item 1 · due today');
@@ -418,6 +433,7 @@ describe('briefing text', () => {
     assert.notEqual(h, briefingHashInput({ ...base, items: [] }));
     assert.notEqual(h, briefingHashInput({ ...base, voice: 'marin' }));
     assert.notEqual(h, briefingHashInput({ ...base, today: '2026-10-12' }));
+    assert.notEqual(h, briefingHashInput({ ...base, items: [item(1, { bucket: 'later' })] }));
   });
   test('language hint', () => {
     assert.equal(primaryLang('ko-KR'), 'ko');

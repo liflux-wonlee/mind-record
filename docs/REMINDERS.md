@@ -16,7 +16,7 @@
 | 반복 업무 | `tasks.recur_freq/interval/anchor` + `task_completions` | 이번 회차 완료 → 다음 회차로 이동, 이력 보존 |
 | 발송 | `reminder_deliveries` | 설치 기기 × 대상 × 시각당 한 행 (중복 발송 방지 키) |
 | 기기 | `push_installations` | 앱 설치 하나 = 한 행. 로그인한 계정 소유, 로그아웃 시 삭제 |
-| 브리핑 | `reminder_briefings` | 같은 내용이면 대본 재사용, 마지막 브리핑 순서("두 번째") |
+| 브리핑 | `reminder_briefings` | 같은 내용이면 대본 재사용, 마지막 브리핑 순서("두 번째"). 모든 활성 리마인더(오늘·나중·상황)를 번호로 읽고, 음성 대화의 첫 AI 턴으로 저장된 뒤 바로 듣기로 이어짐(Home/Reminders의 Listen → `/talk?mode=conv&briefing=1`). 사용자가 한마디도 안 하고 끝내면 대화 기록은 삭제 |
 
 - **Task 하나에 규칙 여러 개**여도 홈 개수·목록·브리핑에서는 **항목 하나**입니다 (`reminder_agenda()`가 대상별로 묶음).
 - 날짜가 있는 Task에는 **자동 알림(전날 + 당일, 기본 09:00)**이 트리거로 붙습니다. 사용자가 시각을 따로 정하면(특정 시각·매일) 자동 알림은 `replaced`로 멈춥니다.

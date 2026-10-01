@@ -10,16 +10,14 @@
  * re-read from the server, so an old notification for something already
  * finished or deleted shows a plain message and never reopens anything.
  */
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BottomSheet } from '@/components/BottomSheet';
-import { BriefingPanel } from '@/components/BriefingPanel';
 import { ChevronLeftIcon, XIcon } from '@/components/Icon';
 import { Button } from '@/components/ui';
-import { useBriefing } from '@/hooks/useBriefing';
 import { useAgenda, usePushPermission } from '@/hooks/useReminders';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { openNotificationSettings } from '@/lib/push';
@@ -78,16 +76,7 @@ export default function RemindersScreen() {
   const { user } = useAuth();
   const agenda = useAgenda();
   const permission = usePushPermission();
-  const briefing = useBriefing(agenda.refresh);
   const [defaultTime, setDefaultTime] = useState(DEFAULT_REMINDER_TIME);
-
-  // Opening a task/record (or anything pushed on top) stops the voice.
-  const stopBriefing = briefing.stop;
-  useFocusEffect(
-    useCallback(() => {
-      return () => stopBriefing();
-    }, [stopBriefing])
-  );
 
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [menuItem, setMenuItem] = useState<AgendaItem | null>(null);
@@ -343,21 +332,22 @@ export default function RemindersScreen() {
         </View>
         <Text style={styles.title}>Reminders</Text>
 
-        {agenda.now.length > 0 && briefing.state === 'idle' ? (
+        {/* Reads out every reminder, then listens: "the second one is
+            done", "add a reminder for ..." (a voice conversation). */}
+        {agenda.items.length > 0 ? (
           <Button
-            label="Listen to today’s reminders"
+            label="Listen to all reminders & reply"
             variant="save"
             align="flex-start"
-            onPress={briefing.start}
+            onPress={() => router.push({ pathname: '/talk', params: { mode: 'conv', briefing: '1' } })}
             style={styles.listen}
           />
         ) : null}
-        <BriefingPanel briefing={briefing} />
 
         {pushOff ? (
           <View style={styles.banner}>
             <Text style={styles.bannerText}>
-              Notifications are off on this phone. Reminders still show here and in Listen.
+              Notifications are off on this phone. Reminders still show here and when you listen.
             </Text>
             <Button
               label={permission.push?.canAskAgain ? 'Turn on notifications' : 'Open Settings'}
