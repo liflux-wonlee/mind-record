@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "JoaAssistant",
-    "slug": "mind-record",
+    "slug": "joaassistant",
     "version": "1.0.0",
     "scheme": "joaassistant",
     "orientation": "portrait",
