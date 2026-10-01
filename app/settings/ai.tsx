@@ -2,8 +2,9 @@ import { useFocusEffect } from 'expo-router';
 import { createAudioPlayer } from 'expo-audio';
 import { File, Paths } from 'expo-file-system';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, LayoutAnimation, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
+import { ChevronRightIcon } from '@/components/Icon';
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
 import { Button, Kicker } from '@/components/ui';
@@ -81,6 +82,8 @@ function AiSettingsForm({
   const [honorific, setHonorific] = useState(profile.user_honorific ?? '');
   const [savingNames, setSavingNames] = useState(false);
   const [savingVoice, setSavingVoice] = useState<AiVoice | null>(null);
+  // The voice list folds away behind its title (and the current choice) to keep the screen short.
+  const [voicesOpen, setVoicesOpen] = useState(false);
   const [previewing, setPreviewing] = useState<AiVoice | null>(null);
   const [savingSilenceGap, setSavingSilenceGap] = useState<number | null>(null);
 
@@ -97,6 +100,8 @@ function AiSettingsForm({
     }
   };
 
+  const currentVoiceLabel =
+    VOICE_OPTIONS.find((o) => o.voice === profile.ai_voice)?.label ?? 'Default voice';
   const namesDirty = aiName !== (profile.ai_name ?? '') || honorific !== (profile.user_honorific ?? '');
 
   const saveNames = async () => {
@@ -200,8 +205,27 @@ function AiSettingsForm({
       </View>
 
       <View style={styles.card}>
-        <Kicker style={{ color: colors.neutral600, marginBottom: 10 }}>AI voice</Kicker>
-        <View style={{ gap: 8 }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: voicesOpen }}
+          accessibilityLabel={`AI voice: ${currentVoiceLabel}. ${voicesOpen ? 'Hide' : 'Show'} voices`}
+          onPress={() => {
+            LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+            setVoicesOpen((open) => !open);
+          }}
+          style={styles.foldHeader}
+          hitSlop={8}
+        >
+          <View style={{ flex: 1 }}>
+            <Kicker style={{ color: colors.neutral600 }}>AI voice</Kicker>
+            <Text style={styles.foldValue}>{currentVoiceLabel}</Text>
+          </View>
+          <View style={{ transform: [{ rotate: voicesOpen ? '90deg' : '0deg' }] }}>
+            <ChevronRightIcon size={20} color={colors.neutral700} />
+          </View>
+        </Pressable>
+        {voicesOpen ? (
+        <View style={{ gap: 8, marginTop: 12 }}>
           {VOICE_OPTIONS.map(({ voice, label, color }) => {
             const selected = profile.ai_voice === voice;
             return (
@@ -236,6 +260,7 @@ function AiSettingsForm({
             );
           })}
         </View>
+        ) : null}
       </View>
 
       <View style={styles.card}>
@@ -250,7 +275,7 @@ function AiSettingsForm({
                 disabled={selected || savingSilenceGap !== null}
                 onPress={() => chooseSilenceGap(ms)}
                 style={[styles.gapButton, { backgroundColor: color }, selected && styles.gapButtonSelected]}
-                textStyle={{ color: colors.text }}
+                textStyle={{ color: colors.text, fontSize: 14 }}
               />
             );
           })}
@@ -305,8 +330,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.text,
   },
+  foldHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 44,
+  },
+  foldValue: {
+    fontFamily: font.semibold,
+    fontSize: 15,
+    color: colors.text,
+    marginTop: 4,
+  },
   gapButton: {
     flex: 1,
+    // Room for "Relaxed" with a large system font.
+    paddingHorizontal: 4,
     minHeight: 44,
     borderRadius: radius.pastel,
     justifyContent: 'center',

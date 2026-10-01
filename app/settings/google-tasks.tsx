@@ -220,8 +220,8 @@ export default function GoogleTasksSettingsScreen() {
         <View style={styles.card}>
           <Text style={styles.body}>
             Connect a Google account to send tasks to Google Tasks. This never syncs automatically -- you choose
-            what to send, from that task&apos;s own menu, or by asking in a Conversation (&quot;구글 태스크에도
-            넣어줘&quot;).
+            what to send, from that task&apos;s own menu, or by asking in a Conversation (&quot;Add it to Google
+            Tasks too&quot;).
           </Text>
           <Button
             label={connecting ? 'Connecting…' : 'Connect Google Tasks'}
