@@ -134,6 +134,7 @@ function AccountScreen() {
     { key: 'privacy', title: 'Privacy', subtitle: biometricLine, route: '/settings/privacy' as const },
     { key: 'google-tasks', title: 'Google Tasks', subtitle: googleTasksLine, route: '/settings/google-tasks' as const },
     { key: 'legal', title: 'Legal', subtitle: 'Privacy Policy & Terms of Service', route: '/settings/legal' as const },
+    { key: 'connection', title: 'Connection check', subtitle: 'If screens load slowly', route: '/settings/connection' as const },
   ];
 
   const handleSignOut = async () => {

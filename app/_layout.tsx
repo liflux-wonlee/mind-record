@@ -126,6 +126,7 @@ function NativeRootNavigator() {
           <Stack.Screen name="settings/google-tasks" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/legal" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="settings/reminders" options={{ animation: 'slide_from_right' }} />
+          <Stack.Screen name="settings/connection" options={{ animation: 'slide_from_right' }} />
           {/* Home's "Today: N to keep in mind" -> See all, and a tapped reminder notification. */}
           <Stack.Screen name="reminders" options={{ animation: 'slide_from_right' }} />
           <Stack.Screen name="legal/privacy-policy" options={{ animation: 'slide_from_right' }} />
@@ -199,6 +200,7 @@ function WebRootNavigator() {
         <Stack.Screen name="settings/google-tasks" />
         <Stack.Screen name="settings/legal" />
         <Stack.Screen name="settings/reminders" />
+        <Stack.Screen name="settings/connection" />
         <Stack.Screen name="reminders" />
       </Stack.Protected>
     </Stack>
