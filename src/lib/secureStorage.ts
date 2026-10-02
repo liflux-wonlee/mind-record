@@ -80,6 +80,26 @@ async function removeChunked(key: string): Promise<void> {
 }
 
 /**
+ * What was last read or written, per key. supabase-js reads the session from
+ * storage on EVERY request (each query asks auth for the current token), and
+ * each read here is several Android Keystore decryptions (header + chunks),
+ * done one after another -- so a screen firing a handful of queries spent
+ * many seconds just re-reading the same session. Only this app writes these
+ * keys, through this adapter, so a value cached in memory can't go stale:
+ * SecureStore is read once per key per app launch.
+ */
+const memory = new Map<string, string | null>();
+
+// Device writes run one at a time, so two quick saves (e.g. a token refresh
+// right after sign-in) can't interleave their chunks.
+let writes: Promise<unknown> = Promise.resolve();
+function queueWrite(task: () => Promise<void>): Promise<void> {
+  const next = writes.then(task, task);
+  writes = next.catch(() => {});
+  return next;
+}
+
+/**
  * Supabase's storage adapter interface (get/set/removeItem). getItem also
  * migrates a value still sitting in the old plain AsyncStorage on its first
  * read, so upgrading the app doesn't sign anyone out -- an existing session
@@ -88,26 +108,38 @@ async function removeChunked(key: string): Promise<void> {
  */
 export const secureAuthStorage = {
   async getItem(key: string): Promise<string | null> {
-    const fromSecureStore = await readChunked(key);
-    if (fromSecureStore !== null) return fromSecureStore;
-
-    const legacy = await AsyncStorage.getItem(key);
-    if (legacy === null) return null;
-    try {
-      await writeChunked(key, legacy);
-      await AsyncStorage.removeItem(key);
-    } catch {
-      // Could not migrate this time (e.g. SecureStore briefly unavailable)
-      // -- leave the plaintext copy in place and keep using it rather than
-      // losing the session; the next getItem call tries the migration again.
-    }
-    return legacy;
+    if (memory.has(key)) return memory.get(key) ?? null;
+    const value = await readFromDevice(key);
+    // A write or removal that landed while this read was in flight wins.
+    if (!memory.has(key)) memory.set(key, value);
+    return memory.get(key) ?? null;
   },
   async setItem(key: string, value: string): Promise<void> {
-    await writeChunked(key, value);
+    memory.set(key, value);
+    await queueWrite(() => writeChunked(key, value));
   },
   async removeItem(key: string): Promise<void> {
-    await removeChunked(key);
-    await AsyncStorage.removeItem(key).catch(() => {});
+    memory.set(key, null);
+    await queueWrite(async () => {
+      await removeChunked(key);
+      await AsyncStorage.removeItem(key).catch(() => {});
+    });
   },
 };
+
+async function readFromDevice(key: string): Promise<string | null> {
+  const fromSecureStore = await readChunked(key);
+  if (fromSecureStore !== null) return fromSecureStore;
+
+  const legacy = await AsyncStorage.getItem(key);
+  if (legacy === null) return null;
+  try {
+    await writeChunked(key, legacy);
+    await AsyncStorage.removeItem(key);
+  } catch {
+    // Could not migrate this time (e.g. SecureStore briefly unavailable)
+    // -- leave the plaintext copy in place and keep using it rather than
+    // losing the session; the next launch tries the migration again.
+  }
+  return legacy;
+}
