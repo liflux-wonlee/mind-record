@@ -129,6 +129,10 @@ function EditTextSheet({
 // Transcription of a long capture plus the GPT pass can take a couple of
 // minutes; past this the Edge Function has almost certainly been killed.
 const PROCESSING_TIMEOUT_MS = 4 * 60 * 1000;
+// A row still "in progress" but untouched this long belongs to a server run
+// that died part-way (it can't mark itself failed). Retry takes it over --
+// process-session uses the same cut-off (STALE_RUN_MS).
+const STALLED_AFTER_MS = 10 * 60 * 1000;
 
 type EntryKind = 'task' | 'memory';
 type Entry = {
@@ -545,6 +549,12 @@ export default function SummaryScreen() {
           return;
         }
         if (s.processing_status === 'error') return;
+        // Opened long after the server stopped working on it: say so now
+        // instead of spinning for another four minutes.
+        if (Date.now() - Date.parse(s.updated_at) > STALLED_AFTER_MS) {
+          setLoadError('Processing stopped partway. Tap Retry to finish it.');
+          return;
+        }
         // Nothing legitimately takes this long -- the Edge Function was
         // most likely killed mid-way (it can't mark the row 'error' then),
         // so stop spinning and offer a retry instead of polling forever.

@@ -122,6 +122,9 @@ type Extraction = {
   record_reminders: ReminderRequest[];
 };
 
+/** An in-progress row untouched this long belongs to a run that died (runs end well within 7 minutes). */
+const STALE_RUN_MS = 10 * 60_000;
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: CORS_HEADERS });
@@ -186,11 +189,20 @@ Deno.serve(async (req) => {
   // double-tap on Summary's Retry button) actually wins and proceeds --
   // the loser sees `claimed: null` and backs off instead of re-running the
   // whole extraction and duplicating every task/idea a moment later.
+  //
+  // A run that was killed part-way (the function's time limit, a dropped
+  // connection) can't mark its row 'error', so it would sit in
+  // 'transcribing'/'analyzing' forever and Retry could never claim it. Such
+  // a row is taken over once it has been untouched for longer than any run
+  // can last (every step updates the row, which bumps updated_at).
+  const staleBefore = new Date(Date.now() - STALE_RUN_MS).toISOString();
   const { data: claimed, error: claimError } = await db
     .from('sessions')
-    .update({ processing_status: 'transcribing' })
+    .update({ processing_status: 'transcribing', processing_error: null })
     .eq('id', sessionId)
-    .in('processing_status', ['pending', 'error'])
+    .or(
+      `processing_status.in.(pending,error),and(processing_status.in.(transcribing,analyzing),updated_at.lt.${staleBefore})`
+    )
     .select('id')
     .maybeSingle();
   if (claimError) {
