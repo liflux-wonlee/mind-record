@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
@@ -15,6 +15,7 @@ import {
 import { friendlyMessage } from '@/lib/friendlyError';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/providers/AuthProvider';
+import { getProfile, updateProfile } from '@/services/profiles';
 import { colors, font, radius } from '@/theme';
 
 /**
@@ -105,7 +106,7 @@ export default function PrivacySettingsScreen() {
 
   return (
     <Screen showAccount={false}>
-      <SettingsHeader title="Biometric Lock" />
+      <SettingsHeader title="Privacy" />
       {!support ? null : !support.available ? (
         <View style={styles.card}>
           <Text style={styles.body}>
@@ -165,7 +166,77 @@ export default function PrivacySettingsScreen() {
           ) : null}
         </View>
       ) : null}
+
+      {user ? <AudioRetentionCard userId={user.id} /> : null}
     </Screen>
+  );
+}
+
+const RETENTION_OPTIONS: { days: number | null; label: string }[] = [
+  { days: null, label: 'Keep' },
+  { days: 90, label: '90 days' },
+  { days: 30, label: '30 days' },
+  { days: 0, label: 'Don’t keep' },
+];
+
+/** How long original recordings are kept (profiles.audio_retention_days). */
+function AudioRetentionCard({ userId }: { userId: string }) {
+  const [days, setDays] = useState<number | null | undefined>(undefined);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    getProfile(userId)
+      .then((p) => setDays(p?.audio_retention_days ?? null))
+      .catch(() => setDays(null));
+  }, [userId]);
+
+  const choose = async (next: number | null) => {
+    if (saving || next === days) return;
+    const previous = days;
+    setDays(next);
+    setSaving(true);
+    try {
+      await updateProfile(userId, { audio_retention_days: next });
+    } catch (e) {
+      setDays(previous);
+      Alert.alert('Could not save', friendlyMessage(e, 'Please try again.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <View style={[styles.card, { backgroundColor: colors.pastelBlue, marginTop: 14 }]}>
+      <Kicker style={{ color: colors.neutral600, marginBottom: 8 }}>Original recordings</Kicker>
+      <Text style={styles.body}>
+        Your recordings are kept so you can listen to them again (Transcript tab) and so a recording can always be
+        processed again. Transcripts, summaries, tasks and ideas are kept either way.
+      </Text>
+      {days === undefined ? null : (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+          {RETENTION_OPTIONS.map((o) => {
+            const selected = days === o.days;
+            return (
+              <Pressable
+                key={o.label}
+                accessibilityRole="radio"
+                accessibilityState={{ selected }}
+                onPress={() => choose(o.days)}
+                style={[styles.option, selected && styles.optionSelected]}
+              >
+                <Text style={[styles.optionText, selected && { fontFamily: font.extrabold }]}>{o.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+      <Text style={[styles.body, { marginTop: 10, marginBottom: 0, fontSize: 12, color: colors.neutral700 }]}>
+        {days === 0
+          ? 'Each recording’s audio is deleted as soon as it has been processed.'
+          : days
+            ? `Audio is deleted ${days} days after recording. You can also delete one any time from its Transcript tab.`
+            : 'Kept until you delete it -- one at a time from its Transcript tab.'}
+      </Text>
+    </View>
   );
 }
 
@@ -186,6 +257,23 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: radius.pastel,
     paddingHorizontal: 18,
+  },
+  option: {
+    minHeight: 44,
+    paddingHorizontal: 14,
+    justifyContent: 'center',
+    borderRadius: radius.pastel,
+    backgroundColor: 'rgba(255,255,255,0.7)',
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  optionSelected: {
+    borderColor: colors.accent800,
+  },
+  optionText: {
+    fontFamily: font.semibold,
+    fontSize: 13,
+    color: colors.text,
   },
   input: {
     minHeight: 46,

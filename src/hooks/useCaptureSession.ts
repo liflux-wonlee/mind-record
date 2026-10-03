@@ -17,7 +17,7 @@ import {
 } from 'expo-audio';
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, AppState } from 'react-native';
 
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { ensureBackgroundRecordingAllowed } from '@/lib/backgroundRecording';
@@ -26,6 +26,7 @@ import { isNetworkError } from '@/lib/functionsError';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import { processSession } from '@/services/processing';
+import { keepForLater } from '@/services/pendingUploads';
 import { uploadRecording } from '@/services/recordings';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
@@ -69,6 +70,9 @@ export async function waitForRecorderUri(
 
 const CAPTURE_KEEP_AWAKE_TAG = 'joaassistant-capture';
 
+/** Longest single uploaded segment of a capture (~7 MB at 64 kbps). */
+const SEGMENT_MAX_MS = 15 * 60 * 1000;
+
 export function useCaptureSession() {
   const { user } = useAuth();
   const [saveOnly, setSaveOnly] = useState(false);
@@ -103,7 +107,12 @@ export function useCaptureSession() {
   const recorderState = useAudioRecorderState(recorder, 200);
 
   const recording = recorderState.isRecording;
-  const seconds = Math.floor(recorderState.durationMillis / 1000);
+  // Earlier segments of this capture (each pause, and each automatic split
+  // below, starts a new one) -- the timer shows the whole capture.
+  const [pastMs, setPastMs] = useState(0);
+  const durationRef = useRef(0);
+  durationRef.current = recorderState.durationMillis;
+  const seconds = Math.floor((pastMs + (recording ? recorderState.durationMillis : 0)) / 1000);
   const timer = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 
   // Keeps the screen on from the first recording until the user leaves the
@@ -169,17 +178,27 @@ export function useCaptureSession() {
       );
       return false;
     }
+    const recordedAt = new Date(recordingStartedAtRef.current ?? Date.now()).toISOString();
     try {
-      await uploadRecording(user.id, sessionId, uri);
+      await uploadRecording(user.id, sessionId, uri, recordedAt);
       return true;
     } catch (e) {
       if (isNetworkError(e)) {
         try {
-          await uploadRecording(user.id, sessionId, uri);
+          await uploadRecording(user.id, sessionId, uri, recordedAt);
           return true;
         } catch {
-          // Falls through to the alert below.
+          // Falls through below.
         }
+      }
+      // Keep the file on the phone and send it later (before processing,
+      // and on the next app start) instead of losing this part.
+      if (await keepForLater(user.id, sessionId, uri, recordedAt)) {
+        Alert.alert(
+          'Saved on your phone for now',
+          'This part couldn’t be uploaded (connection problem). It’s kept on your phone and will be sent automatically -- nothing is lost.'
+        );
+        return true;
       }
       Alert.alert(
         'Part of this recording was not saved',
@@ -200,7 +219,9 @@ export function useCaptureSession() {
     const run = async () => {
       try {
         if (recorder.isRecording) {
+          const segmentMs = durationRef.current;
           await stopRecorderSafely();
+          setPastMs((p) => p + segmentMs);
           await uploadCurrentSegment();
           return true;
         }
@@ -309,6 +330,7 @@ export function useCaptureSession() {
     sessionIdRef.current = null;
     hasContentRef.current = false;
     setEverRecorded(false);
+    setPastMs(0);
     if (sessionId) {
       try {
         await deleteSession(sessionId);
@@ -370,6 +392,30 @@ export function useCaptureSession() {
     },
     [recorder, uploadCurrentSegment]
   );
+
+  // A long recording is split into segments of at most SEGMENT_MAX_MS: each
+  // one is uploaded as it's finished (so a dropped connection or a crash
+  // loses at most that much), stays well under Whisper's 25 MB file limit,
+  // and transcribes within one server run. The gap between segments is a
+  // fraction of a second.
+  const rollingRef = useRef(false);
+  useEffect(() => {
+    if (!recording || rollingRef.current || toggleBusyRef.current) return;
+    if (recorderState.durationMillis < SEGMENT_MAX_MS) return;
+    // Only with the app in front: Android may not let a backgrounded app
+    // start the microphone again, so a recording with the screen off just
+    // carries on in one segment until the app is opened.
+    if (AppState.currentState !== 'active') return;
+    rollingRef.current = true;
+    (async () => {
+      try {
+        const paused = await toggleRecording();
+        if (paused) await toggleRecording();
+      } finally {
+        rollingRef.current = false;
+      }
+    })();
+  }, [recording, recorderState.durationMillis, toggleRecording]);
 
   return {
     recording,

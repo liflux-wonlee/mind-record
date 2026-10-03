@@ -72,6 +72,7 @@ export type Database = {
           /** How the AI should address the user (e.g. "Won님") -- null means don't use one. */
           user_honorific: string | null;
           ai_voice: AiVoice;
+          audio_retention_days: number | null;
           /** How long a pause (ms) before Conversation mode treats the user's turn as over -- see useConversationSession.ts. */
           silence_gap_ms: number;
           /** Default local time ('HH:MM:SS') for automatic and every-day reminders. */
@@ -95,6 +96,7 @@ export type Database = {
           ai_name?: string | null;
           user_honorific?: string | null;
           ai_voice?: AiVoice;
+          audio_retention_days?: number | null;
           silence_gap_ms?: number;
           reminder_time?: string;
           remind_day_before?: boolean;
@@ -330,6 +332,9 @@ export type Database = {
           mime_type: string | null;
           file_size: number | null;
           created_at: string;
+          transcript: string | null;
+          duration_seconds: number | null;
+          language: string | null;
         };
         Insert: {
           id?: string;
@@ -340,6 +345,9 @@ export type Database = {
           storage_path: string;
           mime_type?: string | null;
           file_size?: number | null;
+          transcript?: string | null;
+          duration_seconds?: number | null;
+          language?: string | null;
           created_at?: string;
         };
         Update: Partial<Database['public']['Tables']['attachments']['Insert']>;

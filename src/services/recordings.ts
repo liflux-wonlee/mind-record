@@ -81,18 +81,31 @@ export async function appendFilePart(
 export async function uploadRecording(
   userId: string,
   sessionId: string,
-  fileUri: string
+  fileUri: string,
+  /** When the segment was recorded -- a retried upload keeps its place among the others. */
+  recordedAt?: string
 ): Promise<Attachment> {
   const response = await fetch(fileUri);
   const arrayBuffer = await response.arrayBuffer();
 
-  const fileName = `${Date.now()}.m4a`;
+  const at = recordedAt ? Date.parse(recordedAt) : Date.now();
+  const fileName = `${Number.isFinite(at) ? at : Date.now()}.m4a`;
   const storagePath = `${userId}/${sessionId}/${fileName}`;
 
   const { error: uploadError } = await supabase.storage
     .from('recordings')
-    .upload(storagePath, arrayBuffer, { contentType: 'audio/m4a' });
+    // upsert: a retry after an upload that actually landed (but whose answer
+    // was lost) replaces the same file instead of failing as a duplicate.
+    .upload(storagePath, arrayBuffer, { contentType: 'audio/m4a', upsert: true });
   if (uploadError) throw uploadError;
+
+  // A retry of an upload whose answer was lost: the row may already exist.
+  const { data: existing } = await supabase
+    .from('attachments')
+    .select('*')
+    .eq('storage_path', storagePath)
+    .maybeSingle();
+  if (existing) return existing;
 
   const { data, error } = await supabase
     .from('attachments')
@@ -104,9 +117,52 @@ export async function uploadRecording(
       storage_path: storagePath,
       mime_type: 'audio/m4a',
       file_size: arrayBuffer.byteLength,
+      // Segments are transcribed in created_at order.
+      ...(recordedAt ? { created_at: recordedAt } : {}),
     })
     .select()
     .single();
   if (error) throw error;
   return data;
+}
+
+/** A record's original audio segments, in recording order. */
+export async function listSessionAudio(sessionId: string): Promise<Attachment[]> {
+  const { data, error } = await supabase
+    .from('attachments')
+    .select('*')
+    .eq('session_id', sessionId)
+    .eq('type', 'audio')
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Short-lived links the player can stream the (private) originals from. */
+export async function audioPlaybackUrls(paths: string[]): Promise<string[]> {
+  if (paths.length === 0) return [];
+  const { data, error } = await supabase.storage.from('recordings').createSignedUrls(paths, 60 * 60);
+  if (error) throw error;
+  return (data ?? []).map((d) => {
+    if (!d.signedUrl) throw new Error('Could not open the original recording.');
+    return d.signedUrl;
+  });
+}
+
+/** Deletes a record's original audio (the transcript, summary and items stay). */
+export async function deleteSessionAudio(sessionId: string): Promise<void> {
+  const audio = await listSessionAudio(sessionId);
+  if (audio.length === 0) return;
+  const { error: removeError } = await supabase.storage
+    .from('recordings')
+    .remove(audio.map((a) => a.storage_path));
+  if (removeError) throw removeError;
+  const { error } = await supabase
+    .from('attachments')
+    .delete()
+    .in(
+      'id',
+      audio.map((a) => a.id)
+    );
+  if (error) throw error;
 }

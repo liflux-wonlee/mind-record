@@ -122,6 +122,11 @@ type Extraction = {
   record_reminders: ReminderRequest[];
 };
 
+/** No new segment is started after this much of a run (Whisper on a 15-minute segment takes well under a minute). */
+const TRANSCRIBE_START_BUDGET_MS = 75_000;
+/** The analysis isn't started after this much of a run -- it gets a fresh one. */
+const ANALYZE_START_BUDGET_MS = 70_000;
+
 /** An in-progress row untouched this long belongs to a run that died (runs end well within 7 minutes). */
 const STALE_RUN_MS = 10 * 60_000;
 
@@ -138,6 +143,9 @@ Deno.serve(async (req) => {
   // The device's IANA timezone (src/lib/device.ts) -- what "today" and
   // "내일" meant when the recording was made.
   let deviceTimezone: unknown;
+  // Edge Functions are stopped after 150 s, so a long recording is done
+  // over several runs: see TRANSCRIBE_START_BUDGET_MS / ANALYZE_START_BUDGET_MS.
+  const started = Date.now();
   try {
     ({ sessionId, timezone: deviceTimezone } = await req.json());
   } catch {
@@ -226,11 +234,6 @@ Deno.serve(async (req) => {
       .order('position', { ascending: true });
     if (messagesError) throw messagesError;
 
-    // Accumulated across every attachment actually sent to Whisper below
-    // (either branch) so this session's transcription cost is recorded as
-    // one usage event, not one per segment.
-    let transcribedSeconds = 0;
-    let transcribedBytes = 0;
     // The language Whisper detected for the first segment that actually had
     // one -- used to steer the analysis step's output language below,
     // instead of leaving GPT to re-detect it from the transcript text alone.
@@ -264,19 +267,10 @@ Deno.serve(async (req) => {
 
       let leftoverTranscript = '';
       if (leftoverAudio && leftoverAudio.length > 0) {
-        const parts: string[] = [];
-        for (const attachment of leftoverAudio) {
-          const { data: file, error: downloadError } = await db.storage
-            .from('recordings')
-            .download(attachment.storage_path);
-          if (downloadError) throw downloadError;
-          const result = await transcribeAudio(file, attachment.file_name);
-          transcribedSeconds += result.durationSeconds;
-          transcribedBytes += result.bytes;
-          if (result.text.trim()) parts.push(result.text.trim());
-          if (!detectedLanguage && result.language) detectedLanguage = result.language;
-        }
-        leftoverTranscript = parts.join('\n\n');
+        const segments = await transcribeSegments(db, user.id, sessionId, leftoverAudio, started);
+        if (!segments.complete) return await continueLater(db, sessionId);
+        if (!detectedLanguage) detectedLanguage = segments.language;
+        leftoverTranscript = segments.parts.join('\n\n');
       }
 
       transcript = leftoverTranscript ? `${conversationTranscript}\n\n${leftoverTranscript}` : conversationTranscript;
@@ -341,32 +335,11 @@ Deno.serve(async (req) => {
           .eq('id', sessionId);
         return json({ error: 'No audio to process.' }, 400);
       } else {
-        const transcriptParts: string[] = [];
-        for (const attachment of attachments) {
-          const { data: file, error: downloadError } = await db.storage
-            .from('recordings')
-            .download(attachment.storage_path);
-          if (downloadError) throw downloadError;
-          const result = await transcribeAudio(file, attachment.file_name);
-          transcribedSeconds += result.durationSeconds;
-          transcribedBytes += result.bytes;
-          if (result.text.trim()) transcriptParts.push(result.text.trim());
-          if (!detectedLanguage && result.language) detectedLanguage = result.language;
-        }
-        transcript = transcriptParts.join('\n\n');
+        const segments = await transcribeSegments(db, user.id, sessionId, attachments, started);
+        if (!segments.complete) return await continueLater(db, sessionId);
+        if (!detectedLanguage) detectedLanguage = segments.language;
+        transcript = segments.parts.join('\n\n');
       }
-    }
-
-    if (transcribedSeconds > 0 || transcribedBytes > 0) {
-      await recordUsage(db, {
-        userId: user.id,
-        eventType: 'transcribe',
-        source: 'process_session',
-        sessionId,
-        dedupeKey: `process_session:transcribe:${sessionId}`,
-        audioSeconds: transcribedSeconds,
-        audioBytes: transcribedBytes,
-      });
     }
 
     const { error: transcriptError } = await db
@@ -374,6 +347,11 @@ Deno.serve(async (req) => {
       .update({ raw_transcript: transcript, processing_status: 'analyzing' })
       .eq('id', sessionId);
     if (transcriptError) throw transcriptError;
+
+    // The analysis (one GPT call plus the writes after it) needs time of
+    // its own: if transcribing used most of this run, leave it to a fresh
+    // one -- every segment's text is saved, so the next run starts here.
+    if (Date.now() - started > ANALYZE_START_BUDGET_MS) return await continueLater(db, sessionId);
 
     const { data: existingTopics, error: topicsError } = await db
       .from('topics')
@@ -801,11 +779,15 @@ Deno.serve(async (req) => {
       .eq('id', sessionId);
     if (doneError) throw doneError;
 
-    // Everything useful is now text (transcript, summary, outline, tasks,
-    // ideas) and nothing in the app plays audio back, so the recordings
-    // are pure storage cost from here. They are kept on any failure above
-    // so Retry can reprocess; only a fully successful run discards them.
-    await discardSessionAudio(db, sessionId);
+    // Original recordings are kept (Summary can play them back, and Retry
+    // can always reprocess) unless the user chose to delete them right after
+    // processing; 30/90-day retention is handled by reminders-dispatch.
+    const { data: retention } = await db
+      .from('profiles')
+      .select('audio_retention_days')
+      .eq('id', user.id)
+      .maybeSingle();
+    if (retention?.audio_retention_days === 0) await discardSessionAudio(db, sessionId);
 
     return json({
       status: 'done',
@@ -1161,6 +1143,75 @@ async function findOrCreateTopic(
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024;
 
 type TranscribeResult = { text: string; durationSeconds: number; bytes: number; language: string | null };
+
+type AudioAttachment = {
+  id: string;
+  storage_path: string;
+  file_name: string;
+  transcript: string | null;
+  language: string | null;
+};
+
+/**
+ * Transcribes a session's audio segments in order, saving each one's text on
+ * its attachment row the moment it's done -- so a run that's stopped (time
+ * limit, crash) never loses or re-bills a finished segment, and the next run
+ * starts from the first segment still without text. Stops starting new
+ * segments once this run has used TRANSCRIBE_START_BUDGET_MS.
+ */
+async function transcribeSegments(
+  db: SupabaseClient,
+  userId: string,
+  sessionId: string,
+  attachments: AudioAttachment[],
+  started: number
+): Promise<{ complete: boolean; parts: string[]; language: string | null }> {
+  const parts: string[] = [];
+  let language: string | null = null;
+  for (const attachment of attachments) {
+    if (attachment.transcript === null) {
+      if (Date.now() - started > TRANSCRIBE_START_BUDGET_MS) return { complete: false, parts, language };
+      const { data: file, error: downloadError } = await db.storage
+        .from('recordings')
+        .download(attachment.storage_path);
+      if (downloadError) throw downloadError;
+      const result = await transcribeAudio(file, attachment.file_name);
+      const { error: saveError } = await db
+        .from('attachments')
+        .update({ transcript: result.text, duration_seconds: result.durationSeconds, language: result.language })
+        .eq('id', attachment.id);
+      if (saveError) throw saveError;
+      attachment.transcript = result.text;
+      attachment.language = result.language;
+      // Touch the session so a long run never looks stalled (STALE_RUN_MS).
+      await db.from('sessions').update({ processing_status: 'transcribing' }).eq('id', sessionId);
+      await recordUsage(db, {
+        userId,
+        eventType: 'transcribe',
+        source: 'process_session',
+        sessionId,
+        dedupeKey: `process_session:transcribe:${attachment.id}`,
+        audioSeconds: result.durationSeconds,
+        audioBytes: result.bytes,
+      });
+    }
+    const text = (attachment.transcript ?? '').trim();
+    if (text) parts.push(text);
+    if (!language && attachment.language) language = attachment.language;
+  }
+  return { complete: true, parts, language };
+}
+
+/**
+ * Hands the rest of the work to the next run: the row goes back to
+ * 'pending' (so that run can claim it) and the app, which keeps calling
+ * while it gets 'continue' (src/services/processing.ts), starts it.
+ */
+async function continueLater(db: SupabaseClient, sessionId: string): Promise<Response> {
+  const { error } = await db.from('sessions').update({ processing_status: 'pending' }).eq('id', sessionId);
+  if (error) throw error;
+  return json({ status: 'continue' }, 202);
+}
 
 async function transcribeAudio(file: Blob, fileName: string): Promise<TranscribeResult> {
   if (file.size > WHISPER_MAX_BYTES) {

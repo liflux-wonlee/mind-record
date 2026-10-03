@@ -494,6 +494,7 @@ async function runCron(): Promise<Summary> {
 
   if (Date.now() - started < PASSES_BUDGET_MS) await retryPass(db, summary);
   if (Date.now() - started < PASSES_BUDGET_MS) await receiptPass(db, summary);
+  if (Date.now() - started < PASSES_BUDGET_MS) await audioRetentionPass(db);
   summary.ms = Date.now() - started;
   return summary;
 }
@@ -682,6 +683,36 @@ async function retryPass(db: SupabaseClient, summary: Summary): Promise<void> {
   }
   summary.retried += outgoing.length;
   if (outgoing.length > 0) await sendAndRecord(db, outgoing, summary);
+}
+
+/**
+ * Deletes original recordings past their owner's retention period
+ * (profiles.audio_retention_days -- see 20261003000001_keep_audio.sql). Not
+ * a reminder job; it rides on this per-minute cron so it needs no schedule
+ * of its own. A failure only leaves the files for the next run.
+ */
+async function audioRetentionPass(db: SupabaseClient): Promise<void> {
+  try {
+    const { data, error } = await db.rpc('audio_retention_expired', { p_limit: 200 });
+    if (error) throw error;
+    const rows = (data ?? []) as { id: string; storage_path: string }[];
+    for (let i = 0; i < rows.length; i += 100) {
+      const batch = rows.slice(i, i + 100);
+      const { error: removeError } = await db.storage.from('recordings').remove(batch.map((r) => r.storage_path));
+      if (removeError) throw removeError;
+      const { error: deleteError } = await db
+        .from('attachments')
+        .delete()
+        .in(
+          'id',
+          batch.map((r) => r.id)
+        );
+      if (deleteError) throw deleteError;
+    }
+  } catch (e) {
+    const err = e as { message?: unknown } | null;
+    console.warn('audio retention pass failed:', typeof err?.message === 'string' ? err.message.slice(0, 200) : '');
+  }
 }
 
 async function receiptPass(db: SupabaseClient, summary: Summary): Promise<void> {

@@ -15,6 +15,7 @@ import { LockGate } from '@/components/LockGate';
 import { usePushBootstrap } from '@/hooks/usePushBootstrap';
 import { useOnboardingDone } from '@/lib/onboarding';
 import { AuthProvider, useAuth } from '@/providers/AuthProvider';
+import { resumePendingSessions } from '@/services/processing';
 import { colors } from '@/theme';
 
 SplashScreen.preventAutoHideAsync();
@@ -54,6 +55,13 @@ function NativeRootNavigator() {
   // LockGate; a tapped reminder notification waits for it.
   const [contentOpen, setContentOpen] = useState(false);
   usePushBootstrap({ contentOpen });
+
+  // Recording parts that couldn't be uploaded earlier: send them and
+  // process their sessions once someone is signed in (src/services/pendingUploads.ts).
+  const signedInUserId = session?.user.id ?? null;
+  useEffect(() => {
+    if (signedInUserId && Platform.OS !== 'web') resumePendingSessions().catch(() => {});
+  }, [signedInUserId]);
 
   useEffect(() => {
     if (loading) return;

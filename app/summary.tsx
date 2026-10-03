@@ -9,6 +9,7 @@ import { Screen } from '@/components/Screen';
 import { ShareSheet, type ShareContent } from '@/components/ShareSheet';
 import { ChevronLeftIcon } from '@/components/Icon';
 import { Button, CardKicker, Kicker, RuleThick, Tag } from '@/components/ui';
+import { useOriginalAudio } from '@/hooks/useOriginalAudio';
 import { useReadAloud } from '@/hooks/useReadAloud';
 import { friendlyMessage } from '@/lib/friendlyError';
 import { dismissToTabs } from '@/nav';
@@ -320,6 +321,100 @@ function ReadAloudBar({ reader }: { reader: ReturnType<typeof useReadAloud> }) {
   );
 }
 
+function formatDuration(totalSeconds: number): string {
+  const s = Math.round(totalSeconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = String(s % 60).padStart(2, '0');
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
+}
+
+/** The original recording on the Transcript tab: play it, or delete it. */
+function OriginalAudioCard({
+  original,
+  onPlay,
+}: {
+  original: ReturnType<typeof useOriginalAudio>;
+  onPlay: () => void;
+}) {
+  const { segments, state, totalSeconds, part, error } = original;
+  if (Platform.OS === 'web' || !segments || segments.length === 0) return null;
+  const confirmDelete = () =>
+    Alert.alert(
+      'Delete the original recording?',
+      'The transcript, summary, tasks and ideas stay. Only the audio is deleted, and it can’t be recovered.',
+      [
+        { text: 'Keep it', style: 'cancel' },
+        {
+          text: 'Delete audio',
+          style: 'destructive',
+          onPress: () =>
+            original.remove().catch((e) => Alert.alert('Could not delete', friendlyMessage(e, 'Please try again.'))),
+        },
+      ]
+    );
+  const length = totalSeconds > 0 ? formatDuration(totalSeconds) : null;
+  const partLabel = segments.length > 1 && state !== 'idle' ? ` · part ${part + 1}/${segments.length}` : '';
+  return (
+    <View style={[styles.readAloudBar, { backgroundColor: colors.pastelBlue, marginBottom: 4 }]}>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.readAloudStatus} numberOfLines={1}>
+          {state === 'loading'
+            ? 'Opening the recording…'
+            : state === 'playing'
+              ? `Playing original${partLabel}`
+              : state === 'paused'
+                ? `Paused${partLabel}`
+                : state === 'error'
+                  ? (error ?? 'Could not play it.')
+                  : `Original recording${length ? ` · ${length}` : ''}`}
+        </Text>
+        {state === 'idle' || state === 'error' ? (
+          <Pressable accessibilityRole="button" onPress={confirmDelete} hitSlop={8}>
+            <Text style={styles.deleteAudio}>Delete audio</Text>
+          </Pressable>
+        ) : null}
+      </View>
+      {state === 'loading' ? <ActivityIndicator color={colors.accent700} /> : null}
+      {state === 'idle' || state === 'error' ? (
+        <Button
+          accessibilityLabel="Play the original recording"
+          icon={<PlayIcon size={22} color={colors.text} />}
+          variant="secondary"
+          onPress={onPlay}
+          style={styles.readAloudControl}
+        />
+      ) : null}
+      {state === 'playing' ? (
+        <Button
+          accessibilityLabel="Pause"
+          icon={<PauseIcon size={24} color={colors.text} />}
+          variant="secondary"
+          onPress={original.pause}
+          style={styles.readAloudControl}
+        />
+      ) : state === 'paused' ? (
+        <Button
+          accessibilityLabel="Resume"
+          icon={<PlayIcon size={22} color={colors.text} />}
+          variant="secondary"
+          onPress={original.resume}
+          style={styles.readAloudControl}
+        />
+      ) : null}
+      {state === 'playing' || state === 'paused' ? (
+        <Button
+          accessibilityLabel="Stop"
+          icon={<StopIcon size={20} color={colors.text} />}
+          variant="secondary"
+          onPress={original.stop}
+          style={styles.readAloudControl}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 type StepState = 'done' | 'active' | 'pending';
 
 /**
@@ -533,6 +628,7 @@ export default function SummaryScreen() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     let consecutiveFailures = 0;
+    let kicked = false;
     const startedAt = Date.now();
     setLoadError(null);
 
@@ -549,9 +645,17 @@ export default function SummaryScreen() {
           return;
         }
         if (s.processing_status === 'error') return;
+        // Waiting between server runs with nobody driving it (the app was
+        // closed part-way through a long recording): pick it up again.
+        if (s.processing_status === 'pending' && !kicked && Date.now() - Date.parse(s.updated_at) > 60_000) {
+          kicked = true;
+          processSession(sessionId).catch(() => {
+            // The poll shows whatever state it ends in.
+          });
+        }
         // Opened long after the server stopped working on it: say so now
         // instead of spinning for another four minutes.
-        if (Date.now() - Date.parse(s.updated_at) > STALLED_AFTER_MS) {
+        if (s.processing_status !== 'pending' && Date.now() - Date.parse(s.updated_at) > STALLED_AFTER_MS) {
           setLoadError('Processing stopped partway. Tap Retry to finish it.');
           return;
         }
@@ -622,6 +726,16 @@ export default function SummaryScreen() {
     [session?.title, session?.summary, session?.outline, tasks, memories]
   );
   const reader = useReadAloud(sessionId, readAloudKey);
+  const original = useOriginalAudio(Platform.OS === 'web' ? undefined : sessionId);
+  // One voice at a time: starting either player stops the other.
+  const startReader = async () => {
+    original.stop();
+    await reader.start();
+  };
+  const startOriginal = () => {
+    reader.stop();
+    original.start();
+  };
   const processing =
     !!sessionId && session?.processing_status !== 'done' && session?.processing_status !== 'error';
   const done = !!sessionId && !loadError && session?.processing_status === 'done';
@@ -785,7 +899,7 @@ export default function SummaryScreen() {
 
       {/* Reads the Summary tab's content whichever tab is showing. Needs the
           native audio player/file cache, so not on web. */}
-      {done && Platform.OS !== 'web' ? <ReadAloudBar reader={reader} /> : null}
+      {done && Platform.OS !== 'web' ? <ReadAloudBar reader={{ ...reader, start: startReader }} /> : null}
 
       {!sessionId ? (
         <View style={styles.summaryCard}>
@@ -950,7 +1064,10 @@ export default function SummaryScreen() {
           ) : null}
         </>
       ) : session?.raw_transcript ? (
-        <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
+        <>
+          <OriginalAudioCard original={original} onPlay={startOriginal} />
+          <Text style={styles.transcriptText}>{session.raw_transcript}</Text>
+        </>
       ) : (
         <Text style={styles.footnote}>No speech was detected in this recording.</Text>
       )}
@@ -1066,6 +1183,12 @@ const styles = StyleSheet.create({
     fontFamily: font.semibold,
     fontSize: 16,
     color: colors.text,
+  },
+  deleteAudio: {
+    fontFamily: font.semibold,
+    fontSize: 12,
+    color: colors.accent800,
+    marginTop: 6,
   },
   readAloudControl: {
     minHeight: 52,
