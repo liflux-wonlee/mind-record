@@ -85,8 +85,17 @@ export async function uploadRecording(
   /** When the segment was recorded -- a retried upload keeps its place among the others. */
   recordedAt?: string
 ): Promise<Attachment> {
-  // Read through expo-file-system rather than fetch('file://...').
-  const arrayBuffer = await new File(fileUri).arrayBuffer();
+  // Read through expo-file-system rather than fetch('file://...'), into a
+  // buffer of exactly the file's bytes.
+  const file = new File(fileUri);
+  const bytes = await file.bytes();
+  const arrayBuffer =
+    bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? (bytes.buffer as ArrayBuffer)
+      : (bytes.slice().buffer as ArrayBuffer);
+  if (arrayBuffer.byteLength !== file.size) {
+    throw new Error(`Read ${arrayBuffer.byteLength} of ${file.size} bytes of the recording.`);
+  }
 
   const at = recordedAt ? Date.parse(recordedAt) : Date.now();
   const fileName = `${Number.isFinite(at) ? at : Date.now()}.m4a`;

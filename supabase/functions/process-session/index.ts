@@ -1175,6 +1175,11 @@ async function transcribeSegments(
         .from('recordings')
         .download(attachment.storage_path);
       if (downloadError) throw downloadError;
+      // An empty or tiny file can't be audio Whisper accepts -- say that
+      // instead of a generic transcription failure.
+      if (file.size < 1024) {
+        throw new Error(`The uploaded audio is empty or damaged (${file.size} bytes). Play the original to check it.`);
+      }
       const result = await transcribeAudio(file, attachment.file_name);
       const { error: saveError } = await db
         .from('attachments')

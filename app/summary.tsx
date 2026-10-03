@@ -736,6 +736,12 @@ export default function SummaryScreen() {
     reader.stop();
     original.start();
   };
+  // The segments may still have been uploading when this screen opened.
+  const refreshOriginal = original.refresh;
+  const processingStatus = session?.processing_status;
+  useEffect(() => {
+    if (processingStatus === 'done' || processingStatus === 'error') refreshOriginal();
+  }, [processingStatus, refreshOriginal]);
   const processing =
     !!sessionId && session?.processing_status !== 'done' && session?.processing_status !== 'error';
   const done = !!sessionId && !loadError && session?.processing_status === 'done';
@@ -942,6 +948,8 @@ export default function SummaryScreen() {
             style={[styles.retryButton, { backgroundColor: colors.pastelYellow }]}
             textStyle={styles.pastelText}
           />
+          {/* Lets you check the recording itself is fine (and keep it) even when processing fails. */}
+          <OriginalAudioCard original={original} onPlay={startOriginal} />
         </View>
       ) : tab === 'summary' ? (
         <View style={styles.summaryCard}>
