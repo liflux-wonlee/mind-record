@@ -29,7 +29,35 @@ if (!supabaseUrl || !supabaseKey) {
   );
 }
 
+/**
+ * Every request to Supabase gets a deadline. Android's HTTP client (OkHttp)
+ * runs at most 5 requests per host at once and, as React Native sets it up,
+ * never times a request out -- so a few calls that never get an answer
+ * (e.g. an Edge Function whose worker died mid-request) quietly took all 5
+ * slots, and every later read, even a tiny one, waited behind them: screens
+ * took 30-60 s to load until the app was restarted. Aborting a request
+ * frees its slot.
+ */
+function deadlineFor(url: string): number {
+  if (url.includes('/functions/v1/')) return 160_000; // past an Edge Function's own 150 s limit
+  if (url.includes('/storage/v1/')) return 180_000; // a long recording on a slow network
+  return 30_000; // database / auth reads and writes
+}
+
+const fetchWithDeadline: typeof fetch = (input, init) => {
+  const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+  const controller = new AbortController();
+  const outer = init?.signal;
+  if (outer) {
+    if (outer.aborted) controller.abort();
+    else outer.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(), deadlineFor(url));
+  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+};
+
 export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
+  global: { fetch: fetchWithDeadline },
   auth: {
     storage: secureAuthStorage,
     autoRefreshToken: true,
