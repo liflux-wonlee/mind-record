@@ -108,6 +108,24 @@ export async function getPushState(): Promise<PushState> {
   return { permission: toStatus(p), canAskAgain: p.canAskAgain !== false, tokenError: lastTokenError };
 }
 
+const TOKEN_TIMEOUT_MS = 20_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(timer);
+        reject(e);
+      }
+    );
+  });
+}
+
 function projectId(): string | undefined {
   const extra = Constants.expoConfig?.extra as { eas?: { projectId?: string } } | undefined;
   return extra?.eas?.projectId ?? Constants.easConfig?.projectId;
@@ -126,7 +144,16 @@ export async function registerPushInstallation(): Promise<PushState> {
   let token: string | null = null;
   if (permission === 'granted') {
     try {
-      token = (await Notifications.getExpoPushTokenAsync({ projectId: projectId() })).data;
+      // Getting the token goes through Google (FCM) and Expo, and has been
+      // seen to never answer -- which left Settings' test stuck on
+      // "Sending…". Give up after a while and report it like any token error.
+      token = (
+        await withTimeout(
+          Notifications.getExpoPushTokenAsync({ projectId: projectId() }),
+          TOKEN_TIMEOUT_MS,
+          'Getting this phone’s push address timed out (no answer from Google/Expo).'
+        )
+      ).data;
       lastTokenError = null;
     } catch (e) {
       // e.g. an Android build without google-services.json (FCM), or offline.

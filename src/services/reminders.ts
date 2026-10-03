@@ -416,6 +416,8 @@ export type TestPushResult = {
 export async function sendTestPush(installationId?: string | null): Promise<TestPushResult> {
   const { data, error } = await supabase.functions.invoke('reminders-dispatch', {
     body: installationId ? { mode: 'test', installationId } : { mode: 'test' },
+    // Sending plus a few seconds of waiting for Google's answer; never spin forever.
+    timeout: 45_000,
   });
   if (error) {
     const status = error instanceof FunctionsHttpError ? error.context.status : undefined;

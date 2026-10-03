@@ -1,8 +1,9 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Tabs } from "expo-router";
+import React from "react";
 
-import { BottomNav } from '@/components/BottomNav';
-import { colors } from '@/theme';
+import { BottomNav } from "@/components/BottomNav";
+import { BottomNavContext } from "@/components/BottomNavContext";
+import { colors } from "@/theme";
 
 /**
  * The five tabs (Home/Records/Topics/Tasks/Search). Their drill-down
@@ -12,22 +13,23 @@ import { colors } from '@/theme';
  */
 export default function TabsLayout() {
   return (
-    <Tabs
-      tabBar={() => <BottomNav />}
-      // Android's back on a tab returns to the previously used tab rather
-      // than always jumping to Home.
-      backBehavior="history"
-      screenOptions={{
-        headerShown: false,
-        sceneStyle: { backgroundColor: colors.bg },
-      }}
-    >
-      <Tabs.Screen name="index" />
-      <Tabs.Screen name="calendar" />
-      <Tabs.Screen name="memory" />
-      <Tabs.Screen name="tasks" />
-      <Tabs.Screen name="search" />
-
-    </Tabs>
+    <BottomNavContext.Provider value>
+      <Tabs
+        tabBar={() => <BottomNav />}
+        // Android's back on a tab returns to the previously used tab rather
+        // than always jumping to Home.
+        backBehavior="history"
+        screenOptions={{
+          headerShown: false,
+          sceneStyle: { backgroundColor: colors.bg },
+        }}
+      >
+        <Tabs.Screen name="index" />
+        <Tabs.Screen name="calendar" />
+        <Tabs.Screen name="memory" />
+        <Tabs.Screen name="tasks" />
+        <Tabs.Screen name="search" />
+      </Tabs>
+    </BottomNavContext.Provider>
   );
 }

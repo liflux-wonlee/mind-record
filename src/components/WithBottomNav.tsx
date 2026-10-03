@@ -2,6 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 
 import { BottomNav } from '@/components/BottomNav';
+import { BottomNavContext } from '@/components/BottomNavContext';
 import { colors } from '@/theme';
 
 /**
@@ -14,7 +15,9 @@ import { colors } from '@/theme';
 export function WithBottomNav({ children }: { children: React.ReactNode }) {
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg }}>
-      <View style={{ flex: 1 }}>{children}</View>
+      <View style={{ flex: 1 }}>
+        <BottomNavContext.Provider value>{children}</BottomNavContext.Provider>
+      </View>
       <BottomNav />
     </View>
   );

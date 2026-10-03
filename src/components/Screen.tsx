@@ -9,6 +9,7 @@ import React from 'react';
 import { Pressable, ScrollView, StyleProp, StyleSheet, View, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { useInsideBottomNav } from '@/components/BottomNavContext';
 import { AccountIcon } from '@/components/Icon';
 import { useAuth } from '@/providers/AuthProvider';
 import { GUTTER, colors } from '@/theme';
@@ -21,13 +22,12 @@ export function Screen({
   padded = true,
   /**
    * Add the device's bottom safe-area inset on top of `bottomPadding` —
-   * Android's gesture bar / 3-button nav, iOS's home indicator. Screens that
-   * sit under the bottom tab bar leave this false: BottomNav already reserves
-   * that space itself. Full-screen routes with their own bottom-row buttons
-   * (Talk, Summary, Driving, Login) need it or those buttons render partly
-   * behind the system nav bar.
+   * Android's gesture bar / 3-button nav, iOS's home indicator -- so the
+   * last row can scroll clear of it. Defaults to on everywhere except
+   * screens drawn above the app's tab bar (BottomNav already keeps clear of
+   * the system bar there).
    */
-  safeBottom = false,
+  safeBottom,
   /** Base bottom padding before any safe-area inset from `safeBottom` is added. */
   bottomPadding = 20,
   /** Off on screens that already have their own top-right control in that
@@ -48,6 +48,8 @@ export function Screen({
   contentStyle?: StyleProp<ViewStyle>;
 }) {
   const insets = useSafeAreaInsets();
+  const insideBottomNav = useInsideBottomNav();
+  const padBottom = safeBottom ?? !insideBottomNav;
   const router = useRouter();
   const { user } = useAuth();
   const background = dark ? colors.neutral900 : colors.bg;
@@ -55,7 +57,7 @@ export function Screen({
   const box: StyleProp<ViewStyle> = [
     padded && { paddingHorizontal: GUTTER },
     styles.box,
-    { paddingBottom: bottomPadding + (safeBottom ? insets.bottom : 0) },
+    { paddingBottom: bottomPadding + (padBottom ? insets.bottom : 0) },
     contentStyle,
   ];
 
