@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  Animated,
   ActivityIndicator,
   Alert,
   FlatList,
@@ -863,6 +864,9 @@ function ListChip({
   );
 }
 
+/** How long a just-ticked task stays (checked) before fading out to Completed. */
+const COMPLETE_DELAY_MS = 700;
+
 function TaskRow({
   task,
   list,
@@ -879,15 +883,53 @@ function TaskRow({
   onOpen: () => void;
   onToggleStar: () => void;
 }) {
-  const done = task.status === 'completed';
+  // Completing shows the check first, then fades the row out, so it's clear
+  // what was ticked before it moves to Completed. Tapping again while it's
+  // fading cancels. Re-opening a completed task happens at once.
+  const [completing, setCompleting] = useState(false);
+  const fade = useRef(new Animated.Value(1)).current;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current);
+    },
+    []
+  );
+  const press = () => {
+    if (task.status === 'completed') {
+      onToggle();
+      return;
+    }
+    if (completing) {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = null;
+      fade.stopAnimation();
+      fade.setValue(1);
+      setCompleting(false);
+      return;
+    }
+    setCompleting(true);
+    timer.current = setTimeout(() => {
+      Animated.timing(fade, { toValue: 0, duration: 350, useNativeDriver: true }).start(({ finished }) => {
+        if (!finished) return;
+        onToggle();
+        // Still here a moment later (e.g. the save failed): show it again.
+        timer.current = setTimeout(() => {
+          fade.setValue(1);
+          setCompleting(false);
+        }, 1500);
+      });
+    }, COMPLETE_DELAY_MS);
+  };
+  const done = task.status === 'completed' || completing;
   const due = task.due_date ? formatDueDate(task.due_date) : null;
   return (
-    <View style={styles.task}>
+    <Animated.View style={[styles.task, { opacity: fade }]}>
       <Pressable
         accessibilityRole="checkbox"
         accessibilityState={{ checked: done }}
         accessibilityLabel={task.title}
-        onPress={onToggle}
+        onPress={press}
         hitSlop={6}
         style={styles.checkHit}
       >
@@ -921,7 +963,7 @@ function TaskRow({
       >
         <StarIcon size={22} filled={task.starred} color={task.starred ? '#e0a526' : colors.neutral500} />
       </Pressable>
-    </View>
+    </Animated.View>
   );
 }
 
