@@ -4,12 +4,13 @@
  * network, or the database. Shows only step names and milliseconds -- no
  * user content.
  */
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/Screen';
 import { SettingsHeader } from '@/components/SettingsHeader';
 import { Button } from '@/components/ui';
+import { snapshot } from '@/lib/requestLog';
 import { supabase } from '@/lib/supabase';
 import { useAuth } from '@/providers/AuthProvider';
 import { colors, font, radius } from '@/theme';
@@ -39,6 +40,13 @@ export default function ConnectionCheckScreen() {
   const { user } = useAuth();
   const [rows, setRows] = useState<Row[]>([]);
   const [running, setRunning] = useState(false);
+  // What the app is already waiting on from the server (before this check
+  // adds anything), refreshed every second.
+  const [log, setLog] = useState(snapshot());
+  useEffect(() => {
+    const t = setInterval(() => setLog(snapshot()), 1000);
+    return () => clearInterval(t);
+  }, []);
 
   const run = async () => {
     if (running || !user) return;
@@ -143,6 +151,32 @@ export default function ConnectionCheckScreen() {
           </View>
         ))}
         {running ? <ActivityIndicator color={colors.accent} style={{ marginTop: 8 }} /> : null}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.label}>Waiting on the server now ({log.inFlight.length})</Text>
+        {log.inFlight.length === 0 ? <Text style={styles.note}>Nothing.</Text> : null}
+        {log.inFlight.slice(0, 12).map((e) => (
+          <View key={e.id} style={styles.row}>
+            <Text style={[styles.note, { flex: 1 }]} numberOfLines={2}>
+              {e.method} {e.endpoint}
+            </Text>
+            <Text style={[styles.ms, e.ms > 5000 && { color: colors.accent800 }]}>{Math.round(e.ms / 1000)} s</Text>
+          </View>
+        ))}
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.label}>Slowest recent requests</Text>
+        {log.slowest.length === 0 ? <Text style={styles.note}>None yet.</Text> : null}
+        {log.slowest.map((e, i) => (
+          <View key={`${e.at}-${i}`} style={styles.row}>
+            <Text style={[styles.note, { flex: 1 }]} numberOfLines={2}>
+              {e.method} {e.endpoint} · {e.outcome}
+            </Text>
+            <Text style={[styles.ms, e.ms > 5000 && { color: colors.accent800 }]}>{e.ms} ms</Text>
+          </View>
+        ))}
       </View>
     </Screen>
   );

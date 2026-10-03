@@ -15,6 +15,7 @@ import { createClient } from '@supabase/supabase-js';
 import { Platform } from 'react-native';
 import 'react-native-url-polyfill/auto';
 
+import { requestFinished, requestStarted } from '@/lib/requestLog';
 import { secureAuthStorage } from '@/lib/secureStorage';
 import type { Database } from '@/types/database';
 
@@ -53,7 +54,19 @@ const fetchWithDeadline: typeof fetch = (input, init) => {
     else outer.addEventListener('abort', () => controller.abort(), { once: true });
   }
   const timer = setTimeout(() => controller.abort(), deadlineFor(url));
-  return fetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+  const logId = requestStarted(init?.method ?? 'GET', url);
+  return fetch(input, { ...init, signal: controller.signal }).then(
+    (res) => {
+      clearTimeout(timer);
+      requestFinished(logId, String(res.status));
+      return res;
+    },
+    (e) => {
+      clearTimeout(timer);
+      requestFinished(logId, controller.signal.aborted ? 'timed out' : 'failed');
+      throw e;
+    }
+  );
 };
 
 export const supabase = createClient<Database>(supabaseUrl, supabaseKey, {
