@@ -289,6 +289,7 @@ function CapturePanel({
             {statusLabel}
           </Kicker>
         </View>
+        {busy && capture.savingStep ? <Text style={styles.savingStep}>{capture.savingStep}…</Text> : null}
         <Waveform active={recording} height={90} />
         <Text style={styles.bigTimer}>{timer}</Text>
       </View>
@@ -539,6 +540,12 @@ function ModePicker({
 }
 
 const styles = StyleSheet.create({
+  savingStep: {
+    fontFamily: font.regular,
+    fontSize: 13,
+    color: colors.neutral600,
+    marginTop: 6,
+  },
   head: {
     flexDirection: 'row',
     justifyContent: 'flex-end',

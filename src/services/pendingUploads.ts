@@ -64,47 +64,62 @@ export function keepForLater(userId: string, sessionId: string, fileUri: string,
   });
 }
 
+// Uploads in progress (by file uri), so two flushes never send the same file at once.
+const sending = new Set<string>();
+
+async function removeEntry(uri: string): Promise<void> {
+  await serial(async () => {
+    await save((await load()).filter((p) => p.uri !== uri));
+  });
+}
+
 /**
  * Uploads what's waiting -- only this session's when given -- and returns
- * how many of them are still waiting afterwards.
+ * how many of them are still waiting afterwards. The list itself is only
+ * locked for the moment it's read or changed, never during an upload, so
+ * saving a new segment never waits behind a slow upload.
  */
-export function flushPendingUploads(sessionId?: string): Promise<number> {
-  return serial(async () => {
-    const list = await load();
-    const remaining: Pending[] = [];
-    let left = 0;
-    for (const item of list) {
-      if (sessionId && item.sessionId !== sessionId) {
-        remaining.push(item);
-        continue;
-      }
-      const file = new File(item.uri);
-      if (!file.exists) continue; // nothing left to send
+export async function flushPendingUploads(sessionId?: string): Promise<number> {
+  const list = await serial(load);
+  let left = 0;
+  for (const item of list) {
+    if (sessionId && item.sessionId !== sessionId) continue;
+    if (sending.has(item.uri)) {
+      left++;
+      continue;
+    }
+    const file = new File(item.uri);
+    if (!file.exists) {
+      await removeEntry(item.uri); // nothing left to send
+      continue;
+    }
+    sending.add(item.uri);
+    try {
+      await uploadRecording(item.userId, item.sessionId, item.uri, item.recordedAt);
+      await removeEntry(item.uri);
       try {
-        await uploadRecording(item.userId, item.sessionId, item.uri, item.recordedAt);
+        file.delete();
+      } catch {
+        // Uploaded; a leftover copy only costs space.
+      }
+    } catch (e) {
+      // The session may be gone (deleted/cancelled): drop it rather than retry forever.
+      const message = e instanceof Error ? e.message : String(e);
+      if (/violates|foreign key|row-level security|not found/i.test(message)) {
+        await removeEntry(item.uri);
         try {
           file.delete();
         } catch {
-          // Uploaded; a leftover copy only costs space.
+          // ignore
         }
-      } catch (e) {
-        // The session may be gone (deleted/cancelled): drop it rather than retry forever.
-        const message = e instanceof Error ? e.message : String(e);
-        if (/violates|foreign key|row-level security|not found/i.test(message)) {
-          try {
-            file.delete();
-          } catch {
-            // ignore
-          }
-          continue;
-        }
-        remaining.push(item);
+      } else {
         left++;
       }
+    } finally {
+      sending.delete(item.uri);
     }
-    await save(remaining);
-    return left;
-  });
+  }
+  return left;
 }
 
 /** How many segments of this session are still only on the phone. */

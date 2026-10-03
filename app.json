@@ -72,7 +72,8 @@
           "color": "#ef8a80",
           "defaultChannel": "reminders"
         }
-      ]
+      ],
+      "./plugins/withNetworkClient"
     ],
     "experiments": {
       "typedRoutes": true

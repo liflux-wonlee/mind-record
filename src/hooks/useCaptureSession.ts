@@ -71,6 +71,10 @@ const CAPTURE_KEEP_AWAKE_TAG = 'joaassistant-capture';
 
 /** How long Pause/Done waits for a segment's upload before moving on (it carries on in the background). */
 const UPLOAD_WAIT_MS = 20_000;
+/** Longest wait for the native recorder to stop. */
+const STOP_TIMEOUT_MS = 5_000;
+/** Longest wait for copying a segment into the app's folder. */
+const KEEP_TIMEOUT_MS = 10_000;
 
 /** Longest single uploaded segment of a capture (~7 MB at 64 kbps). */
 const SEGMENT_MAX_MS = 15 * 60 * 1000;
@@ -112,6 +116,8 @@ export function useCaptureSession() {
   // Earlier segments of this capture (each pause, and each automatic split
   // below, starts a new one) -- the timer shows the whole capture.
   const [pastMs, setPastMs] = useState(0);
+  // What Pause/Done is doing right now -- shown under "Saving…".
+  const [savingStep, setSavingStep] = useState<string | null>(null);
   const durationRef = useRef(0);
   durationRef.current = recorderState.durationMillis;
   const seconds = Math.floor((pastMs + (recording ? recorderState.durationMillis : 0)) / 1000);
@@ -151,13 +157,16 @@ export function useCaptureSession() {
     if (elapsed < MIN_RECORDING_MS) {
       await new Promise((resolve) => setTimeout(resolve, MIN_RECORDING_MS - elapsed));
     }
-    try {
-      await recorder.stop();
-    } catch {
-      // The native recorder can throw on stop (e.g. it was already
-      // winding down on its own) -- treat it as stopped either way
-      // rather than leaving the UI stuck mid-recording.
-    }
+    setSavingStep('Stopping the recorder');
+    // The native stop has been seen to never return; don't wait on it forever.
+    await Promise.race([
+      recorder.stop().catch(() => {
+        // The native recorder can throw on stop (e.g. it was already
+        // winding down on its own) -- treat it as stopped either way
+        // rather than leaving the UI stuck mid-recording.
+      }),
+      new Promise((resolve) => setTimeout(resolve, STOP_TIMEOUT_MS)),
+    ]);
   }, [recorder]);
 
   /** Returns false when this segment could NOT be saved, so callers (pause,
@@ -167,6 +176,7 @@ export function useCaptureSession() {
   const uploadCurrentSegment = useCallback(async (): Promise<boolean> => {
     const sessionId = sessionIdRef.current;
     if (!sessionId || !user) return true; // nothing to upload against -- not a failure
+    setSavingStep('Finding the recording');
     const uri = await waitForRecorderUri(recorder);
     if (!uri) {
       // Every call site only ever reaches here right after an active
@@ -186,7 +196,13 @@ export function useCaptureSession() {
     // dropped connection or the app being closed can then never lose this
     // part: the queue is sent before processing and on the next app start
     // (src/services/pendingUploads.ts).
-    if (await keepForLater(user.id, sessionId, uri, recordedAt)) {
+    setSavingStep('Keeping a copy on your phone');
+    const kept = await Promise.race([
+      keepForLater(user.id, sessionId, uri, recordedAt),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), KEEP_TIMEOUT_MS)),
+    ]);
+    if (kept) {
+      setSavingStep('Uploading');
       // Try to send it now, but don't hold the screen on "Saving…" for long.
       await Promise.race([
         flushPendingUploads(sessionId).catch(() => 0),
@@ -260,6 +276,7 @@ export function useCaptureSession() {
       } finally {
         toggleBusyRef.current = false;
         setToggleBusy(false);
+        setSavingStep(null);
       }
     };
     const promise = run();
@@ -290,6 +307,7 @@ export function useCaptureSession() {
     const sessionId = sessionIdRef.current;
     sessionIdRef.current = null;
     if (sessionId) {
+      setSavingStep('Finishing');
       try {
         await endSession(sessionId);
       } catch (e) {
@@ -314,6 +332,7 @@ export function useCaptureSession() {
         );
       });
     }
+    setSavingStep(null);
     return sessionId;
   }, [recorder, uploadCurrentSegment, stopRecorderSafely]);
 
@@ -425,6 +444,7 @@ export function useCaptureSession() {
     toggleSaveOnly: () => setSaveOnly((s) => !s),
     toggleRecording,
     endCapture,
+    savingStep,
     cancelCapture,
     timer,
   };
