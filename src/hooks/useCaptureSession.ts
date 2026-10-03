@@ -22,11 +22,10 @@ import { Alert, AppState } from 'react-native';
 import { useAudioInterruption, type InterruptionReason } from '@/hooks/useAudioInterruption';
 import { ensureBackgroundRecordingAllowed } from '@/lib/backgroundRecording';
 import { friendlyMessage } from '@/lib/friendlyError';
-import { isNetworkError } from '@/lib/functionsError';
 import { withSystemDialog } from '@/lib/systemDialogGuard';
 import { useAuth } from '@/providers/AuthProvider';
 import { processSession } from '@/services/processing';
-import { keepForLater } from '@/services/pendingUploads';
+import { flushPendingUploads, keepForLater } from '@/services/pendingUploads';
 import { uploadRecording } from '@/services/recordings';
 import { createSession, deleteSession, endSession } from '@/services/sessions';
 
@@ -69,6 +68,9 @@ export async function waitForRecorderUri(
 }
 
 const CAPTURE_KEEP_AWAKE_TAG = 'joaassistant-capture';
+
+/** How long Pause/Done waits for a segment's upload before moving on (it carries on in the background). */
+const UPLOAD_WAIT_MS = 20_000;
 
 /** Longest single uploaded segment of a capture (~7 MB at 64 kbps). */
 const SEGMENT_MAX_MS = 15 * 60 * 1000;
@@ -179,27 +181,24 @@ export function useCaptureSession() {
       return false;
     }
     const recordedAt = new Date(recordingStartedAtRef.current ?? Date.now()).toISOString();
+    // Saved on the phone FIRST (copied out of the recorder's cache into the
+    // app's own folder and queued), then sent. A slow or stuck upload, a
+    // dropped connection or the app being closed can then never lose this
+    // part: the queue is sent before processing and on the next app start
+    // (src/services/pendingUploads.ts).
+    if (await keepForLater(user.id, sessionId, uri, recordedAt)) {
+      // Try to send it now, but don't hold the screen on "Saving…" for long.
+      await Promise.race([
+        flushPendingUploads(sessionId).catch(() => 0),
+        new Promise((resolve) => setTimeout(resolve, UPLOAD_WAIT_MS)),
+      ]);
+      return true;
+    }
+    // Couldn't even save a copy (storage full?): upload straight away.
     try {
       await uploadRecording(user.id, sessionId, uri, recordedAt);
       return true;
     } catch (e) {
-      if (isNetworkError(e)) {
-        try {
-          await uploadRecording(user.id, sessionId, uri, recordedAt);
-          return true;
-        } catch {
-          // Falls through below.
-        }
-      }
-      // Keep the file on the phone and send it later (before processing,
-      // and on the next app start) instead of losing this part.
-      if (await keepForLater(user.id, sessionId, uri, recordedAt)) {
-        Alert.alert(
-          'Saved on your phone for now',
-          'This part couldn’t be uploaded (connection problem). It’s kept on your phone and will be sent automatically -- nothing is lost.'
-        );
-        return true;
-      }
       Alert.alert(
         'Part of this recording was not saved',
         friendlyMessage(e, 'Could not upload this recording.') +
